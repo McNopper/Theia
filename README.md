@@ -10,6 +10,10 @@ It implements the [OpenPBR Surface v1.1](https://academysoftwarefoundation.githu
 **Interactive real-time rendering** — explore complex materials, dynamic lighting, and HDR output in real-time.  
 **Architecture driven by [GPU-Driven Rendering](https://vkguide.dev/docs/gpudriven)** — compute-based culling, indirect dispatch, and clustered lighting.
 
+> ⚠️ **Early stage / work in progress.** Theia is under active development. APIs, rendering
+> techniques, and visual output are still evolving, and some features are incomplete or
+> approximate. Expect rough edges and breaking changes.
+
 ---
 
 ## Screenshots
