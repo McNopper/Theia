@@ -6,6 +6,7 @@
 *.lo
 *.o
 *.obj
+!assets/**/*.obj
 
 # Precompiled Headers
 *.gch
@@ -57,6 +58,12 @@ compile_commands.json
 *.log
 *.bak
 *.swp
+
+# Debug/scratch artifacts (IDE, screenshot tools, backup copies)
+screenshot.png
+screenshot*.png
+*_old.*
+*_backup.*
 
 # vcpkg
 vcpkg_installed/

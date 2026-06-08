@@ -1,0 +1,39 @@
+# Cornell Box — Classic
+# Two white boxes as in the original Cornell Box reference image.
+#
+# Syntax reference: see SceneLoader.hpp
+#
+# Quaternions (x y z w):
+#   short box  −18° around Y  →  0  −0.1564  0  0.9877
+#   tall  box  +15° around Y  →  0   0.1305  0  0.9914
+
+mtllib cornell.mtlx
+
+camera
+translate    278.0  273.0  -800.0
+look_at      278.0  273.0   279.5
+vfov         39.1
+
+spp          64
+max_depth    8
+ev100        7.0
+
+instance cornell.obj
+  material Floor     WhiteWall
+  material Ceiling   WhiteWall
+  material AreaLight AreaLight
+  material BackWall  WhiteWall
+  material LeftWall  RedWall
+  material RightWall GreenWall
+
+# Short box  (82.5 × 82.5 × 82.5,  rotated −18° around Y)
+box   82.5  82.5  82.5
+usemtl WhiteWall
+translate  185.0   82.5  169.0
+rotate     0.0  -0.1564  0.0  0.9877
+
+# Tall box  (82.5 × 165.0 × 82.5,  rotated +15° around Y)
+box   82.5  165.0  82.5
+usemtl WhiteWall
+translate  368.0  165.0  351.0
+rotate     0.0   0.1305  0.0  0.9914

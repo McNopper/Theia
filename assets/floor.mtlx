@@ -1,0 +1,15 @@
+# floor.mtlx — Neutral reference floor shared by all IBL showcase scenes.
+#
+# A medium-grey rough dielectric (IOR 1.50, specular_roughness 0.80).
+# Using the same material across every IBL scene enables fair side-by-side
+# comparison of material lobes without floor-material interference.
+#
+# Color values are linear Rec.709; Hyperion converts to Rec.2020 on load.
+
+colorspace lin_rec709
+
+newmtl NeutralFloor
+base_color          0.700 0.700 0.700
+base_metalness      0.0
+specular_roughness  0.80
+specular_ior        1.50

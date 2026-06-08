@@ -1,0 +1,180 @@
+# ABeautifulGame - OpenPBR materials (Academy Software Foundation, MaterialX sample asset).
+# base_color: sRGB texture; map_orm: packed (G=roughness, B=metalness);
+# map_normal: tangent-space normal map. Colours are linear Rec.709 -> Rec.2020.
+
+newmtl King_Black
+map_base_color              ABeautifulGame/King_black_base_color.jpg
+map_base_color_colorspace   srgb_texture
+base_weight                 1.0
+map_orm                     ABeautifulGame/King_black_ORM.jpg
+map_orm_colorspace          raw
+base_metalness              1.0
+specular_roughness          1.0
+specular_ior                1.5
+map_normal                  ABeautifulGame/King_black_normal.jpg
+map_normal_colorspace       raw
+
+newmtl King_White
+map_base_color              ABeautifulGame/King_white_base_color.jpg
+map_base_color_colorspace   srgb_texture
+base_weight                 1.0
+map_orm                     ABeautifulGame/King_white_ORM.jpg
+map_orm_colorspace          raw
+base_metalness              1.0
+specular_roughness          1.0
+specular_ior                1.5
+map_normal                  ABeautifulGame/King_white_normal.jpg
+map_normal_colorspace       raw
+
+newmtl Queen_Black
+map_base_color              ABeautifulGame/Queen_black_base_color.jpg
+map_base_color_colorspace   srgb_texture
+base_weight                 1.0
+map_orm                     ABeautifulGame/Queen_black_ORM.jpg
+map_orm_colorspace          raw
+base_metalness              1.0
+specular_roughness          1.0
+specular_ior                1.5
+map_normal                  ABeautifulGame/Queen_black_normal.jpg
+map_normal_colorspace       raw
+
+newmtl Queen_White
+map_base_color              ABeautifulGame/Queen_white_base_color.jpg
+map_base_color_colorspace   srgb_texture
+base_weight                 1.0
+map_orm                     ABeautifulGame/Queen_white_ORM.jpg
+map_orm_colorspace          raw
+base_metalness              1.0
+specular_roughness          1.0
+specular_ior                1.5
+map_normal                  ABeautifulGame/Queen_white_normal.jpg
+map_normal_colorspace       raw
+
+newmtl Chessboard
+map_base_color              ABeautifulGame/Chessboard_base_color.jpg
+map_base_color_colorspace   srgb_texture
+base_weight                 1.0
+map_orm                     ABeautifulGame/Chessboard_ORM.jpg
+map_orm_colorspace          raw
+base_metalness              1.0
+specular_roughness          1.0
+specular_ior                1.5
+map_normal                  ABeautifulGame/Chessboard_normal.jpg
+map_normal_colorspace       raw
+
+newmtl Pawn_Top_White
+transmission_color          1.0000 1.0000 0.8280
+transmission_weight         1.0
+base_weight                 1.0
+base_metalness              0.0
+specular_roughness          0.05
+specular_ior                1.5
+map_normal                  ABeautifulGame/Pawn_normal.jpg
+map_normal_colorspace       raw
+
+newmtl Pawn_Body_White
+map_base_color              ABeautifulGame/Pawn_white_base_color.jpg
+map_base_color_colorspace   srgb_texture
+base_weight                 1.0
+map_orm                     ABeautifulGame/Pawn_ORM.jpg
+map_orm_colorspace          raw
+base_metalness              1.0
+specular_roughness          1.0
+specular_ior                1.5
+map_normal                  ABeautifulGame/Pawn_normal.jpg
+map_normal_colorspace       raw
+
+newmtl Pawn_Top_Black
+transmission_color          0.2995 0.5000 0.4500
+transmission_weight         1.0
+base_weight                 1.0
+base_metalness              0.0
+specular_roughness          0.05
+specular_ior                1.5
+map_normal                  ABeautifulGame/Pawn_normal.jpg
+map_normal_colorspace       raw
+
+newmtl Pawn_Body_Black
+map_base_color              ABeautifulGame/Pawn_black_base_color.jpg
+map_base_color_colorspace   srgb_texture
+base_weight                 1.0
+map_orm                     ABeautifulGame/Pawn_ORM.jpg
+map_orm_colorspace          raw
+base_metalness              1.0
+specular_roughness          1.0
+specular_ior                1.5
+map_normal                  ABeautifulGame/Pawn_normal.jpg
+map_normal_colorspace       raw
+
+newmtl Castle_Black
+map_base_color              ABeautifulGame/Castle_black_base_color.jpg
+map_base_color_colorspace   srgb_texture
+base_weight                 1.0
+map_orm                     ABeautifulGame/Castle_ORM.jpg
+map_orm_colorspace          raw
+base_metalness              1.0
+specular_roughness          1.0
+specular_ior                1.5
+map_normal                  ABeautifulGame/Castle_normal.jpg
+map_normal_colorspace       raw
+
+newmtl Castle_White
+map_base_color              ABeautifulGame/Castle_white_base_color.jpg
+map_base_color_colorspace   srgb_texture
+base_weight                 1.0
+map_orm                     ABeautifulGame/Castle_ORM.jpg
+map_orm_colorspace          raw
+base_metalness              1.0
+specular_roughness          1.0
+specular_ior                1.5
+map_normal                  ABeautifulGame/Castle_normal.jpg
+map_normal_colorspace       raw
+
+newmtl Knight_Black
+map_base_color              ABeautifulGame/Knight_black_base_color.jpg
+map_base_color_colorspace   srgb_texture
+base_weight                 1.0
+map_orm                     ABeautifulGame/Knight_ORM.jpg
+map_orm_colorspace          raw
+base_metalness              1.0
+specular_roughness          1.0
+specular_ior                1.5
+map_normal                  ABeautifulGame/Knight_normal.jpg
+map_normal_colorspace       raw
+
+newmtl Knight_White
+map_base_color              ABeautifulGame/Knight_white_base_color.jpg
+map_base_color_colorspace   srgb_texture
+base_weight                 1.0
+map_orm                     ABeautifulGame/Knight_ORM.jpg
+map_orm_colorspace          raw
+base_metalness              1.0
+specular_roughness          1.0
+specular_ior                1.5
+map_normal                  ABeautifulGame/Knight_normal.jpg
+map_normal_colorspace       raw
+
+newmtl Bishop_Black
+map_base_color              ABeautifulGame/Bishop_black_base_color.jpg
+map_base_color_colorspace   srgb_texture
+base_weight                 1.0
+map_orm                     ABeautifulGame/Bishop_black_ORM.jpg
+map_orm_colorspace          raw
+base_metalness              1.0
+specular_roughness          1.0
+specular_ior                1.5
+map_normal                  ABeautifulGame/Bishop_black_normal.jpg
+map_normal_colorspace       raw
+
+newmtl Bishop_White
+map_base_color              ABeautifulGame/Bishop_white_base_color.jpg
+map_base_color_colorspace   srgb_texture
+base_weight                 1.0
+map_orm                     ABeautifulGame/Bishop_white_ORM.jpg
+map_orm_colorspace          raw
+base_metalness              1.0
+specular_roughness          1.0
+specular_ior                1.5
+map_normal                  ABeautifulGame/Bishop_white_normal.jpg
+map_normal_colorspace       raw
+

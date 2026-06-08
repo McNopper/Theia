@@ -1,0 +1,102 @@
+# OpenPBR organics & subsurface material library — Hyperion demo
+#
+# Source: AcademySoftwareFoundation/OpenPBR examples (open_pbr_*.mtlx)
+# Materials with subsurface scattering, thin-film, or fuzz lobes.
+# subsurface_radius is the per-channel scatter radius (OpenPBR subsurface_radius_scale).
+# Color values are linear Rec.709; Hyperion converts to linear Rec.2020 on load.
+#
+# Standard MTL keywords (Kd, Ks, Ka, …) are SILENTLY IGNORED.
+
+colorspace lin_rec709
+
+# ── Human skin (Fitzpatrick scale I–VI) ──────────────────────────────────────
+
+newmtl SkinI
+subsurface_weight   1.0
+subsurface_color    0.762 0.652 0.568
+subsurface_radius   0.482 0.169 0.109
+specular_roughness  0.50
+specular_ior        1.40
+
+newmtl SkinII
+subsurface_weight   1.0
+subsurface_color    0.671 0.505 0.371
+subsurface_radius   0.482 0.169 0.109
+specular_roughness  0.50
+specular_ior        1.40
+
+newmtl SkinIII
+subsurface_weight   1.0
+subsurface_color    0.545 0.445 0.359
+subsurface_radius   0.482 0.169 0.109
+specular_roughness  0.50
+specular_ior        1.40
+
+newmtl SkinIV
+subsurface_weight   1.0
+subsurface_color    0.351 0.240 0.148
+subsurface_radius   0.367 0.137 0.068
+specular_roughness  0.50
+specular_ior        1.40
+
+newmtl SkinV
+subsurface_weight   1.0
+subsurface_color    0.227 0.157 0.091
+subsurface_radius   0.367 0.137 0.068
+specular_roughness  0.50
+specular_ior        1.40
+
+newmtl SkinVI
+subsurface_weight   1.0
+subsurface_color    0.073 0.052 0.025
+subsurface_radius   0.367 0.137 0.068
+specular_roughness  0.50
+specular_ior        1.40
+
+# ── Organic liquids / semi-solids ─────────────────────────────────────────────
+
+newmtl Milk
+subsurface_weight   1.0
+subsurface_color    0.808 0.811 0.699
+subsurface_radius   1.842 1.044 0.350
+specular_roughness  0.00
+specular_ior        1.35
+
+newmtl HoneyCrystallized
+subsurface_weight   1.0
+subsurface_color    0.384 0.324 0.054
+subsurface_radius   0.200 0.200 0.200
+specular_roughness  0.20
+specular_ior        1.50
+
+newmtl Snow
+subsurface_weight   1.0
+subsurface_color    0.850 0.850 0.850
+subsurface_radius   0.200 0.200 1.000
+specular_roughness  0.50
+specular_ior        1.31
+
+# ── Surface materials with special lobes ─────────────────────────────────────
+
+newmtl Pearl
+subsurface_weight   1.0
+subsurface_color    0.778 0.753 0.708
+subsurface_radius   0.300 0.500 0.300
+coat_weight         1.0
+coat_roughness      0.15
+coat_ior            1.68
+thin_film_weight    1.0
+thin_film_thickness 0.40
+thin_film_ior       2.00
+
+newmtl EggShell
+base_color          0.616 0.623 0.630
+specular_roughness  0.80
+
+newmtl Velvet
+base_color          0.062 0.010 0.269
+base_diffuse_roughness 1.0
+specular_roughness  1.0
+fuzz_weight         0.5
+fuzz_color          0.315 0.237 0.465
+fuzz_roughness      0.5

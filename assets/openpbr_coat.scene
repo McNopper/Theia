@@ -1,0 +1,86 @@
+# OpenPBR Coat Layer Showcase — Hyperion demo
+# 15 spheres in 3 rows × 5, lit by IBL panorama.
+# Tests coat_weight (row 0), coat_roughness (row 1), coat_darkening + real materials (row 2).
+# Materials from openpbr_coat.mtlx.
+
+mtllib openpbr_coat.mtlx
+mtllib floor.mtlx
+
+env_map       meadow_2_4k.exr
+env_unit_nits 10000
+spp           64
+max_depth     8
+ev100         12
+
+camera
+  translate  0.0  2.5  -10.0
+  look_at    0.0  0.70   1.0
+  vfov       52
+
+# Ground plane
+box 12.0 0.1 10.0
+  translate  0.0 -0.05  1.0
+  usemtl NeutralFloor
+
+# ── Row 0  z = -2.0  coat_weight sweep ───────────────────────────────────────
+sphere 0.70
+  translate -5.0  0.70  -2.0
+  usemtl CoatWeight_0
+
+sphere 0.70
+  translate -2.5  0.70  -2.0
+  usemtl CoatWeight_25
+
+sphere 0.70
+  translate  0.0  0.70  -2.0
+  usemtl CoatWeight_50
+
+sphere 0.70
+  translate  2.5  0.70  -2.0
+  usemtl CoatWeight_75
+
+sphere 0.70
+  translate  5.0  0.70  -2.0
+  usemtl CoatWeight_100
+
+# ── Row 1  z = +0.5  coat_roughness sweep ───────────────────────────────────
+sphere 0.70
+  translate -5.0  0.70  0.5
+  usemtl CoatRough_0
+
+sphere 0.70
+  translate -2.5  0.70  0.5
+  usemtl CoatRough_15
+
+sphere 0.70
+  translate  0.0  0.70  0.5
+  usemtl CoatRough_30
+
+sphere 0.70
+  translate  2.5  0.70  0.5
+  usemtl CoatRough_50
+
+sphere 0.70
+  translate  5.0  0.70  0.5
+  usemtl CoatRough_80
+
+# ── Row 2  z = +3.0  coat_darkening + real lacquered materials ───────────────
+sphere 0.70
+  translate -5.0  0.70  3.0
+  usemtl CarLacquer
+
+sphere 0.70
+  translate -2.5  0.70  3.0
+  usemtl Lacquer_DarkNone
+
+sphere 0.70
+  translate  0.0  0.70  3.0
+  usemtl Lacquer_DarkHalf
+
+sphere 0.70
+  translate  2.5  0.70  3.0
+  usemtl CoatOnGold
+
+sphere 0.70
+  translate  5.0  0.70  3.0
+  usemtl VarnishedWood

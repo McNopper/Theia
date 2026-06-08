@@ -1,0 +1,76 @@
+# Suzanne material library — Hyperion demo
+#
+# FORMAT NOTE
+# -----------
+# Hyperion .mtlx — a line-based OpenPBR material library.  It is NOT Wavefront
+# MTL (despite reusing the familiar `newmtl` block delimiter) and NOT MaterialX
+# XML; material properties use OpenPBR Surface v1.1 parameter names.  Any classic
+# Wavefront MTL keywords (Kd, Ks, Ns, Ka, d, Tr, illum, map_*, …) are SILENTLY
+# IGNORED by Hyperion's material parser.
+#
+# Material properties are expressed exclusively using OpenPBR Surface v1.1
+# parameter names, with the following UsdPreviewSurface aliases also accepted:
+#
+#   diffuseColor        → base_color
+#   metallic            → base_metalness
+#   roughness           → specular_roughness
+#   ior                 → specular_ior
+#   emissiveColor       → emission_color
+#   emissiveLuminance   → emission_luminance   (Hyperion extension)
+#   clearcoat           → coat_weight
+#   clearcoatRoughness  → coat_roughness
+#   transmissionAmount  → transmission_weight
+#
+# Color values are linear Rec.709; Hyperion converts them to linear Rec.2020
+# on load.  The exception is "subsurface_radius", which is a physical
+# distance (not a colour) and is stored as-is.
+#
+# Declare the input color space explicitly with:
+#   colorspace lin_rec709   (default — Hyperion converts to lin_rec2020)
+#   colorspace lin_rec2020  (no conversion — values are already in lin_rec2020)
+#
+
+colorspace lin_rec709
+
+# Default: warm terracotta / skin-like diffuse
+newmtl SuzanneDefault
+base_color          0.720 0.420 0.180
+specular_roughness  0.55
+specular_ior        1.45
+
+# Brushed gold
+newmtl SuzanneMetal
+base_color          1.000 0.782 0.344
+base_metalness      1.0
+specular_roughness  0.25
+
+# Clear glass
+newmtl SuzanneGlass
+base_color          1.000 1.000 1.000
+transmission_weight 1.0
+specular_ior        1.52
+specular_roughness  0.0
+
+# Frosted glass
+newmtl SuzanneFrostedGlass
+base_color          0.900 0.950 1.000
+transmission_weight 1.0
+specular_ior        1.52
+specular_roughness  0.15
+
+# Red clearcoat lacquer
+newmtl SuzanneCoat
+base_color          0.720 0.040 0.020
+specular_roughness  0.70
+coat_weight         1.0
+coat_roughness      0.04
+coat_ior            1.5
+
+# Subsurface wax
+newmtl SuzanneWax
+base_color          1.000 0.900 0.700
+specular_roughness  0.4
+subsurface_weight   0.6
+subsurface_color    1.000 0.800 0.600
+subsurface_radius   4.0 2.0 1.5
+subsurface_scale    5.0

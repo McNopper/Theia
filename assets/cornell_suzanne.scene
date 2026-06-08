@@ -1,0 +1,39 @@
+# Cornell Box — Suzanne
+# Suzanne monkey head with a companion glass sphere.
+#
+# Syntax reference: see SceneLoader.hpp
+#
+# Quaternion for 180° around Y  →  0  1  0  0
+
+mtllib cornell.mtlx
+mtllib suzanne.mtlx
+
+camera
+translate    278.0  273.0  -800.0
+look_at      278.0  273.0   279.5
+vfov         39.1
+
+spp          64
+max_depth    8
+ev100        7.0
+
+instance cornell.obj
+  material Floor     WhiteWall
+  material Ceiling   WhiteWall
+  material AreaLight AreaLight
+  material BackWall  WhiteWall
+  material LeftWall  RedWall
+  material RightWall GreenWall
+
+# Suzanne spans ±1.3 Blender units; scaled to ±130 world units.
+# Rotated 180° around Y so the face points toward the camera.
+instance suzanne.obj
+usemtl SuzanneDefault
+translate  278.0  250.0  280.0
+rotate     0.0    1.0    0.0    0.0
+scale      100.0
+
+# Companion glass sphere
+sphere  60.0
+usemtl Glass
+translate  430.0  60.0  200.0

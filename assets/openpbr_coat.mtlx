@@ -1,0 +1,140 @@
+# OpenPBR coat layer material library — Hyperion demo
+#
+# Systematically exercises coat_weight, coat_roughness, coat_ior, coat_darkening
+# and the interaction of the coat lobe with diffuse and metallic bases.
+# Source values from OpenPBR Surface v1.1 specification §5.4 (coat lobe).
+# Color values are linear Rec.709; Hyperion converts to linear Rec.2020 on load.
+#
+# Standard MTL keywords (Kd, Ks, Ka, …) are SILENTLY IGNORED.
+
+colorspace lin_rec709
+
+# ── Row 0: coat_weight sweep — diffuse blue base, coat_ior 1.5, coat_roughness 0.05 ──────────
+# Shows how adding a coat layer progressively introduces a dielectric specular highlight
+# while coat_darkening reduces the base layer brightness.
+
+newmtl CoatWeight_0
+base_color          0.050 0.200 0.700
+specular_roughness  0.80
+coat_weight         0.0
+
+newmtl CoatWeight_25
+base_color          0.050 0.200 0.700
+specular_roughness  0.80
+coat_weight         0.25
+coat_roughness      0.05
+coat_ior            1.50
+coat_darkening      1.0
+
+newmtl CoatWeight_50
+base_color          0.050 0.200 0.700
+specular_roughness  0.80
+coat_weight         0.50
+coat_roughness      0.05
+coat_ior            1.50
+coat_darkening      1.0
+
+newmtl CoatWeight_75
+base_color          0.050 0.200 0.700
+specular_roughness  0.80
+coat_weight         0.75
+coat_roughness      0.05
+coat_ior            1.50
+coat_darkening      1.0
+
+newmtl CoatWeight_100
+base_color          0.050 0.200 0.700
+specular_roughness  0.80
+coat_weight         1.0
+coat_roughness      0.05
+coat_ior            1.50
+coat_darkening      1.0
+
+# ── Row 1: coat_roughness sweep — fully coated blue base, coat_weight 1.0 ─────────────────────
+# Mirror coat (0.0) → glossy satin coat (0.5) → matte coat (0.9).
+# coat_darkening = 1.0 throughout so base brightness is reduced consistently.
+
+newmtl CoatRough_0
+base_color          0.050 0.200 0.700
+specular_roughness  0.80
+coat_weight         1.0
+coat_roughness      0.00
+coat_ior            1.50
+coat_darkening      1.0
+
+newmtl CoatRough_15
+base_color          0.050 0.200 0.700
+specular_roughness  0.80
+coat_weight         1.0
+coat_roughness      0.15
+coat_ior            1.50
+coat_darkening      1.0
+
+newmtl CoatRough_30
+base_color          0.050 0.200 0.700
+specular_roughness  0.80
+coat_weight         1.0
+coat_roughness      0.30
+coat_ior            1.50
+coat_darkening      1.0
+
+newmtl CoatRough_50
+base_color          0.050 0.200 0.700
+specular_roughness  0.80
+coat_weight         1.0
+coat_roughness      0.50
+coat_ior            1.50
+coat_darkening      1.0
+
+newmtl CoatRough_80
+base_color          0.050 0.200 0.700
+specular_roughness  0.80
+coat_weight         1.0
+coat_roughness      0.80
+coat_ior            1.50
+coat_darkening      1.0
+
+# ── Row 2: coat_darkening + real-world lacquered materials ─────────────────────────────────────
+# coat_darkening [0,1]: 1.0 = full energy-conservation darkening at the base/coat interface
+# (OpenPBR spec §5.4 "coat_darkening"); 0.0 = base colour unchanged by the coat.
+
+newmtl CarLacquer
+base_color          0.600 0.050 0.020
+specular_roughness  0.60
+coat_weight         1.0
+coat_roughness      0.02
+coat_ior            1.60
+coat_darkening      1.0
+
+newmtl Lacquer_DarkNone
+base_color          0.780 0.520 0.050
+specular_roughness  0.60
+coat_weight         1.0
+coat_roughness      0.04
+coat_ior            1.52
+coat_darkening      0.0
+
+newmtl Lacquer_DarkHalf
+base_color          0.780 0.520 0.050
+specular_roughness  0.60
+coat_weight         1.0
+coat_roughness      0.04
+coat_ior            1.52
+coat_darkening      0.5
+
+newmtl CoatOnGold
+base_color          0.944 0.776 0.373
+base_metalness      1.0
+specular_roughness  0.25
+coat_weight         1.0
+coat_roughness      0.05
+coat_ior            1.52
+coat_darkening      1.0
+
+newmtl VarnishedWood
+base_color          0.350 0.180 0.060
+specular_roughness  0.65
+coat_weight         1.0
+coat_roughness      0.08
+coat_ior            1.50
+coat_darkening      1.0

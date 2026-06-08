@@ -1,0 +1,73 @@
+# OpenPBR Organics Showcase — Hyperion demo
+# Skin I-VI, pearl, velvet, egg shell, milk, honey, snow — 12 spheres.
+# Materials from openpbr_organics.mtlx.
+
+mtllib openpbr_organics.mtlx
+mtllib floor.mtlx
+
+env_map       meadow_2_4k.exr
+env_unit_nits 10000
+spp           64
+max_depth     8
+ev100         12
+
+camera
+  translate  0.0  2.5  -10.0
+  look_at    0.0  0.70   1.0
+  vfov       52
+
+# Ground plane
+box 10.0 0.1 10.0
+  translate  0.0 -0.05  1.0
+  usemtl NeutralFloor
+
+# ── Row 0  Skin I–IV  z = -2.0 ───────────────────────────────────────────────
+sphere 0.70
+  translate -3.75  0.70  -2.0
+  usemtl SkinI
+
+sphere 0.70
+  translate -1.25  0.70  -2.0
+  usemtl SkinII
+
+sphere 0.70
+  translate  1.25  0.70  -2.0
+  usemtl SkinIII
+
+sphere 0.70
+  translate  3.75  0.70  -2.0
+  usemtl SkinIV
+
+# ── Row 1  Skin V–VI + Pearl + Velvet  z = +0.5 ──────────────────────────────
+sphere 0.70
+  translate -3.75  0.70  0.5
+  usemtl SkinV
+
+sphere 0.70
+  translate -1.25  0.70  0.5
+  usemtl SkinVI
+
+sphere 0.70
+  translate  1.25  0.70  0.5
+  usemtl Pearl
+
+sphere 0.70
+  translate  3.75  0.70  0.5
+  usemtl Velvet
+
+# ── Row 2  Subsurface liquids  z = +3.0 ──────────────────────────────────────
+sphere 0.70
+  translate -3.75  0.70  3.0
+  usemtl Milk
+
+sphere 0.70
+  translate -1.25  0.70  3.0
+  usemtl HoneyCrystallized
+
+sphere 0.70
+  translate  1.25  0.70  3.0
+  usemtl Snow
+
+sphere 0.70
+  translate  3.75  0.70  3.0
+  usemtl EggShell

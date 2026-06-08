@@ -1,0 +1,48 @@
+# Cornell Box — Spheres
+# Five spheres showcasing different OpenPBR materials.
+# Layout: 3 spheres in the back row (z=350), 2 in the front row (z=160).
+# Radius 70 gives 48-unit gaps within each row and 80-unit cross-row gaps,
+# ensuring inter-sphere reflections are clearly visible.
+#
+# Syntax reference: see SceneLoader.hpp
+
+mtllib cornell.mtlx
+
+camera
+translate    278.0  273.0  -800.0
+look_at      278.0  273.0   279.5
+vfov         39.1
+
+spp          64
+max_depth    8
+ev100        7.0
+
+instance cornell.obj
+  material Floor     WhiteWall
+  material Ceiling   WhiteWall
+  material AreaLight AreaLight
+  material BackWall  WhiteWall
+  material LeftWall  RedWall
+  material RightWall GreenWall
+
+# ── Back row  z = 350 ─────────────────────────────────────────────────────────
+sphere  70.0
+usemtl Mirror
+translate   90.0  70.0  350.0
+
+sphere  70.0
+usemtl Glass
+translate  278.0  70.0  350.0
+
+sphere  70.0
+usemtl ClearcoatRed
+translate  466.0  70.0  350.0
+
+# ── Front row  z = 160 ────────────────────────────────────────────────────────
+sphere  70.0
+usemtl RoughGold
+translate  184.0  70.0  160.0
+
+sphere  70.0
+usemtl Copper
+translate  372.0  70.0  160.0

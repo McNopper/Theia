@@ -1,0 +1,50 @@
+# OpenPBR special / manufactured material library — Hyperion demo
+#
+# Source: AcademySoftwareFoundation/OpenPBR examples (open_pbr_*.mtlx)
+# Carpaint, rubber, diffuse solids, and thin-film soap bubble.
+# Color values are linear Rec.709; Hyperion converts to linear Rec.2020 on load.
+#
+# Standard MTL keywords (Kd, Ks, Ka, …) are SILENTLY IGNORED.
+
+colorspace lin_rec709
+
+# ── Coated / lacquered surfaces ───────────────────────────────────────────────
+
+newmtl Carpaint
+base_color          0.100 0.600 0.900
+specular_ior        1.60
+coat_weight         1.0
+coat_roughness      0.02
+coat_ior            1.60
+
+# ── Rubber / polymer ─────────────────────────────────────────────────────────
+
+newmtl Tire
+base_color          0.023 0.023 0.023
+specular_roughness  0.70
+
+# ── Diffuse solids ────────────────────────────────────────────────────────────
+
+newmtl Charcoal
+base_color          0.020 0.020 0.020
+base_diffuse_roughness 1.0
+specular_roughness  1.0
+
+newmtl Concrete
+base_color          0.510 0.510 0.510
+specular_roughness  0.50
+
+newmtl Sand
+base_color          0.412 0.388 0.252
+base_diffuse_roughness 1.0
+specular_roughness  1.0
+
+# ── Thin-film ─────────────────────────────────────────────────────────────────
+
+newmtl SoapBubble
+base_color          1.000 1.000 1.000
+transmission_weight 1.0
+specular_ior        1.00
+thin_film_weight    1.0
+thin_film_thickness 0.50
+thin_film_ior       1.40

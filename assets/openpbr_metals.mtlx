@@ -1,0 +1,145 @@
+# OpenPBR metals material library — Hyperion demo
+#
+# Source: AcademySoftwareFoundation/OpenPBR examples (open_pbr_*.mtlx)
+# All base_color values are the measured F0 reflectance (scene-linear Rec.709).
+# specular_color is the F82 reflectance used in the conductor Fresnel model.
+# Hyperion converts both to linear Rec.2020 on load.
+#
+# Standard MTL keywords (Kd, Ks, Ka, …) are SILENTLY IGNORED.
+
+colorspace lin_rec709
+
+# ── Noble / precious metals ───────────────────────────────────────────────────
+
+newmtl Copper
+base_color          0.811 0.643 0.542
+base_metalness      1.0
+specular_color      0.970 0.950 0.946
+specular_roughness  0.02
+
+newmtl Gold
+base_color          0.929 0.788 0.374
+base_metalness      1.0
+specular_color      0.987 1.000 0.997
+specular_roughness  0.02
+
+newmtl Silver
+base_color          0.988 0.985 0.975
+base_metalness      1.0
+specular_color      0.995 0.995 0.998
+specular_roughness  0.02
+
+newmtl Platinum
+base_color          0.749 0.732 0.684
+base_metalness      1.0
+specular_color      0.802 0.814 0.836
+specular_roughness  0.02
+
+newmtl Palladium
+base_color          0.721 0.705 0.669
+base_metalness      1.0
+specular_color      0.822 0.835 0.866
+specular_roughness  0.02
+
+newmtl Iridium
+base_color          0.739 0.734 0.709
+base_metalness      1.0
+specular_color      0.768 0.780 0.806
+specular_roughness  0.02
+
+# ── Common engineering metals ─────────────────────────────────────────────────
+
+newmtl AluminumBrushed
+base_color          0.918 0.922 0.923
+base_metalness      1.0
+specular_color      0.921 0.934 0.955
+specular_roughness  0.20
+specular_roughness_anisotropy  0.90
+
+newmtl Iron
+base_color          0.523 0.514 0.497
+base_metalness      1.0
+specular_color      0.767 0.768 0.797
+specular_roughness  0.02
+
+newmtl Titanium
+base_color          0.424 0.403 0.367
+base_metalness      1.0
+specular_color      0.882 0.903 0.940
+specular_roughness  0.02
+
+newmtl StainlessSteel
+base_color          0.656 0.640 0.604
+base_metalness      1.0
+specular_color      0.803 0.821 0.863
+specular_roughness  0.02
+
+newmtl Brass
+base_color          0.844 0.782 0.473
+base_metalness      1.0
+specular_color      0.963 0.977 1.000
+specular_roughness  0.02
+
+newmtl Chromium
+base_color          0.666 0.682 0.698
+base_metalness      1.0
+specular_color      0.706 0.726 0.788
+specular_roughness  0.02
+
+newmtl Cobalt
+base_color          0.699 0.703 0.676
+base_metalness      1.0
+specular_color      0.747 0.770 0.815
+specular_roughness  0.02
+
+newmtl Nickel
+base_color          0.672 0.643 0.575
+base_metalness      1.0
+specular_color      0.824 0.833 0.865
+specular_roughness  0.02
+
+newmtl Zinc
+base_color          0.822 0.842 0.861
+base_metalness      1.0
+specular_color      0.793 0.829 0.887
+specular_roughness  0.02
+
+# ── Refractory / heavy metals ─────────────────────────────────────────────────
+
+newmtl Tungsten
+base_color          0.536 0.535 0.522
+base_metalness      1.0
+specular_color      0.699 0.703 0.713
+specular_roughness  0.02
+
+newmtl Lead
+base_color          0.633 0.640 0.686
+base_metalness      1.0
+specular_color      0.765 0.772 0.795
+specular_roughness  0.02
+
+newmtl Molybdenum
+base_color          0.597 0.610 0.596
+base_metalness      1.0
+specular_color      0.689 0.695 0.721
+specular_roughness  0.02
+
+newmtl Vanadium
+base_color          0.532 0.527 0.543
+base_metalness      1.0
+specular_color      0.708 0.714 0.698
+specular_roughness  0.02
+
+# ── Semiconductors / special ──────────────────────────────────────────────────
+
+newmtl Silicon
+base_color          0.357 0.368 0.418
+base_metalness      1.0
+specular_color      0.711 0.702 0.669
+specular_roughness  0.02
+
+newmtl Mercury
+base_color          0.781 0.780 0.779
+base_metalness      1.0
+specular_color      0.830 0.850 0.895
+specular_roughness  0.02

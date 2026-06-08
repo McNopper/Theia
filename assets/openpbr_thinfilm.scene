@@ -1,0 +1,87 @@
+# OpenPBR Thin-Film Iridescence Showcase — Hyperion demo
+# 15 spheres in 3 rows × 5, lit by IBL panorama.
+# Tests thin_film_thickness on glass (row 0), on silver metal (row 1),
+# and named iridescent materials (row 2).
+# Materials from openpbr_thinfilm.mtlx.
+
+mtllib openpbr_thinfilm.mtlx
+mtllib floor.mtlx
+
+env_map       meadow_2_4k.exr
+env_unit_nits 10000
+spp           128
+max_depth     16
+ev100         12
+
+camera
+  translate  0.0  2.5  -10.0
+  look_at    0.0  0.70   1.0
+  vfov       52
+
+# Ground plane
+box 12.0 0.1 10.0
+  translate  0.0 -0.05  1.0
+  usemtl NeutralFloor
+
+# ── Row 0  z = -2.0  thickness sweep on glass ────────────────────────────────
+sphere 0.70
+  translate -5.0  0.70  -2.0
+  usemtl TF_Glass_300nm
+
+sphere 0.70
+  translate -2.5  0.70  -2.0
+  usemtl TF_Glass_500nm
+
+sphere 0.70
+  translate  0.0  0.70  -2.0
+  usemtl TF_Glass_700nm
+
+sphere 0.70
+  translate  2.5  0.70  -2.0
+  usemtl TF_Glass_900nm
+
+sphere 0.70
+  translate  5.0  0.70  -2.0
+  usemtl TF_Glass_1100nm
+
+# ── Row 1  z = +0.5  thickness sweep on silver metal ─────────────────────────
+sphere 0.70
+  translate -5.0  0.70  0.5
+  usemtl TF_Metal_300nm
+
+sphere 0.70
+  translate -2.5  0.70  0.5
+  usemtl TF_Metal_500nm
+
+sphere 0.70
+  translate  0.0  0.70  0.5
+  usemtl TF_Metal_700nm
+
+sphere 0.70
+  translate  2.5  0.70  0.5
+  usemtl TF_Metal_900nm
+
+sphere 0.70
+  translate  5.0  0.70  0.5
+  usemtl TF_Metal_1100nm
+
+# ── Row 2  z = +3.0  named iridescent materials ───────────────────────────────
+sphere 0.70
+  translate -5.0  0.70  3.0
+  usemtl OilSlick
+
+sphere 0.70
+  translate -2.5  0.70  3.0
+  usemtl PeacockFeather
+
+sphere 0.70
+  translate  0.0  0.70  3.0
+  usemtl AbaloneShell
+
+sphere 0.70
+  translate  2.5  0.70  3.0
+  usemtl JewelBeetle
+
+sphere 0.70
+  translate  5.0  0.70  3.0
+  usemtl SoapBubbleIrid

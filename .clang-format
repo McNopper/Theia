@@ -1,0 +1,92 @@
+# Hyperion — clang-format configuration
+# C++23, 4-space indent, 120-column limit.
+---
+Language:        Cpp
+Standard:        Latest
+
+BasedOnStyle:    LLVM
+IndentWidth:     4
+ColumnLimit:     120
+
+# Braces
+BreakBeforeBraces:           Attach
+BraceWrapping:
+  AfterCaseLabel:            false
+  AfterClass:                false
+  AfterControlStatement:     Never
+  AfterEnum:                 false
+  AfterFunction:             false
+  AfterNamespace:            false
+  AfterStruct:               false
+  AfterUnion:                false
+  BeforeCatch:               false
+  BeforeElse:                false
+  IndentBraces:              false
+  SplitEmptyFunction:        false
+  SplitEmptyRecord:          false
+  SplitEmptyNamespace:       false
+
+# Alignment
+AlignAfterOpenBracket:               Align
+AlignConsecutiveAssignments:
+  Enabled:                   false
+AlignConsecutiveDeclarations:
+  Enabled:                   false
+AlignConsecutiveMacros:
+  Enabled:                   true
+AlignEscapedNewlines:        Left
+AlignOperands:               Align
+AlignTrailingComments:
+  Kind:                      Always
+  OverEmptyLines:            0
+
+# Pointers and references
+PointerAlignment:            Left
+ReferenceAlignment:          Left
+DerivePointerAlignment:      false
+
+# Includes
+SortIncludes:                CaseSensitive
+IncludeBlocks:               Regroup
+IncludeCategories:
+  # System / Vulkan headers first
+  - Regex:           '^<volk/'
+    Priority:        1
+  - Regex:           '^<vulkan/'
+    Priority:        1
+  - Regex:           '^<SDL3/'
+    Priority:        2
+  - Regex:           '^<glm/'
+    Priority:        3
+  # Other third-party angle-bracket headers
+  - Regex:           '^<'
+    Priority:        4
+  # Project headers
+  - Regex:           '^"'
+    Priority:        5
+
+# Function parameters / call arguments
+AllowAllParametersOfDeclarationOnNextLine:  false
+BinPackArguments:            false
+BinPackParameters:           false
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLambdasOnASingleLine: All
+AllowShortLoopsOnASingleLine: false
+
+# Constructors / initializer lists
+ConstructorInitializerIndentWidth: 4
+PackConstructorInitializers:       NextLine
+BreakConstructorInitializers:      BeforeColon
+
+# Misc
+SpaceAfterCStyleCast:        false
+SpaceBeforeParens:           ControlStatements
+SpaceInEmptyBlock:           false
+Cpp11BracedListStyle:        true
+EmptyLineAfterAccessModifier: Never
+EmptyLineBeforeAccessModifier: LogicalBlock
+FixNamespaceComments:        true
+NamespaceIndentation:        None
+MaxEmptyLinesToKeep:         1
+SeparateDefinitionBlocks:    Leave

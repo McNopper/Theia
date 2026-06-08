@@ -1,0 +1,27 @@
+# textured_cube.scene — Cornell box with a decorated cube in the center.
+
+mtllib cornell.mtlx
+mtllib textured_cube.mtlx
+
+camera
+  translate 278.0  273.0  -800.0
+  look_at   278.0  273.0   279.5
+  vfov      39.1
+
+spp      64
+max_depth 8
+ev100    7.0
+
+instance cornell.obj
+  material Floor     WhiteWall
+  material Ceiling   WhiteWall
+  material AreaLight AreaLight
+  material BackWall  WhiteWall
+  material LeftWall  RedWall
+  material RightWall GreenWall
+
+# Cube centered in the box, scaled to 100 units per side
+instance textured_cube.obj
+  usemtl   cube_textured
+  translate 278 100 279
+  scale     100 100 100

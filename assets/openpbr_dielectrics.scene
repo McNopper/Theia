@@ -1,0 +1,81 @@
+# OpenPBR Dielectrics Showcase — Hyperion demo
+# 14 transparent/refractive spheres in 3 rows, lit by IBL panorama.
+# Materials from openpbr_dielectrics.mtlx.
+
+mtllib openpbr_dielectrics.mtlx
+mtllib floor.mtlx
+
+env_map       meadow_2_4k.exr
+env_unit_nits 10000
+spp           128
+max_depth     16
+ev100         12
+
+camera
+  translate  0.0  2.5  -10.0
+  look_at    0.0  0.70   1.0
+  vfov       52
+
+# Ground plane
+box 12.0 0.1 10.0
+  translate  0.0 -0.05  1.0
+  usemtl NeutralFloor
+
+# ── Row 0  z = -2.0 ───────────────────────────────────────────────────────────
+sphere 0.70
+  translate -5.0  0.70  -2.0
+  usemtl Glass
+
+sphere 0.70
+  translate -2.5  0.70  -2.0
+  usemtl Diamond
+
+sphere 0.70
+  translate  0.0  0.70  -2.0
+  usemtl Water
+
+sphere 0.70
+  translate  2.5  0.70  -2.0
+  usemtl Ice
+
+sphere 0.70
+  translate  5.0  0.70  -2.0
+  usemtl Sapphire
+
+# ── Row 1  z = +0.5 ───────────────────────────────────────────────────────────
+sphere 0.70
+  translate -5.0  0.70  0.5
+  usemtl Quartz
+
+sphere 0.70
+  translate -2.5  0.70  0.5
+  usemtl HoneyLiquid
+
+sphere 0.70
+  translate  0.0  0.70  0.5
+  usemtl Salt
+
+sphere 0.70
+  translate  2.5  0.70  0.5
+  usemtl PlasticAcrylic
+
+sphere 0.70
+  translate  5.0  0.70  0.5
+  usemtl PlasticPC
+
+# ── Row 2  z = +3.0 ───────────────────────────────────────────────────────────
+sphere 0.70
+  translate -3.75  0.70  3.0
+  usemtl PlasticPET
+
+sphere 0.70
+  translate -1.25  0.70  3.0
+  usemtl PlasticPVC
+
+sphere 0.70
+  translate  1.25  0.70  3.0
+  usemtl PlasticPolyurethane
+
+sphere 0.70
+  translate  3.75  0.70  3.0
+  usemtl PlasticPP

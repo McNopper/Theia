@@ -1,0 +1,14 @@
+# textured_cube.mtlx — OpenPBR Surface material for the textured cube demo.
+# map_base_color is uploaded to bindless slot 0 and sampled by the path tracer;
+# the scalar base_color below is the fallback tint when no map is bound.
+# Additional map slots are available: map_normal, map_orm, map_emission_color.
+
+newmtl cube_textured
+base_color                  0.800 0.600 0.200
+map_base_color              color_grid.png
+map_base_color_colorspace   srgb_texture
+specular_roughness          0.4
+specular_ior                1.5
+base_weight                 1.0
+base_metalness              0.0
+specular_weight             1.0

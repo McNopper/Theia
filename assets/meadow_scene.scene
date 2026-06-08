@@ -1,0 +1,53 @@
+# Hyperion – Meadow IBL Showcase Scene
+# Illuminated by meadow_2_4k.exr (equirectangular HDR panorama, linear Rec.2020 after load).
+# Seven spheres showcase the full OpenPBR material range.
+
+mtllib meadow_materials.mtlx
+mtllib floor.mtlx
+
+env_map       meadow_2_4k.exr
+env_unit_nits 10000
+tonemapper    agx
+spp           16
+max_depth     10
+ev100         12
+
+camera
+  translate  0.0 1.5 -8.0
+  look_at    0.0 0.5  0.0
+  vfov       55
+
+# Ground plane — large enough to fill the IBL horizon
+box 30.0 0.1 30.0
+  translate 0.0 -0.1 8.0
+  usemtl NeutralFloor
+
+# Diffuse white
+sphere 0.75
+  translate -4.5 0.75 0.0
+  usemtl mat_diffuse_white
+
+# Rough metal (gold)
+sphere 0.75
+  translate -1.5 0.75 0.0
+  usemtl mat_metal_gold
+
+# Smooth metal (mirror)
+sphere 0.75
+  translate  1.5 0.75 0.0
+  usemtl mat_mirror
+
+# Clear glass
+sphere 0.75
+  translate  4.5 0.75 0.0
+  usemtl mat_glass
+
+# Rough dielectric (frosted)
+sphere 0.75
+  translate -3.0 0.75 3.0
+  usemtl mat_frosted_glass
+
+# Coated diffuse (varnished wood)
+sphere 0.75
+  translate  0.0 0.75 3.0
+  usemtl mat_coated_diffuse

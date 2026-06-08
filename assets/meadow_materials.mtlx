@@ -1,0 +1,77 @@
+# Hyperion material library for meadow_scene.scene
+#
+# FORMAT NOTE
+# -----------
+# Hyperion .mtlx — a line-based OpenPBR material library.  It is NOT Wavefront
+# MTL (despite reusing the familiar `newmtl` block delimiter) and NOT MaterialX
+# XML; material properties use OpenPBR Surface v1.1 parameter names.  Any classic
+# Wavefront MTL keywords (Kd, Ks, Ns, Ka, d, Tr, Ke, Pm, Pr, illum, …) are
+# SILENTLY IGNORED by Hyperion's material parser.
+#
+# Material properties are expressed exclusively using OpenPBR Surface v1.1
+# parameter names.
+#
+# Color values are linear Rec.709; Hyperion converts them to linear Rec.2020
+# on load.
+#
+
+colorspace lin_rec709
+
+# ── Ground ────────────────────────────────────────────────────────────────────
+
+newmtl mat_ground
+base_color              0.180 0.260 0.090
+base_diffuse_roughness  0.80
+specular_roughness      0.95
+
+# ── Diffuse white ─────────────────────────────────────────────────────────────
+
+newmtl mat_diffuse_white
+base_color          0.900 0.900 0.900
+specular_roughness  1.00
+
+# ── Rough gold metal ──────────────────────────────────────────────────────────
+
+newmtl mat_metal_gold
+base_color          1.000 0.766 0.336
+base_metalness      1.0
+specular_roughness  0.35
+
+# ── Mirror (smooth metal) ─────────────────────────────────────────────────────
+
+newmtl mat_mirror
+base_color          0.950 0.950 0.950
+base_metalness      1.0
+specular_roughness  0.00
+
+# ── Clear glass ───────────────────────────────────────────────────────────────
+
+newmtl mat_glass
+base_color          1.000 1.000 1.000
+transmission_weight 1.0
+specular_ior        1.50
+specular_roughness  0.00
+
+# ── Frosted glass (rough dielectric) ─────────────────────────────────────────
+
+newmtl mat_frosted_glass
+base_color          0.950 0.950 0.980
+transmission_weight 1.0
+specular_ior        1.50
+specular_roughness  0.35
+
+# ── Coated diffuse (varnished wood) ───────────────────────────────────────────
+
+newmtl mat_coated_diffuse
+base_color          0.550 0.300 0.100
+specular_roughness  0.80
+coat_weight         1.0
+coat_roughness      0.10
+coat_ior            1.50
+
+# ── Emissive (small warm area light) ─────────────────────────────────────────
+
+newmtl mat_emissive
+base_color          1.000 0.875 0.625
+emission_color      1.000 0.875 0.625
+emission_luminance  100000.0
