@@ -157,7 +157,20 @@ float3 evalIBL(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B)
 
     float3 diffuseIrradiance = t_iblDiffuse.SampleLevel(s_iblLinear, dirToLatlong(N), 0.0).xyz;
     float3 R = reflect(-wo, N);
-    float3 prefilteredBase = t_iblSpecular.SampleLevel(s_iblLinear, dirToLatlong(R), roughnessToLod(baseRough)).xyz;
+    // Anisotropic specular IBL: bend the base reflection vector toward the bitangent
+    // so the prefiltered highlight elongates along the tangent, approximating the
+    // anisotropic GGX lobe under environment lighting (Filament getReflectedVector /
+    // MaterialX real-time). Matches the BSDF's computeAlpha convention where positive
+    // specular_anisotropy widens roughness along the tangent (alphaX > alphaY).
+    float baseAniso = saturate(mat.specularRoughAnisoIor.y);
+    float3 Rbase = R;
+    if (baseAniso > 0.0) {
+        float3 anisoTangent = cross(B, wo);
+        float3 anisoNormal  = cross(anisoTangent, B);
+        float  bend         = baseAniso * saturate(5.0 * baseRough);
+        Rbase = reflect(-wo, normalize(lerp(N, anisoNormal, bend)));
+    }
+    float3 prefilteredBase = t_iblSpecular.SampleLevel(s_iblLinear, dirToLatlong(Rbase), roughnessToLod(baseRough)).xyz;
     float3 prefilteredCoat = t_iblSpecular.SampleLevel(s_iblLinear, dirToLatlong(R), roughnessToLod(coatRough)).xyz;
     float3 prefilteredFuzz = t_iblSpecular.SampleLevel(s_iblLinear, dirToLatlong(N), roughnessToLod(fuzzRough)).xyz;
 
