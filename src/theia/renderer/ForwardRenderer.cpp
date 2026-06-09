@@ -7,8 +7,8 @@
 #include <array>
 #include <cmath>
 #include <fstream>
-#include <hyperion/core/Logger.hpp>
-#include <hyperion/scene/Scene.hpp>
+#include <harmonia/core/Logger.hpp>
+#include <theia/scene/Scene.hpp>
 #include <vector>
 
 #ifdef __clang__

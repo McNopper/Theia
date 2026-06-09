@@ -4,9 +4,9 @@
 
 #include <vector>
 
-#include "hyperion/DeviceContext.hpp"
-#include "hyperion/core/CommandPool.hpp"
-#include "hyperion/core/Image.hpp"
+#include "harmonia/DeviceContext.hpp"
+#include "harmonia/core/CommandPool.hpp"
+#include "harmonia/core/Image.hpp"
 
 namespace theia {
 

@@ -5,8 +5,8 @@
 #include <string>
 #include <unordered_map>
 
-#include "hyperion/scene/Material.hpp"
-#include "hyperion/scene/Texture.hpp"
+#include "harmonia/scene/Material.hpp"
+#include "harmonia/scene/Texture.hpp"
 
 /// Loads a Hyperion `.mtlx` OpenPBR material library.
 ///

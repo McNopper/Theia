@@ -15,7 +15,7 @@
 
 #include "demo/ImGuiLayer.hpp"
 #include "demo/SceneLoader.hpp"
-#include "hyperion/core/Logger.hpp"
+#include "harmonia/core/Logger.hpp"
 #include "theia/renderer/ForwardRenderer.hpp"
 
 #ifdef __clang__

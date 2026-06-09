@@ -9,9 +9,9 @@
 #include <string>
 #include <string_view>
 
-#include "hyperion/core/Logger.hpp"
-#include "hyperion/scene/Texture.hpp"
-#include "hyperion/utils/ColorSpace.hpp"
+#include "harmonia/core/Logger.hpp"
+#include "harmonia/scene/Texture.hpp"
+#include "harmonia/utils/ColorSpace.hpp"
 
 namespace {
 

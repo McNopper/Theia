@@ -17,11 +17,21 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-if(MSVC)
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-endif()
-
 add_compile_definitions(VK_NO_PROTOTYPES)
+
+# ── Shared libraries: Aether (file format) + Harmonia (common Vulkan) ─────────
+# Consumed via FetchContent. Pushes are not available yet, so the source dir is
+# the sibling working copy by default; override FETCHCONTENT_SOURCE_DIR_* or the
+# GIT_* args to pull from GitHub once the libraries are published.
+FetchContent_Declare(
+    aether
+    SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../Aether"
+)
+FetchContent_Declare(
+    harmonia
+    SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../Harmonia"
+)
+FetchContent_MakeAvailable(aether harmonia)
 
 set(THEIA_SHADER_OUTPUT_DIR "${CMAKE_BINARY_DIR}/shaders")
 
@@ -31,33 +41,9 @@ set(THEIA_ENTRY_SHADERS
     forward_render.frag.slang
 )
 
-# Theia library sources — same structure as Hyperion
+# Theia-specific sources only. Common Vulkan code now lives in Harmonia and the
+# file-format parsers in Aether, both linked via harmonia::harmonia.
 set(THEIA_LIBRARY_SOURCES
-    # Core Vulkan utilities
-    src/hyperion/core/Buffer.cpp
-    src/hyperion/core/CommandPool.cpp
-    src/hyperion/core/Image.cpp
-    src/hyperion/core/Logger.cpp
-    src/hyperion/core/Queue.cpp
-    src/hyperion/core/Timer.cpp
-    # Utilities
-    src/hyperion/utils/ColorSpace.cpp
-    # Renderer utilities (deferred/forward pipeline foundation)
-    src/hyperion/renderer/Camera.cpp
-    src/hyperion/renderer/Descriptors.cpp
-    src/hyperion/renderer/Pipeline.cpp
-    src/hyperion/renderer/AccelerationStructure.cpp
-    # Scene representation
-    src/hyperion/scene/Geometry.cpp
-    src/hyperion/scene/IblProbe.cpp
-    src/hyperion/scene/Light.cpp
-    src/hyperion/scene/Mesh.cpp
-    src/hyperion/scene/ProceduralGeometry.cpp
-    src/hyperion/scene/Scene.cpp
-    src/hyperion/scene/Texture.cpp
-    # Implementation details
-    src/vma_impl.cpp
-    src/stb_image_impl.cpp
     # CPU-only importers (no Vulkan deps)
     src/demo/importers/ObjImporter.cpp
     src/demo/importers/MaterialLibrary.cpp
@@ -66,15 +52,11 @@ set(THEIA_LIBRARY_SOURCES
     src/theia/renderer/IblPrecompute.cpp
     src/theia/renderer/LightCuller.cpp
     src/theia/renderer/SSRPass.cpp
+    # Theia GPU scene (rasterizer/meshlet layout — renderer-specific)
+    src/theia/scene/Scene.cpp
 )
 
 set(THEIA_DEMO_SOURCES
-    src/demo/vulkan_init/Context.cpp
-    src/demo/vulkan_init/PhysicalDevice.cpp
-    src/demo/vulkan_init/DebugUtils.cpp
-    src/demo/presentation/Surface.cpp
-    src/demo/presentation/Swapchain.cpp
-    src/demo/presentation/ToneMapper.cpp
     src/demo/SceneLoader.cpp
     src/demo/Application.cpp
     src/demo/ImGuiLayer.cpp
@@ -108,10 +90,13 @@ endif()
 set_property(TARGET imgui_core PROPERTY SYSTEM ON)
 # ────────────────────────────────────────────────────────────────────────────
 
-# Volk — compiled from the Vulkan SDK source
-add_library(volk STATIC "${VULKANSDK_VOLK_SOURCE}")
-target_include_directories(volk SYSTEM PUBLIC "${VULKANSDK_INCLUDE_DIR}")
-set_target_properties(volk PROPERTIES LINKER_LANGUAGE C)
+# Volk is provided by Harmonia (created during FetchContent above); only define
+# it ourselves if Harmonia did not (e.g. when building Theia in isolation).
+if(NOT TARGET volk)
+    add_library(volk STATIC "${VULKANSDK_VOLK_SOURCE}")
+    target_include_directories(volk SYSTEM PUBLIC "${VULKANSDK_INCLUDE_DIR}")
+    set_target_properties(volk PROPERTIES LINKER_LANGUAGE C)
+endif()
 
 add_library(theia_project_options INTERFACE)
 theia_configure_target(theia_project_options)
@@ -147,8 +132,6 @@ if(BUILD_TESTING)
     endif()
 endif()
 
-find_package(OpenEXR QUIET)
-find_package(Stb REQUIRED)
 find_package(meshoptimizer CONFIG REQUIRED)
 
 # Compile SLANG shaders for forward rendering pipeline (TODO: create support libs)
@@ -160,30 +143,15 @@ target_include_directories(theia_lib
     PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
 )
 
+# harmonia::harmonia brings the common Vulkan library plus Aether, Vulkan SDK,
+# volk, stb and OpenEXR (incl. HARMONIA_HAS_OPENEXR) transitively.
 target_link_libraries(theia_lib
-    PUBLIC theia_project_options theia_vulkan_sdk volk meshoptimizer::meshoptimizer
-)
-
-target_include_directories(theia_lib
-    SYSTEM PUBLIC "${Stb_INCLUDE_DIR}"
+    PUBLIC theia_project_options harmonia::harmonia meshoptimizer::meshoptimizer
 )
 
 target_compile_definitions(theia_lib
     PUBLIC THEIA_SHADER_DIR=\"${THEIA_SHADER_OUTPUT_DIR}\"
 )
-
-if(OpenEXR_FOUND)
-    if(TARGET OpenEXR::OpenEXR)
-        set_property(TARGET OpenEXR::OpenEXR PROPERTY SYSTEM ON)
-        target_link_libraries(theia_lib PUBLIC OpenEXR::OpenEXR)
-    elseif(OPENEXR_LIBRARIES)
-        target_link_libraries(theia_lib PUBLIC ${OPENEXR_LIBRARIES})
-        if(OPENEXR_INCLUDE_DIRS)
-            target_include_directories(theia_lib SYSTEM PUBLIC ${OPENEXR_INCLUDE_DIRS})
-        endif()
-    endif()
-    target_compile_definitions(theia_lib PUBLIC THEIA_HAS_OPENEXR=1)
-endif()
 
 add_library(theia_demo STATIC ${THEIA_DEMO_SOURCES})
 target_link_libraries(theia_demo PUBLIC theia_lib imgui_core)

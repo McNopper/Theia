@@ -6,9 +6,9 @@
 #include <string>
 #include <unordered_map>
 
-#include "hyperion/DeviceContext.hpp"
-#include "hyperion/core/CommandPool.hpp"
-#include "hyperion/scene/Scene.hpp"
+#include "harmonia/DeviceContext.hpp"
+#include "harmonia/core/CommandPool.hpp"
+#include "theia/scene/Scene.hpp"
 
 class MaterialLibrary;
 

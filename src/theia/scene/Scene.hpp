@@ -8,16 +8,46 @@
 #include <string_view>
 #include <vector>
 
-#include "hyperion/GpuTypes.hpp"
-#include "hyperion/core/Buffer.hpp"
-#include "hyperion/core/CommandPool.hpp"
-#include "hyperion/renderer/AccelerationStructure.hpp"
-#include "hyperion/scene/Geometry.hpp"
-#include "hyperion/scene/Light.hpp"
-#include "hyperion/scene/Material.hpp"
-#include "hyperion/scene/Texture.hpp"
+#include "harmonia/GpuTypes.hpp"
+#include "harmonia/core/Buffer.hpp"
+#include "harmonia/core/CommandPool.hpp"
+#include "harmonia/renderer/AccelerationStructure.hpp"
+#include "harmonia/scene/Geometry.hpp"
+#include "harmonia/scene/Light.hpp"
+#include "harmonia/scene/Material.hpp"
+#include "harmonia/scene/Texture.hpp"
 
 class SceneBuilder;
+
+/// Theia (rasterizer) per-instance GPU layout (std430, 32 bytes). The mesh-shader path
+/// draws meshlets, so this carries meshletOffset/meshletCount. Distinct from Hyperion's
+/// path-tracer layout, which carries indexOffset instead.
+struct GpuInstance {
+    uint32_t meshIndex;
+    uint32_t materialIndex;
+    uint32_t vertexOffset;  ///< first vertex in global vertex buffer (absolute)
+    uint32_t meshletOffset; ///< first meshlet index in meshlet buffer
+    uint32_t meshletCount;  ///< number of meshlets for this instance
+    uint32_t geometryKind;  ///< 0 = triangle mesh, 1 = sphere
+    float sphereRadius;
+    uint32_t _pad;
+};
+static_assert(std::is_trivially_copyable_v<GpuInstance>);
+static_assert(sizeof(GpuInstance) == 32);
+
+/// Per-meshlet descriptor uploaded to GPU (std430, 32 bytes).
+struct GpuMeshlet {
+    uint32_t vertexOffset;   ///< first entry in meshletVertices[]
+    uint32_t triangleOffset; ///< first uint32 in meshletTriangles[] (holds 4 packed uint8)
+    uint32_t vertexCount;    ///< number of vertices  (<= 64)
+    uint32_t triangleCount;  ///< number of triangles (<= 124)
+    float centerX;
+    float centerY;
+    float centerZ;
+    float radius; ///< bounding sphere radius for task-shader culling
+};
+static_assert(std::is_trivially_copyable_v<GpuMeshlet>);
+static_assert(sizeof(GpuMeshlet) == 32);
 
 class Scene {
   public:

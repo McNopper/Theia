@@ -5,9 +5,9 @@
 #include <filesystem>
 #include <optional>
 
-#include "hyperion/DeviceContext.hpp"
-#include "hyperion/core/CommandPool.hpp"
-#include "hyperion/scene/Scene.hpp"
+#include "harmonia/DeviceContext.hpp"
+#include "harmonia/core/CommandPool.hpp"
+#include "theia/scene/Scene.hpp"
 
 /// Loads a Hyperion scene definition file (.scene).
 ///

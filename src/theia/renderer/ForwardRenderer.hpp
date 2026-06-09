@@ -4,10 +4,10 @@
 
 #include <glm/glm.hpp>
 
-#include "hyperion/DeviceContext.hpp"
-#include "hyperion/core/Buffer.hpp"
-#include "hyperion/core/CommandPool.hpp"
-#include "hyperion/core/Image.hpp"
+#include "harmonia/DeviceContext.hpp"
+#include "harmonia/core/Buffer.hpp"
+#include "harmonia/core/CommandPool.hpp"
+#include "harmonia/core/Image.hpp"
 #include "theia/renderer/IblPrecompute.hpp"
 
 class Scene;

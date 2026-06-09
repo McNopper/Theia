@@ -7,7 +7,7 @@
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_vulkan.h>
 
-#include "hyperion/core/Logger.hpp"
+#include "harmonia/core/Logger.hpp"
 
 #ifdef __clang__
 #pragma clang diagnostic push

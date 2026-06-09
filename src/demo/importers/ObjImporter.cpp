@@ -15,9 +15,9 @@
 #include <vector>
 
 #include "demo/importers/MaterialLibrary.hpp"
-#include "hyperion/core/Logger.hpp"
-#include "hyperion/scene/Material.hpp"
-#include "hyperion/utils/Hash.hpp"
+#include "harmonia/core/Logger.hpp"
+#include "harmonia/scene/Material.hpp"
+#include "harmonia/utils/Hash.hpp"
 
 namespace {
 

@@ -1,5 +1,5 @@
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
-#include "hyperion/scene/Scene.hpp"
+#include "theia/scene/Scene.hpp"
 
 #include <volk/volk.h>
 
@@ -18,9 +18,9 @@
 #include <vector>
 #include <vma/vk_mem_alloc.h>
 
-#include "hyperion/GpuTypes.hpp"
-#include "hyperion/core/Logger.hpp"
-#include "hyperion/scene/Geometry.hpp"
+#include "harmonia/GpuTypes.hpp"
+#include "harmonia/core/Logger.hpp"
+#include "harmonia/scene/Geometry.hpp"
 
 namespace {
 [[nodiscard]] constexpr VkDeviceSize alignUp(VkDeviceSize value, VkDeviceSize alignment) noexcept {

@@ -4,8 +4,8 @@
 
 #include <glm/glm.hpp>
 
-#include "hyperion/DeviceContext.hpp"
-#include "hyperion/core/Image.hpp"
+#include "harmonia/DeviceContext.hpp"
+#include "harmonia/core/Image.hpp"
 
 namespace theia {
 

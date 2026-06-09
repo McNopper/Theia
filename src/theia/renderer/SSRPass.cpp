@@ -3,7 +3,7 @@
 
 #include <array>
 #include <fstream>
-#include <hyperion/core/Logger.hpp>
+#include <harmonia/core/Logger.hpp>
 #include <vector>
 
 #ifdef __clang__
