@@ -116,6 +116,24 @@ OBJ files contribute **only geometry**; all material assignments are declared in
 
 ---
 
+## Architecture
+
+Theia is the **real-time** renderer in a family of four repositories:
+
+| Repository | Role |
+|------------|------|
+| [Aether](https://github.com/McNopper/Aether) | GPU-agnostic file formats & scene data (`.scene` / `.mtlx` / OBJ → plain CPU structs); no Vulkan |
+| [Harmonia](https://github.com/McNopper/Harmonia) | Shared Vulkan foundation reused **1:1** by both renderers — core/context, presentation, color management, tonemapping, bindless textures, shared GPU types |
+| [Hyperion](https://github.com/McNopper/Hyperion) | Offline path tracer (ground truth) |
+| **Theia** | This repo — real-time GPU-driven forward renderer |
+
+Theia consumes Aether and Harmonia via CMake `FetchContent`. The **GPU scene layout is
+renderer-specific**: Theia owns its own `Scene`, `GpuInstance` and `GpuMeshlet`
+(`src/theia/scene/`) built around meshlets and the mesh-shader pipeline, distinct from
+Hyperion's index-buffer / ray-tracing layout. Only code shared 1:1 lives in Harmonia.
+
+---
+
 ## Building
 
 **Requirements:** Vulkan SDK 1.4, CMake 3.28+, Ninja, clang-cl, vcpkg.
@@ -175,6 +193,8 @@ cd build && ctest --output-on-failure
 
 | Library | Purpose |
 |---------|---------|
+| [Aether](https://github.com/McNopper/Aether) | Scene & material file formats (`.scene` / `.mtlx` / OBJ) — GPU-agnostic CPU data |
+| [Harmonia](https://github.com/McNopper/Harmonia) | Shared Vulkan foundation (core, presentation, color, tonemapping, shared GPU types) |
 | [Vulkan SDK](https://vulkan.lunarg.com/) | Modern Vulkan 1.4 API |
 | [volk](https://github.com/zeux/volk) | Vulkan loader |
 | [VMA](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) | GPU memory allocation |
