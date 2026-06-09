@@ -21,6 +21,7 @@
 #include "harmonia/GpuTypes.hpp"
 #include "harmonia/core/Logger.hpp"
 #include "harmonia/scene/Geometry.hpp"
+#include "harmonia/scene/ProceduralGeometry.hpp"
 
 namespace {
 [[nodiscard]] constexpr VkDeviceSize alignUp(VkDeviceSize value, VkDeviceSize alignment) noexcept {
@@ -118,26 +119,11 @@ uint32_t Scene::addSphere(const DeviceContext& ctx,
                           glm::vec3 center,
                           float radius,
                           uint32_t materialIdx) {
-    const uint32_t instanceIndex = static_cast<uint32_t>(m_geometries.size());
-    const std::string debugName = std::string{"sphere."} + std::to_string(instanceIndex);
-
-    auto sphere = Sphere::create(ctx, pool, center, radius, materialIdx, debugName);
-    if (!sphere) {
-        return std::numeric_limits<uint32_t>::max();
-    }
-
-    m_geometries.push_back(std::move(*sphere));
-    m_instances.push_back(GpuInstance{
-        .meshIndex = instanceIndex,
-        .materialIndex = materialIdx,
-        .vertexOffset = 0,
-        .meshletOffset = 0,
-        .meshletCount = 0,
-        .geometryKind = 1,
-        .sphereRadius = radius,
-        ._pad = 0,
-    });
-    return instanceIndex;
+    // Theia is a rasterizer (mesh-shader pipeline), so an analytic sphere cannot
+    // be drawn directly — it is tessellated into a triangle mesh on insertion.
+    // (Hyperion keeps the analytic sphere; that divergence lives in each Scene.)
+    MeshData mesh = ProceduralGeometry::makeSphere(center, radius);
+    return addMesh(ctx, pool, std::move(mesh), materialIdx, "sphere");
 }
 
 uint32_t Scene::addLight(std::unique_ptr<Light> light) {

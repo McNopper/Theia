@@ -38,6 +38,10 @@ class Application {
         bool validation = false;
         std::string initialScene; ///< optional: path or bare filename in assets/
         bool hideUi = false;      ///< start with the ImGui overlay hidden (toggle with F1)
+        /// If set, render offscreen (hidden window), capture the HDR image to this
+        /// path (PNG; ACES SDR tonemapped) and exit — the rasterizer equivalent of
+        /// Hyperion's headless mode.
+        std::filesystem::path outputFile;
     };
 
     Application() = default;
@@ -73,6 +77,11 @@ class Application {
     bool initialize(const Config& config);
     void shutdown();
     void mainLoop();
+
+    /// Offscreen render path: render a few frames into m_hdrImage, then capture it
+    /// to @p outputFile (PNG via the shared Harmonia ImageCapture).  Returns true on
+    /// success.  Used when Config::outputFile is set (no window is shown).
+    bool renderOffscreen(const std::filesystem::path& outputFile);
 
     /// Submit scene rendering into m_hdrImage; returns timeline value signalled on completion.
     uint64_t renderFrame();

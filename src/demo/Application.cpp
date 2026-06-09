@@ -14,8 +14,9 @@
 #include <string>
 
 #include "demo/ImGuiLayer.hpp"
-#include "demo/SceneLoader.hpp"
+#include "harmonia/scene/SceneLoader.hpp"
 #include "harmonia/core/Logger.hpp"
+#include "harmonia/presentation/ImageCapture.hpp"
 #include "theia/renderer/ForwardRenderer.hpp"
 
 #ifdef __clang__
@@ -86,6 +87,11 @@ int Application::run(const Config& config) {
     if (!initialize(config)) {
         return 1;
     }
+    if (!config.outputFile.empty()) {
+        const bool ok = renderOffscreen(config.outputFile);
+        shutdown();
+        return ok ? 0 : 1;
+    }
     mainLoop();
     shutdown();
     return 0;
@@ -98,7 +104,8 @@ bool Application::initialize(const Config& config) {
         return false;
     }
 
-    m_window = SDL_CreateWindow(config.title.c_str(), config.width, config.height, SDL_WINDOW_VULKAN);
+    const SDL_WindowFlags windowFlags = SDL_WINDOW_VULKAN | (config.outputFile.empty() ? 0 : SDL_WINDOW_HIDDEN);
+    m_window = SDL_CreateWindow(config.title.c_str(), config.width, config.height, windowFlags);
     if (!m_window) {
         Logger::error("Failed to create SDL window");
         SDL_Quit();
@@ -144,12 +151,14 @@ bool Application::initialize(const Config& config) {
     m_descriptors = std::move(*descResult);
 
     // HDR image: STORAGE_BIT (ToneMapper), SAMPLED_BIT (SSR reads reflected colors),
-    //            COLOR_ATTACHMENT_BIT (ForwardRenderer writes here).
+    //            COLOR_ATTACHMENT_BIT (ForwardRenderer writes here),
+    //            TRANSFER_SRC_BIT (offscreen capture read-back via ImageCapture).
     auto hdrResult =
         Image::create(m_context->deviceContext(),
                       m_swapchain->extent(),
                       VK_FORMAT_R32G32B32A32_SFLOAT,
-                      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                          VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                       VK_IMAGE_ASPECT_COLOR_BIT,
                       "theia.hdr");
     if (!hdrResult) {
@@ -270,7 +279,7 @@ bool Application::initialize(const Config& config) {
     }
 
     // Load scene
-    const std::filesystem::path assetsDir = "assets";
+    const std::filesystem::path assetsDir = THEIA_ASSETS_DIR;
     m_assetsDir = assetsDir;
 
     // Enumerate all .scene files for the scene switcher UI
@@ -405,6 +414,7 @@ void Application::shutdown() {
 
     m_imgui.shutdown();
     m_renderer.reset();
+    m_scene.reset();
     m_lightCuller.shutdown();
     m_ssrPass.shutdown();
     m_ibl.shutdown();
@@ -861,6 +871,25 @@ void Application::mainLoop() {
             fpsLastTick = SDL_GetTicksNS();
         }
     }
+}
+
+bool Application::renderOffscreen(const std::filesystem::path& outputFile) {
+    // Mirrors Hyperion's headless block: render a few frames into m_hdrImage, wait
+    // for GPU idle, then capture via the shared Harmonia ImageCapture.  Theia is a
+    // real-time renderer (no SPP accumulation), so a small fixed number of frames is
+    // rendered to let light culling / SSR history settle before the capture.
+    constexpr uint32_t kWarmupFrames = 4;
+    Logger::info("Offscreen render -> {}", outputFile.string());
+    for (uint32_t i = 0; i < kWarmupFrames; ++i) {
+        renderFrame();
+        vkDeviceWaitIdle(m_context->deviceContext().device);
+    }
+
+    ImageCapture::saveExr(m_context->deviceContext(), *m_commandPool, m_hdrImage, outputFile);
+    // Also write a tone-mapped sRGB PNG (ACES SDR) for GitHub / README display.
+    std::filesystem::path pngPath = outputFile;
+    pngPath.replace_extension(".png");
+    return ImageCapture::savePng(m_context->deviceContext(), *m_commandPool, m_hdrImage, pngPath);
 }
 
 uint64_t Application::renderFrame() {

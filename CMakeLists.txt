@@ -44,9 +44,6 @@ set(THEIA_ENTRY_SHADERS
 # Theia-specific sources only. Common Vulkan code now lives in Harmonia and the
 # file-format parsers in Aether, both linked via harmonia::harmonia.
 set(THEIA_LIBRARY_SOURCES
-    # CPU-only importers (no Vulkan deps)
-    src/demo/importers/ObjImporter.cpp
-    src/demo/importers/MaterialLibrary.cpp
     # Theia forward rendering
     src/theia/renderer/ForwardRenderer.cpp
     src/theia/renderer/IblPrecompute.cpp
@@ -57,7 +54,6 @@ set(THEIA_LIBRARY_SOURCES
 )
 
 set(THEIA_DEMO_SOURCES
-    src/demo/SceneLoader.cpp
     src/demo/Application.cpp
     src/demo/ImGuiLayer.cpp
     # Dear ImGui Vulkan + SDL3 backends compiled with volk preamble to suppress VK_NO_PROTOTYPES issues
@@ -151,6 +147,7 @@ target_link_libraries(theia_lib
 
 target_compile_definitions(theia_lib
     PUBLIC THEIA_SHADER_DIR=\"${THEIA_SHADER_OUTPUT_DIR}\"
+           THEIA_ASSETS_DIR=\"${AETHER_ASSETS_DIR}\"
 )
 
 add_library(theia_demo STATIC ${THEIA_DEMO_SOURCES})
