@@ -20,16 +20,18 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_compile_definitions(VK_NO_PROTOTYPES)
 
 # ── Shared libraries: Aether (file format) + Harmonia (common Vulkan) ─────────
-# Consumed via FetchContent. Pushes are not available yet, so the source dir is
-# the sibling working copy by default; override FETCHCONTENT_SOURCE_DIR_* or the
-# GIT_* args to pull from GitHub once the libraries are published.
+# Consumed via FetchContent, pinned to published release tags.  For local
+# development against working copies, override FETCHCONTENT_SOURCE_DIR_AETHER /
+# FETCHCONTENT_SOURCE_DIR_HARMONIA.  Both pin v0.1.0.
 FetchContent_Declare(
     aether
-    SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../Aether"
+    GIT_REPOSITORY https://github.com/McNopper/Aether.git
+    GIT_TAG v0.1.0
 )
 FetchContent_Declare(
     harmonia
-    SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../Harmonia"
+    GIT_REPOSITORY https://github.com/McNopper/Harmonia.git
+    GIT_TAG v0.1.0
 )
 FetchContent_MakeAvailable(aether harmonia)
 
