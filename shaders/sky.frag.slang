@@ -1,7 +1,11 @@
 // Sky/background fragment shader.
-// Samples the GGX-prefiltered environment (mip 0 ≈ sharp panorama) along the
-// world-space view ray, in the same lat-long convention as the IBL evaluation.
-// Output is scaled by camera exposure so the background matches lit geometry.
+// Samples the RAW equirectangular environment panorama along the world-space view
+// ray, in the same lat-long convention as Hyperion's env.slang sampleEnvMap().
+// This matches Hyperion's primary-ray background exactly (evalEnvironment =
+// envLuminanceScale * rawEnv(dir)); it deliberately does NOT sample the GGX
+// prefiltered specular map, which is lower-resolution and redistributes energy.
+// Output is scaled by env_unit_nits and camera exposure so the background matches
+// lit geometry.
 
 [[vk::push_constant]]
 cbuffer SkyPC {
@@ -9,13 +13,13 @@ cbuffer SkyPC {
     float4   cameraPos;
     float    exposure;
     uint     hasEnv;
-    uint     _pad0;
+    float    envScale;  ///< env_unit_nits — physical cd/m² per raw EXR unit
     uint     _pad1;
 };
 
-// Set 0 == forward IBL set (binding 1 = specular prefilter, binding 3 = sampler).
-[[vk::binding(1, 0)]] Texture2D<float4> t_iblSpecular;
+// Set 0 == forward IBL set (binding 3 = sampler, binding 4 = raw env panorama).
 [[vk::binding(3, 0)]] SamplerState      s_iblLinear;
+[[vk::binding(4, 0)]] Texture2D<float4> t_envRaw;
 
 float2 dirToLatlong(float3 d) {
     // Hyperion env.slang convention (shaders/env.slang): u via atan2(z,x), v via acos(y).
@@ -30,6 +34,7 @@ float4 main(float4 pos : SV_Position, float3 viewRay : TEXCOORD0) : SV_Target0 {
         return float4(0.0, 0.0, 0.0, 1.0);
     }
     const float3 dir = normalize(viewRay);
-    const float3 env = t_iblSpecular.SampleLevel(s_iblLinear, dirToLatlong(dir), 0.0).xyz;
-    return float4(env * exposure, 1.0);
+    // max(.,0) matches Hyperion sampleEnvMap clamping against negative filtered values.
+    const float3 env = max(t_envRaw.SampleLevel(s_iblLinear, dirToLatlong(dir), 0.0).xyz, 0.0.xxx);
+    return float4(env * envScale * exposure, 1.0);
 }

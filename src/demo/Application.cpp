@@ -334,6 +334,9 @@ bool Application::loadScene(const std::filesystem::path& sceneFile) {
     } else {
         m_renderer->setScene(m_scene.get());
 
+        // Tone mapper is renderer-independent post-processing shared with Hyperion.
+        m_tonemapper = sceneConfig->tonemapper.value_or(0u);
+
         if (sceneConfig->cameraPos && sceneConfig->cameraAt) {
             m_camera.position = *sceneConfig->cameraPos;
             m_camera.target = *sceneConfig->cameraAt;
@@ -385,7 +388,7 @@ bool Application::loadScene(const std::filesystem::path& sceneFile) {
         Logger::error("IBL precomputation failed for '{}'", sceneFile.filename().string());
         return false;
     }
-    m_renderer->setIbl(m_ibl.resources());
+    m_renderer->setIbl(m_ibl.resources(), envView, sceneConfig ? sceneConfig->envUnitNits.value_or(1.0f) : 1.0f);
     m_renderer->setHasEnvironment(envView != VK_NULL_HANDLE);
     if (envView != VK_NULL_HANDLE && m_envProbe) {
         m_renderer->setSunShadow(m_envProbe->sunDirection(), m_envProbe->sunStrength());
@@ -763,7 +766,8 @@ void Application::mainLoop() {
                             m_hdrImage.view(),
                             m_swapchain->imageView(imageIndex),
                             m_swapchain->extent(),
-                            m_swapchain->outputColorSpace());
+                            m_swapchain->outputColorSpace(),
+                            m_tonemapper);
 
         // Render ImGui over the tonemapped image (swapchain still in COLOR_ATTACHMENT_OPTIMAL)
         m_imgui.render(frame.displayCmd, m_swapchain->imageView(imageIndex), m_swapchain->extent());

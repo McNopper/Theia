@@ -261,7 +261,8 @@ void ToneMapper::record(VkCommandBuffer cmd,
                         VkImageView hdrView,
                         VkImageView swapchainView,
                         VkExtent2D extent,
-                        OutputColorSpace colorSpace) const noexcept {
+                        OutputColorSpace colorSpace,
+                        uint32_t tonemapper) const noexcept {
     if (cmd == VK_NULL_HANDLE || m_pipeline == VK_NULL_HANDLE || hdrView == VK_NULL_HANDLE ||
         swapchainView == VK_NULL_HANDLE) {
         return;
@@ -294,6 +295,12 @@ void ToneMapper::record(VkCommandBuffer cmd,
                        offsetof(PushConstants, outputColorSpace),
                        sizeof(uint32_t),
                        &cs);
+    vkCmdPushConstants(cmd,
+                       m_pipelineLayout,
+                       VK_SHADER_STAGE_FRAGMENT_BIT,
+                       offsetof(PushConstants, tonemapper),
+                       sizeof(uint32_t),
+                       &tonemapper);
 
     const VkRenderingAttachmentInfo colorAttachment{
         .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,

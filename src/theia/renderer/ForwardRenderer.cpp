@@ -133,7 +133,7 @@ void ForwardRenderer::setTileBuffers(VkBuffer tileLightCounts,
     m_tilesY = tilesY;
 }
 
-void ForwardRenderer::setIbl(const IblResources& res) {
+void ForwardRenderer::setIbl(const IblResources& res, VkImageView rawEnvView, float envUnitNits) {
     if (!m_ctx || m_iblSet == VK_NULL_HANDLE) {
         return;
     }
@@ -145,8 +145,13 @@ void ForwardRenderer::setIbl(const IblResources& res) {
     m_sheenLutInfo =
         VkDescriptorImageInfo{VK_NULL_HANDLE, res.sheenLut.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     m_iblEnvSamplerInfo = VkDescriptorImageInfo{res.envSampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
+    // Raw env panorama for the sky background. Fall back to the specular view (a valid
+    // SAMPLED_IMAGE) when no raw env is supplied, so the descriptor stays valid.
+    const VkImageView envView = (rawEnvView != VK_NULL_HANDLE) ? rawEnvView : res.specularMipped.view();
+    m_iblEnvRawInfo = VkDescriptorImageInfo{VK_NULL_HANDLE, envView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    m_envUnitNits = envUnitNits;
 
-    const std::array<VkWriteDescriptorSet, 4> writes{
+    const std::array<VkWriteDescriptorSet, 5> writes{
         VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                              nullptr,
                              m_iblSet,
@@ -185,6 +190,16 @@ void ForwardRenderer::setIbl(const IblResources& res) {
                              1,
                              VK_DESCRIPTOR_TYPE_SAMPLER,
                              &m_iblEnvSamplerInfo,
+                             nullptr,
+                             nullptr},
+        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                             nullptr,
+                             m_iblSet,
+                             4,
+                             0,
+                             1,
+                             VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+                             &m_iblEnvRawInfo,
                              nullptr,
                              nullptr},
     };
@@ -327,12 +342,13 @@ bool ForwardRenderer::createPipeline() {
     }
 
     // Set 2: IBL textures + sampler (fragment stage)
-    // binding 0: t_iblDiffuse, 1: t_iblSpecular, 2: t_sheenLut, 3: s_iblLinear
-    const std::array<VkDescriptorSetLayoutBinding, 4> iblBindings{
+    // binding 0: t_iblDiffuse, 1: t_iblSpecular, 2: t_sheenLut, 3: s_iblLinear, 4: t_envRaw (sky)
+    const std::array<VkDescriptorSetLayoutBinding, 5> iblBindings{
         VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
     };
     const VkDescriptorSetLayoutCreateInfo iblSetLayoutInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
@@ -384,7 +400,7 @@ bool ForwardRenderer::createPipeline() {
     // Single pool for all four sets.
     const std::array<VkDescriptorPoolSize, 5> poolSizes{
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 11},
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 3},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 4},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLER, 1},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
@@ -1027,7 +1043,7 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
             .cameraPos = glm::vec4(m_camera.position, 1.0f),
             .exposure = 1.0f / (1.2f * std::pow(2.0f, m_camera.ev100)),
             .hasEnv = 1u,
-            ._pad0 = 0u,
+            .envScale = m_envUnitNits,
             ._pad1 = 0u,
         };
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skyPipeline);

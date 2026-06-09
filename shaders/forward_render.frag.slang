@@ -173,6 +173,15 @@ float3 evalIBL(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B)
         float ssReflScale = (mat.opacityFlagsPad.w > 0.5) ? 1.0 : saturate(1.0 - ssAniso);
         baseLo += baseLayerScale * subsurfaceWeight * ssReflScale * diffuseIrradiance * ssTint;
     }
+    // Thin-walled diffuse transmission (translucent base): diffuse light from the
+    // BACK hemisphere transmitted through the sheet, tinted by subsurface_color.
+    // IBL analogue of Hyperion bsdf.slang's evalDiffuseOrenNayar on the flipped
+    // hemisphere — the back-side irradiance is the cosine-prefiltered diffuse map
+    // sampled along -N. Lets thin curtains/leaves/paper glow when lit from behind.
+    if (diffuseTransWeight > 0.0) {
+        float3 backIrradiance = t_iblDiffuse.SampleLevel(s_iblLinear, dirToLatlong(-N), 0.0).xyz;
+        baseLo += baseLayerScale * diffuseTransWeight * backIrradiance * subsurfaceColor;
+    }
     if (specularWeight > 0.0 || metalWeight > 0.0) {
         float3 glossyF0 = lerp(iorToF0(eta) * specColor, baseColor, metalness);
         glossyF0 = thinFilmTint(glossyF0, NoV, mat.thinFilmParams.x, max(mat.thinFilmParams.y, 1.0), mat.thinFilmParams.z);

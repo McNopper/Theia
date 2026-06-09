@@ -57,7 +57,12 @@ class ForwardRenderer {
         m_texturesBoundFor = nullptr;
     }
     void setCamera(const CameraParams& cam) { m_camera = cam; }
-    void setIbl(const IblResources& res);
+    /// Bind IBL textures (set 2 / sky set 0). When a raw environment panorama is
+    /// available it is bound to IBL binding 4 for the sky background and its
+    /// physical scale (env_unit_nits) recorded; pass VK_NULL_HANDLE / 1.0f when the
+    /// scene has no env map (binding 4 falls back to the specular view as a
+    /// harmless placeholder).
+    void setIbl(const IblResources& res, VkImageView rawEnvView = VK_NULL_HANDLE, float envUnitNits = 1.0f);
 
     /// Whether the current scene has an environment map (draws env sky vs black).
     void setHasEnvironment(bool hasEnv) noexcept { m_hasEnv = hasEnv; }
@@ -125,7 +130,7 @@ class ForwardRenderer {
         glm::vec4 cameraPos;
         float exposure;
         uint32_t hasEnv;
-        uint32_t _pad0;
+        float envScale; ///< env_unit_nits — physical cd/m² per raw EXR unit
         uint32_t _pad1;
     };
     static_assert(sizeof(SkyPushConstants) == 96);
@@ -159,6 +164,8 @@ class ForwardRenderer {
     VkDescriptorImageInfo m_iblSpecularInfo{};
     VkDescriptorImageInfo m_sheenLutInfo{};
     VkDescriptorImageInfo m_iblEnvSamplerInfo{};
+    VkDescriptorImageInfo m_iblEnvRawInfo{};
+    float m_envUnitNits = 1.0f; ///< env_unit_nits for the raw-env sky background
 
     // Tile-based light culling buffers (set by LightCuller before each recordFrame).
     VkBuffer m_tileLightCountsBuf = VK_NULL_HANDLE;

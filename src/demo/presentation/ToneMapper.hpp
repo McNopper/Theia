@@ -28,11 +28,13 @@ class ToneMapper {
     /// Record the tone-mapping draw into cmd.
     /// The swapchain image must already be in VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL.
     /// colorSpace must match the swapchain's active OutputColorSpace.
+    /// tonemapper selects the SDR/P3 operator (matches tonemap.slang: 0=ACES,1=AgX,2=Reinhard,3=Hable).
     void record(VkCommandBuffer cmd,
                 VkImageView hdrView,
                 VkImageView swapchainView,
                 VkExtent2D extent,
-                OutputColorSpace colorSpace) const noexcept;
+                OutputColorSpace colorSpace,
+                uint32_t tonemapper) const noexcept;
 
   private:
     void destroy() noexcept;

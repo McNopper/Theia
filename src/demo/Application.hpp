@@ -115,6 +115,10 @@ class Application {
     CameraController m_camCtrl{};
     ImGuiLayer m_imgui{};
 
+    /// Tone mapper selected by the current scene (matches tonemap.slang switch;
+    /// 0 = ACES, 1 = AgX, 2 = Reinhard, 3 = Hable). Default ACES.
+    uint32_t m_tonemapper = 0;
+
     // Scene switching
     std::filesystem::path m_assetsDir;
     std::vector<std::string> m_sceneNames; ///< just filenames (not full paths)
