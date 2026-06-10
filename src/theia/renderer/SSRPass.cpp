@@ -2,8 +2,9 @@
 #include "theia/renderer/SSRPass.hpp"
 
 #include <array>
-#include <fstream>
 #include <harmonia/core/Logger.hpp>
+#include <harmonia/core/ShaderModule.hpp>
+#include <theia/renderer/ShaderPath.hpp>
 #include <vector>
 
 #ifdef __clang__
@@ -21,25 +22,13 @@ static constexpr float kRoughnessMax = 0.45f; // must match ssr.comp.slang
 
 namespace {
 
-[[nodiscard]] VkShaderModule loadSpv(VkDevice device, const char* path) {
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f.is_open()) {
-        Logger::error("SSRPass: cannot open shader: {}", path);
+[[nodiscard]] VkShaderModule loadSpv(VkDevice device, const char* filename) {
+    auto module = harmonia::createShaderModule(device, shaderPath(filename));
+    if (!module) {
+        Logger::error("SSRPass: cannot load shader: {}", filename);
         return VK_NULL_HANDLE;
     }
-    const auto sz = static_cast<size_t>(f.tellg());
-    f.seekg(0);
-    std::vector<uint32_t> code(sz / 4);
-    f.read(reinterpret_cast<char*>(code.data()), static_cast<std::streamsize>(sz));
-
-    const VkShaderModuleCreateInfo info{
-        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-        .codeSize = sz,
-        .pCode = code.data(),
-    };
-    VkShaderModule mod = VK_NULL_HANDLE;
-    vkCreateShaderModule(device, &info, nullptr, &mod);
-    return mod;
+    return *module;
 }
 
 [[nodiscard]] VkImageMemoryBarrier2 imgBarrier(VkImage image,

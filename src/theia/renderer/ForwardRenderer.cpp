@@ -6,8 +6,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <fstream>
 #include <harmonia/core/Logger.hpp>
+#include <harmonia/core/ShaderModule.hpp>
+#include <theia/renderer/ShaderPath.hpp>
 #include <theia/scene/Scene.hpp>
 #include <vector>
 
@@ -239,38 +240,17 @@ bool ForwardRenderer::createDepthTarget() {
 
 bool ForwardRenderer::createPipeline() {
     auto loadShaderModule = [this](const char* filename) -> VkShaderModule {
-        std::ifstream file(filename, std::ios::binary | std::ios::ate);
-        if (!file.is_open()) {
-            Logger::error("Failed to open shader: {}", filename);
+        auto module = harmonia::createShaderModule(m_ctx->device, shaderPath(filename));
+        if (!module) {
+            Logger::error("Failed to load shader: {}", filename);
             return VK_NULL_HANDLE;
         }
-
-        const std::streamsize size = file.tellg();
-        file.seekg(0, std::ios::beg);
-
-        std::vector<uint32_t> buffer(static_cast<size_t>(size) / sizeof(uint32_t));
-        if (!file.read(reinterpret_cast<char*>(buffer.data()), size)) {
-            Logger::error("Failed to read shader: {}", filename);
-            return VK_NULL_HANDLE;
-        }
-
-        const VkShaderModuleCreateInfo info{
-            .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-            .codeSize = static_cast<size_t>(size),
-            .pCode = buffer.data(),
-        };
-
-        VkShaderModule module = VK_NULL_HANDLE;
-        if (vkCreateShaderModule(m_ctx->device, &info, nullptr, &module) != VK_SUCCESS) {
-            Logger::error("Failed to create shader module: {}", filename);
-            return VK_NULL_HANDLE;
-        }
-        return module;
+        return *module;
     };
 
-    VkShaderModule taskModule = loadShaderModule("spirv/forward_render.task.spv");
-    VkShaderModule meshModule = loadShaderModule("spirv/forward_render.mesh.spv");
-    VkShaderModule fragModule = loadShaderModule("spirv/forward_render.frag.spv");
+    VkShaderModule taskModule = loadShaderModule("forward_render.task.spv");
+    VkShaderModule meshModule = loadShaderModule("forward_render.mesh.spv");
+    VkShaderModule fragModule = loadShaderModule("forward_render.frag.spv");
     if (!taskModule || !meshModule || !fragModule) {
         if (taskModule != VK_NULL_HANDLE) {
             vkDestroyShaderModule(m_ctx->device, taskModule, nullptr);
@@ -597,8 +577,8 @@ bool ForwardRenderer::createPipeline() {
     // Fullscreen triangle that samples the environment panorama (or outputs black).
     // Reuses the IBL descriptor set layout (set 0 == specular prefilter + sampler).
     {
-        VkShaderModule skyVert = loadShaderModule("spirv/sky.vert.spv");
-        VkShaderModule skyFrag = loadShaderModule("spirv/sky.frag.spv");
+        VkShaderModule skyVert = loadShaderModule("sky.vert.spv");
+        VkShaderModule skyFrag = loadShaderModule("sky.frag.spv");
         if (skyVert == VK_NULL_HANDLE || skyFrag == VK_NULL_HANDLE) {
             Logger::error("Failed to load sky shader modules");
             if (skyVert)

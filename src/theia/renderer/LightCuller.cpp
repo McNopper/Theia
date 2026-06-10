@@ -4,11 +4,12 @@
 
 #include <array>
 #include <cmath>
-#include <fstream>
 #include <utility>
 #include <vector>
 
 #include "harmonia/core/Logger.hpp"
+#include "harmonia/core/ShaderModule.hpp"
+#include "theia/renderer/ShaderPath.hpp"
 
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -19,17 +20,11 @@ namespace theia {
 
 namespace {
 
-[[nodiscard]] std::vector<uint32_t> readSpirv(const char* path) {
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
-    if (!f)
+[[nodiscard]] std::vector<uint32_t> readSpirv(const char* filename) {
+    auto code = harmonia::readSpirv(shaderPath(filename));
+    if (!code)
         return {};
-    const auto sz = f.tellg();
-    if (sz <= 0 || sz % 4 != 0)
-        return {};
-    std::vector<uint32_t> code(static_cast<size_t>(sz) / 4);
-    f.seekg(0);
-    f.read(reinterpret_cast<char*>(code.data()), sz);
-    return code;
+    return std::move(*code);
 }
 
 } // namespace
@@ -74,7 +69,7 @@ LightCuller& LightCuller::operator=(LightCuller&& o) noexcept {
     return *this;
 }
 
-bool LightCuller::initialize(const DeviceContext& ctx, uint32_t w, uint32_t h, const char* spvPath) {
+bool LightCuller::initialize(const DeviceContext& ctx, uint32_t w, uint32_t h, const char* spvFilename) {
     shutdown();
     m_ctx = &ctx;
     m_screenWidth = w;
@@ -138,9 +133,9 @@ bool LightCuller::initialize(const DeviceContext& ctx, uint32_t w, uint32_t h, c
     }
 
     // Compile compute shader
-    auto spirv = readSpirv(spvPath);
+    auto spirv = readSpirv(spvFilename);
     if (spirv.empty()) {
-        Logger::error("LightCuller: failed to read SPIR-V from '{}'", spvPath);
+        Logger::error("LightCuller: failed to read SPIR-V from '{}'", spvFilename);
         return false;
     }
     const VkShaderModuleCreateInfo shaderInfo{

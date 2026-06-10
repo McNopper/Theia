@@ -8,7 +8,8 @@ include(CTest)
 include(FetchContent)
 include(Platform)
 include(VulkanSDK)
-include(CompileShaders)
+# compile_slang_shaders() is provided by Harmonia (cmake/CompileShaders.cmake),
+# loaded when Harmonia is added via FetchContent below.
 
 enable_testing()
 
@@ -39,8 +40,19 @@ set(THEIA_SHADER_OUTPUT_DIR "${CMAKE_BINARY_DIR}/shaders")
 
 # Forward rendering shaders for real-time rendering
 set(THEIA_ENTRY_SHADERS
-    forward_render.vert.slang
+    forward_render.task.slang
+    forward_render.mesh.slang
     forward_render.frag.slang
+    sky.vert.slang
+    sky.frag.slang
+    ibl_sheen_lut.comp.slang
+    ibl_diffuse.comp.slang
+    ibl_specular.comp.slang
+    light_cull.comp.slang
+    ssr.comp.slang
+    ssr_composite.comp.slang
+    ssao.comp.slang
+    ssao_blur.comp.slang
 )
 
 # Theia-specific sources only. Common Vulkan code now lives in Harmonia and the
@@ -107,10 +119,13 @@ endif()
 
 find_package(meshoptimizer CONFIG REQUIRED)
 
-# Compile SLANG shaders for forward rendering pipeline (TODO: create support libs)
-# compile_slang_shaders(theia_shaders "${THEIA_SHADER_OUTPUT_DIR}" ${THEIA_ENTRY_SHADERS})
+# Compile Slang shaders at build time into THEIA_SHADER_OUTPUT_DIR; loaded at
+# runtime via the THEIA_SHADER_DIR compile definition (same scheme as Harmonia
+# and Hyperion).
+compile_slang_shaders(theia_shaders "${THEIA_SHADER_OUTPUT_DIR}" ${THEIA_ENTRY_SHADERS})
 
 add_library(theia_lib STATIC ${THEIA_LIBRARY_SOURCES})
+add_dependencies(theia_lib theia_shaders)
 
 target_include_directories(theia_lib
     PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"

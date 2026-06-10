@@ -40,12 +40,13 @@ class SSRPass {
     SSRPass(const SSRPass&) = delete;
     SSRPass& operator=(const SSRPass&) = delete;
 
+    /// SPIR-V filenames are resolved against THEIA_SHADER_DIR.
     [[nodiscard]] bool initialize(const DeviceContext& ctx,
                                   const Config& cfg,
-                                  const char* ssrSpv = "spirv/ssr.comp.spv",
-                                  const char* compositeSpv = "spirv/ssr_composite.comp.spv",
-                                  const char* ssaoSpv = "spirv/ssao.comp.spv",
-                                  const char* ssaoBlurSpv = "spirv/ssao_blur.comp.spv");
+                                  const char* ssrSpv = "ssr.comp.spv",
+                                  const char* compositeSpv = "ssr_composite.comp.spv",
+                                  const char* ssaoSpv = "ssao.comp.spv",
+                                  const char* ssaoBlurSpv = "ssao_blur.comp.spv");
 
     void shutdown();
 

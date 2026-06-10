@@ -2,10 +2,11 @@
 
 #include <algorithm>
 #include <array>
-#include <fstream>
 #include <vector>
 
 #include "harmonia/core/Logger.hpp"
+#include "harmonia/core/ShaderModule.hpp"
+#include "theia/renderer/ShaderPath.hpp"
 
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -20,32 +21,12 @@ constexpr VkExtent2D kSpecularExtent{1024, 512};
 constexpr uint32_t kSpecularMipLevels = 8;
 
 VkShaderModule loadShaderModule(const DeviceContext& ctx, const char* filename) {
-    std::ifstream file(filename, std::ios::binary | std::ios::ate);
-    if (!file.is_open()) {
-        Logger::error("IblPrecompute: failed to open shader '{}'", filename);
+    auto module = harmonia::createShaderModule(ctx.device, theia::shaderPath(filename));
+    if (!module) {
+        Logger::error("IblPrecompute: failed to load shader '{}'", filename);
         return VK_NULL_HANDLE;
     }
-
-    const std::streamsize size = file.tellg();
-    file.seekg(0, std::ios::beg);
-    std::vector<uint32_t> buffer(static_cast<size_t>(size) / sizeof(uint32_t));
-    if (!file.read(reinterpret_cast<char*>(buffer.data()), size)) {
-        Logger::error("IblPrecompute: failed to read shader '{}'", filename);
-        return VK_NULL_HANDLE;
-    }
-
-    const VkShaderModuleCreateInfo moduleInfo{
-        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-        .codeSize = static_cast<size_t>(size),
-        .pCode = buffer.data(),
-    };
-
-    VkShaderModule module = VK_NULL_HANDLE;
-    if (vkCreateShaderModule(ctx.device, &moduleInfo, nullptr, &module) != VK_SUCCESS) {
-        Logger::error("IblPrecompute: failed to create shader module '{}'", filename);
-        return VK_NULL_HANDLE;
-    }
-    return module;
+    return *module;
 }
 
 VkImageView createMipView(const DeviceContext& ctx, const Image& image, uint32_t mipLevel) {
@@ -334,7 +315,7 @@ bool IblPrecompute::runSheenLutPass(VkCommandBuffer cmd) {
 
     VkPipeline pipeline = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
-    if (!createComputePipeline("spirv/ibl_sheen_lut.comp.spv", setLayout, 0, pipeline, pipelineLayout)) {
+    if (!createComputePipeline("ibl_sheen_lut.comp.spv", setLayout, 0, pipeline, pipelineLayout)) {
         return false;
     }
 
@@ -432,7 +413,7 @@ bool IblPrecompute::runDiffusePass(VkCommandBuffer cmd) {
 
     VkPipeline pipeline = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
-    if (!createComputePipeline("spirv/ibl_diffuse.comp.spv", setLayout, sizeof(float), pipeline, pipelineLayout)) {
+    if (!createComputePipeline("ibl_diffuse.comp.spv", setLayout, sizeof(float), pipeline, pipelineLayout)) {
         return false;
     }
 
@@ -555,7 +536,7 @@ bool IblPrecompute::runSpecularPass(VkCommandBuffer cmd) {
 
     VkPipeline pipeline = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
-    if (!createComputePipeline("spirv/ibl_specular.comp.spv", setLayout, sizeof(float) * 2, pipeline, pipelineLayout)) {
+    if (!createComputePipeline("ibl_specular.comp.spv", setLayout, sizeof(float) * 2, pipeline, pipelineLayout)) {
         return false;
     }
 

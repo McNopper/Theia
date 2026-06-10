@@ -28,11 +28,11 @@ class LightCuller {
     LightCuller& operator=(LightCuller&&) noexcept;
 
     /// Initialize for a given render resolution.
-    /// @param spvPath  Path to spirv/light_cull.comp.spv
+    /// @param spvFilename  SPIR-V filename resolved against THEIA_SHADER_DIR.
     [[nodiscard]] bool initialize(const DeviceContext& ctx,
                                   uint32_t screenWidth,
                                   uint32_t screenHeight,
-                                  const char* spvPath = "spirv/light_cull.comp.spv");
+                                  const char* spvFilename = "light_cull.comp.spv");
 
     void shutdown();
 
