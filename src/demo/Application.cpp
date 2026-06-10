@@ -282,11 +282,11 @@ bool Application::initialize(const Config& config) {
     const std::filesystem::path assetsDir = THEIA_ASSETS_DIR;
     m_assetsDir = assetsDir;
 
-    // Enumerate all .scene files for the scene switcher UI
+    // Enumerate all .scene.toml files for the scene switcher UI
     {
         std::error_code ec;
         for (const auto& entry : std::filesystem::directory_iterator(assetsDir, ec)) {
-            if (entry.path().extension() == ".scene") {
+            if (entry.path().filename().string().ends_with(".scene.toml")) {
                 m_sceneNames.push_back(entry.path().filename().string());
             }
         }
@@ -294,11 +294,11 @@ bool Application::initialize(const Config& config) {
     }
 
     std::string defaultScene = config.initialScene.empty()
-                                   ? "cornell_classic.scene"
+                                   ? "cornell_classic.scene.toml"
                                    : std::filesystem::path(config.initialScene).filename().string();
-    // Tolerate a scene name supplied without the ".scene" extension (e.g. "--scene mr_sphere").
-    if (!defaultScene.empty() && std::filesystem::path(defaultScene).extension() != ".scene") {
-        defaultScene += ".scene";
+    // Tolerate a scene name supplied without the ".scene.toml" extension (e.g. "--scene mr_sphere").
+    if (!defaultScene.empty() && !defaultScene.ends_with(".scene.toml")) {
+        defaultScene += ".scene.toml";
     }
     {
         auto it = std::find(m_sceneNames.begin(), m_sceneNames.end(), defaultScene);
