@@ -164,12 +164,14 @@ bool Application::initialize(const Config& config) {
     }
     m_hdrImage = std::move(*hdrResult);
 
-    // ToneMapper — uses Descriptors pipeline layout (same as Hyperion)
+    // ToneMapper — uses Descriptors pipeline layout (same as Hyperion).
+    // The tonemap shaders are owned and compiled by Harmonia (harmonia_shaders).
+    const std::filesystem::path harmoniaShaderDir = HARMONIA_SHADER_DIR;
     auto tmResult = ToneMapper::create(m_context->deviceContext(),
                                        m_descriptors.pipelineLayout(),
                                        m_swapchain->format(),
-                                       "spirv/tonemap_vert.spv",
-                                       "spirv/tonemap.spv");
+                                       harmoniaShaderDir / "tonemap_vert.spv",
+                                       harmoniaShaderDir / "tonemap.spv");
     if (!tmResult) {
         Logger::error("Failed to create ToneMapper: {}", static_cast<int>(tmResult.error()));
         return false;
@@ -323,6 +325,8 @@ bool Application::loadScene(const std::filesystem::path& sceneFile) {
 
         // Tone mapper is renderer-independent post-processing shared with Hyperion.
         m_tonemapper = sceneConfig->tonemapper.value_or(0u);
+        m_workingColorSpace = sceneConfig->workingColorSpace;
+        Logger::info("Working color space: {}", ColorSpace::interopId(m_workingColorSpace));
 
         if (sceneConfig->cameraPos && sceneConfig->cameraAt) {
             m_camera.position = *sceneConfig->cameraPos;
@@ -356,8 +360,8 @@ bool Application::loadScene(const std::filesystem::path& sceneFile) {
     VkImageView envView = VK_NULL_HANDLE;
     VkSampler envSampler = VK_NULL_HANDLE;
     if (sceneConfig && sceneConfig->envMapFile) {
-        auto probeResult =
-            IblProbe::loadFromEXR(m_context->deviceContext(), *m_commandPool, m_assetsDir / *sceneConfig->envMapFile);
+        auto probeResult = IblProbe::loadFromEXR(
+            m_context->deviceContext(), *m_commandPool, m_assetsDir / *sceneConfig->envMapFile, m_workingColorSpace);
         if (probeResult) {
             m_envProbe = std::move(*probeResult);
             envView = m_envProbe->imageView();
@@ -631,7 +635,8 @@ void Application::mainLoop() {
                             m_swapchain->imageView(imageIndex),
                             m_swapchain->extent(),
                             m_swapchain->outputColorSpace(),
-                            m_tonemapper);
+                            m_tonemapper,
+                            m_workingColorSpace);
 
         const std::array presentBarrier{
             imageBarrier(m_swapchain->image(imageIndex),
@@ -736,11 +741,11 @@ bool Application::renderOffscreen(const std::filesystem::path& outputFile) {
         vkDeviceWaitIdle(m_context->deviceContext().device);
     }
 
-    ImageCapture::saveExr(m_context->deviceContext(), *m_commandPool, m_hdrImage, outputFile);
+    ImageCapture::saveExr(m_context->deviceContext(), *m_commandPool, m_hdrImage, outputFile, m_workingColorSpace);
     // Also write a tone-mapped sRGB PNG (ACES SDR) for GitHub / README display.
     std::filesystem::path pngPath = outputFile;
     pngPath.replace_extension(".png");
-    return ImageCapture::savePng(m_context->deviceContext(), *m_commandPool, m_hdrImage, pngPath);
+    return ImageCapture::savePng(m_context->deviceContext(), *m_commandPool, m_hdrImage, pngPath, m_workingColorSpace);
 }
 
 uint64_t Application::renderFrame() {

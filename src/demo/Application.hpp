@@ -20,6 +20,7 @@
 #include "harmonia/core/Image.hpp"
 #include "harmonia/renderer/Descriptors.hpp"
 #include "harmonia/scene/IblProbe.hpp"
+#include "harmonia/utils/ColorSpace.hpp"
 #include "theia/scene/Scene.hpp"
 #include "theia/renderer/ForwardRenderer.hpp"
 #include "theia/renderer/IblPrecompute.hpp"
@@ -124,6 +125,9 @@ class Application {
     /// Tone mapper selected by the current scene (matches tonemap.slang switch;
     /// 0 = ACES, 1 = AgX, 2 = Reinhard, 3 = Hable). Default ACES.
     uint32_t m_tonemapper = 0;
+
+    /// Scene-referred working color space (from the scene file; default linear Rec.2020).
+    ColorSpace::WorkingColorSpace m_workingColorSpace = ColorSpace::WorkingColorSpace::LinRec2020;
 
     // Scene switching
     std::filesystem::path m_assetsDir;
