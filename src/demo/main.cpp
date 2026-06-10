@@ -14,8 +14,6 @@ int main(int argc, char* argv[]) {
             config.initialScene = argv[++i];
         } else if (std::strcmp(argv[i], "--validation") == 0) {
             config.validation = true;
-        } else if (std::strcmp(argv[i], "--no-ui") == 0 || std::strcmp(argv[i], "--hide-ui") == 0) {
-            config.hideUi = true;
         } else if ((std::strcmp(argv[i], "--output") == 0 || std::strcmp(argv[i], "-o") == 0) && i + 1 < argc) {
             config.outputFile = argv[++i];
         } else {

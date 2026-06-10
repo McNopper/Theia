@@ -13,7 +13,6 @@
 #include <string>
 #include <vector>
 
-#include "demo/ImGuiLayer.hpp"
 #include "harmonia/presentation/Swapchain.hpp"
 #include "harmonia/presentation/ToneMapper.hpp"
 #include "harmonia/vulkan_init/Context.hpp"
@@ -37,7 +36,6 @@ class Application {
         uint32_t height = 768;
         bool validation = false;
         std::string initialScene; ///< optional: path or bare filename in assets/
-        bool hideUi = false;      ///< start with the ImGui overlay hidden (toggle with F1)
         /// If set, render offscreen (hidden window), capture the HDR image to this
         /// path (PNG; ACES SDR tonemapped) and exit — the rasterizer equivalent of
         /// Hyperion's headless mode.
@@ -122,7 +120,6 @@ class Application {
     /// Live camera state (updated each frame by CameraController).
     ForwardRenderer::CameraParams m_camera{};
     CameraController m_camCtrl{};
-    ImGuiLayer m_imgui{};
 
     /// Tone mapper selected by the current scene (matches tonemap.slang switch;
     /// 0 = ACES, 1 = AgX, 2 = Reinhard, 3 = Hable). Default ACES.
@@ -131,10 +128,9 @@ class Application {
     // Scene switching
     std::filesystem::path m_assetsDir;
     std::vector<std::string> m_sceneNames; ///< just filenames (not full paths)
-    int m_selectedScene = 0;               ///< index into m_sceneNames for ImGui combo
+    int m_selectedScene = 0;               ///< index into m_sceneNames (default scene)
 
     bool m_running = false;
-    bool m_showUi = true; ///< toggled with F1; hides the ImGui overlay for clean comparisons
 };
 
 } // namespace theia

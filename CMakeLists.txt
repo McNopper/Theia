@@ -57,36 +57,11 @@ set(THEIA_LIBRARY_SOURCES
 
 set(THEIA_DEMO_SOURCES
     src/demo/Application.cpp
-    src/demo/ImGuiLayer.cpp
-    # Dear ImGui Vulkan + SDL3 backends compiled with volk preamble to suppress VK_NO_PROTOTYPES issues
-    src/demo/imgui_vulkan_backend.cpp
-    src/demo/imgui_sdl3_backend.cpp
 )
 
 set(THEIA_APP_SOURCES
     src/demo/main.cpp
 )
-
-# ── Dear ImGui (vendored in third_party/imgui) ──────────────────────────────
-set(IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/imgui")
-
-add_library(imgui_core STATIC
-    ${IMGUI_DIR}/imgui.cpp
-    ${IMGUI_DIR}/imgui_draw.cpp
-    ${IMGUI_DIR}/imgui_tables.cpp
-    ${IMGUI_DIR}/imgui_widgets.cpp
-)
-target_include_directories(imgui_core SYSTEM PUBLIC
-    ${IMGUI_DIR}
-    ${IMGUI_DIR}/backends
-)
-if(MSVC)
-    target_compile_options(imgui_core PRIVATE /W0)
-else()
-    target_compile_options(imgui_core PRIVATE -w)
-endif()
-set_property(TARGET imgui_core PROPERTY SYSTEM ON)
-# ────────────────────────────────────────────────────────────────────────────
 
 # Volk is provided by Harmonia (created during FetchContent above); only define
 # it ourselves if Harmonia did not (e.g. when building Theia in isolation).
@@ -153,26 +128,7 @@ target_compile_definitions(theia_lib
 )
 
 add_library(theia_demo STATIC ${THEIA_DEMO_SOURCES})
-target_link_libraries(theia_demo PUBLIC theia_lib imgui_core)
-# Backend wrappers and ImGuiLayer need imgui headers
-target_include_directories(theia_demo SYSTEM PRIVATE
-    ${IMGUI_DIR}
-    ${IMGUI_DIR}/backends
-)
-# Backend wrapper files are third-party; silence warnings
-if(MSVC)
-    set_source_files_properties(
-        src/demo/imgui_vulkan_backend.cpp
-        src/demo/imgui_sdl3_backend.cpp
-        PROPERTIES COMPILE_FLAGS "/W0"
-    )
-else()
-    set_source_files_properties(
-        src/demo/imgui_vulkan_backend.cpp
-        src/demo/imgui_sdl3_backend.cpp
-        PROPERTIES COMPILE_FLAGS "-w"
-    )
-endif()
+target_link_libraries(theia_demo PUBLIC theia_lib)
 
 add_executable(theia ${THEIA_APP_SOURCES})
 target_link_libraries(theia PRIVATE theia_demo)

@@ -9,11 +9,9 @@
 #include <array>
 #include <cmath>
 #include <filesystem>
-#include <imgui.h>
 #include <span>
 #include <string>
 
-#include "demo/ImGuiLayer.hpp"
 #include "harmonia/scene/SceneLoader.hpp"
 #include "harmonia/core/Logger.hpp"
 #include "harmonia/presentation/ImageCapture.hpp"
@@ -98,7 +96,6 @@ int Application::run(const Config& config) {
 }
 
 bool Application::initialize(const Config& config) {
-    m_showUi = !config.hideUi;
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         Logger::error("Failed to initialize SDL");
         return false;
@@ -259,25 +256,6 @@ bool Application::initialize(const Config& config) {
 
     m_swapchainLayouts.assign(m_swapchain->imageCount(), VK_IMAGE_LAYOUT_UNDEFINED);
 
-    // Initialize Dear ImGui (SDL3 + Vulkan dynamic rendering)
-    {
-        const auto& dctx = m_context->deviceContext();
-        ImGuiLayer::Config imguiCfg{
-            .instance = m_context->instance(),
-            .physDevice = dctx.physicalDevice,
-            .device = dctx.device,
-            .graphicsQueueFamily = dctx.graphicsFamily,
-            .graphicsQueue = dctx.graphicsQueue,
-            .swapchainColorFormat = m_swapchain->format(),
-            .minImageCount = 2u,
-            .imageCount = m_swapchain->imageCount(),
-            .window = m_window,
-        };
-        if (!m_imgui.initialize(imguiCfg)) {
-            Logger::warn("ImGui failed to initialize — running without UI");
-        }
-    }
-
     // Load scene
     const std::filesystem::path assetsDir = THEIA_ASSETS_DIR;
     m_assetsDir = assetsDir;
@@ -412,7 +390,6 @@ void Application::shutdown() {
         vkDeviceWaitIdle(m_context->deviceContext().device);
     }
 
-    m_imgui.shutdown();
     m_renderer.reset();
     m_scene.reset();
     m_lightCuller.shutdown();
@@ -464,13 +441,6 @@ void Application::mainLoop() {
     while (m_running) {
         // ---- Input processing ----
         while (SDL_PollEvent(&event)) {
-            // Route every event to ImGui first so it can capture keyboard/mouse
-            m_imgui.processEvent(event);
-
-            // Only handle camera/app input when ImGui is not consuming it
-            const bool imguiWantsKbd = ImGui::GetIO().WantCaptureKeyboard;
-            const bool imguiWantsMouse = ImGui::GetIO().WantCaptureMouse;
-
             switch (event.type) {
             case SDL_EVENT_QUIT:
                 m_running = false;
@@ -478,8 +448,6 @@ void Application::mainLoop() {
 
             case SDL_EVENT_KEY_DOWN:
             case SDL_EVENT_KEY_UP: {
-                if (imguiWantsKbd)
-                    break;
                 const bool down = (event.type == SDL_EVENT_KEY_DOWN);
                 switch (event.key.scancode) {
                 case SDL_SCANCODE_W:
@@ -523,11 +491,6 @@ void Application::mainLoop() {
                         Logger::info("EV100 = {:.1f}", m_camera.ev100);
                     }
                     break;
-                case SDL_SCANCODE_F1:
-                    if (down) {
-                        m_showUi = !m_showUi;
-                    }
-                    break;
                 default:
                     break;
                 }
@@ -535,7 +498,7 @@ void Application::mainLoop() {
             }
 
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
-                if (!imguiWantsMouse && event.button.button == SDL_BUTTON_RIGHT) {
+                if (event.button.button == SDL_BUTTON_RIGHT) {
                     m_camCtrl.captured = true;
                     SDL_SetWindowRelativeMouseMode(m_window, true);
                 }
@@ -557,11 +520,9 @@ void Application::mainLoop() {
                 break;
 
             case SDL_EVENT_MOUSE_WHEEL:
-                if (!imguiWantsMouse) {
-                    // Scroll up = faster, scroll down = slower
-                    m_camCtrl.speed *= std::pow(1.2f, event.wheel.y);
-                    m_camCtrl.speed = std::max(1.0f, std::min(5000.0f, m_camCtrl.speed));
-                }
+                // Scroll up = faster, scroll down = slower
+                m_camCtrl.speed *= std::pow(1.2f, event.wheel.y);
+                m_camCtrl.speed = std::max(1.0f, std::min(5000.0f, m_camCtrl.speed));
                 break;
 
             case SDL_EVENT_WINDOW_RESIZED:
@@ -607,113 +568,6 @@ void Application::mainLoop() {
         m_camera.target = m_camera.position + forward;
         m_camera.up = worldUp;
         m_renderer->setCamera(m_camera);
-
-        // ---- Dear ImGui: start frame + build settings UI ----
-        m_imgui.beginFrame();
-        if (m_imgui.isInitialized() && m_showUi) {
-            // Performance overlay (top-left, small, transparent)
-            const ImGuiWindowFlags overlayFlags =
-                ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
-                ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove;
-            ImGui::SetNextWindowPos({10.0f, 10.0f}, ImGuiCond_Always);
-            ImGui::SetNextWindowBgAlpha(0.50f);
-            if (ImGui::Begin("##perf", nullptr, overlayFlags)) {
-                ImGui::Text("Theia  |  Real-Time Renderer");
-                ImGui::Separator();
-                ImGui::Text("%.1f FPS  (%.2f ms)", ImGui::GetIO().Framerate, 1000.0f / ImGui::GetIO().Framerate);
-                if (m_scene) {
-                    ImGui::Text("%u instances  |  %.1fk verts",
-                                m_scene->instanceCount(),
-                                static_cast<float>(m_scene->vertexBuffer().size()) / sizeof(float) / 12.0f / 1000.0f);
-                }
-            }
-            ImGui::End();
-
-            // Main settings window (right side)
-            ImGui::SetNextWindowPos({static_cast<float>(m_swapchain->extent().width) - 310.0f, 10.0f},
-                                    ImGuiCond_FirstUseEver);
-            ImGui::SetNextWindowSize({300.0f, 440.0f}, ImGuiCond_FirstUseEver);
-            if (ImGui::Begin("Theia Settings")) {
-                // ── Rendering ─────────────────────────────────────────────
-                if (ImGui::CollapsingHeader("Rendering", ImGuiTreeNodeFlags_DefaultOpen)) {
-                    ImGui::SliderFloat("EV100", &m_camera.ev100, -5.0f, 20.0f, "%.1f");
-                    if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("Physical camera exposure (EV100)\n"
-                                          "Lower = brighter, Higher = darker\n"
-                                          "Keyboard: [ / ]");
-                    const float exp = 1.0f / (1.2f * std::pow(2.0f, m_camera.ev100));
-                    ImGui::Text("  exposure multiplier: %.5f", exp);
-
-                    if (m_ssrPass.isInitialized()) {
-                        ImGui::Separator();
-                        static float ssrStrength = 1.0f;
-                        if (ImGui::SliderFloat("SSR Strength", &ssrStrength, 0.0f, 1.0f, "%.2f")) {
-                            m_ssrPass.setSSRStrength(ssrStrength);
-                        }
-                        if (ImGui::IsItemHovered())
-                            ImGui::SetTooltip("Screen-Space Reflection blend weight.\n"
-                                              "0 = IBL only, 1 = full SSR on smooth surfaces.");
-                    }
-                }
-
-                // ── Camera ────────────────────────────────────────────────
-                if (ImGui::CollapsingHeader("Camera", ImGuiTreeNodeFlags_DefaultOpen)) {
-                    ImGui::SliderFloat(
-                        "Move speed", &m_camCtrl.speed, 1.0f, 2000.0f, "%.0f u/s", ImGuiSliderFlags_Logarithmic);
-                    ImGui::SliderFloat("Sensitivity", &m_camCtrl.sensitivity, 0.05f, 1.0f, "%.2f");
-                    ImGui::SliderFloat("FOV", &m_camera.vfovDeg, 10.0f, 120.0f, "%.1f°");
-                    ImGui::Separator();
-                    ImGui::Text(
-                        "Position: (%.1f, %.1f, %.1f)", m_camera.position.x, m_camera.position.y, m_camera.position.z);
-                    ImGui::Text("Yaw: %.1f°  Pitch: %.1f°", m_camCtrl.yaw, m_camCtrl.pitch);
-                }
-
-                // ── Scene ─────────────────────────────────────────────────
-                if (ImGui::CollapsingHeader("Scene")) {
-                    // Scene picker dropdown
-                    if (!m_sceneNames.empty()) {
-                        const char* current = m_sceneNames[static_cast<size_t>(m_selectedScene)].c_str();
-                        if (ImGui::BeginCombo("Scene file", current)) {
-                            for (int i = 0; i < static_cast<int>(m_sceneNames.size()); ++i) {
-                                const bool selected = (i == m_selectedScene);
-                                if (ImGui::Selectable(m_sceneNames[static_cast<size_t>(i)].c_str(), selected)) {
-                                    if (i != m_selectedScene) {
-                                        m_selectedScene = i;
-                                        loadScene(m_assetsDir / m_sceneNames[static_cast<size_t>(i)]);
-                                    }
-                                }
-                                if (selected)
-                                    ImGui::SetItemDefaultFocus();
-                            }
-                            ImGui::EndCombo();
-                        }
-                    }
-                    ImGui::Separator();
-                    if (m_scene) {
-                        ImGui::Text("Instances:        %u", m_scene->instanceCount());
-                        ImGui::Text("Lights:           %u", m_scene->lightCount());
-                        ImGui::Text("Emissive tris:    %u", m_scene->emissiveTriangleCount());
-                        const uint64_t vbKB = m_scene->vertexBuffer().size() / 1024;
-                        const uint64_t ibKB = m_scene->indexBuffer().size() / 1024;
-                        ImGui::Text("Vertex buffer:    %llu KB", vbKB);
-                        ImGui::Text("Index buffer:     %llu KB", ibKB);
-                    } else {
-                        ImGui::TextDisabled("No scene loaded");
-                    }
-                }
-
-                // ── Controls ──────────────────────────────────────────────
-                if (ImGui::CollapsingHeader("Controls")) {
-                    ImGui::TextDisabled("RMB drag       — look around");
-                    ImGui::TextDisabled("WASD           — move");
-                    ImGui::TextDisabled("Q / E          — move down / up");
-                    ImGui::TextDisabled("Scroll wheel   — adjust move speed");
-                    ImGui::TextDisabled("[ / ]          — EV100 -/+0.5");
-                    ImGui::TextDisabled("Escape         — release mouse / quit");
-                }
-            }
-            ImGui::End();
-        }
 
         const uint32_t slot = m_currentFrame;
         FrameResources& frame = m_frames[slot];
@@ -778,9 +632,6 @@ void Application::mainLoop() {
                             m_swapchain->extent(),
                             m_swapchain->outputColorSpace(),
                             m_tonemapper);
-
-        // Render ImGui over the tonemapped image (swapchain still in COLOR_ATTACHMENT_OPTIMAL)
-        m_imgui.render(frame.displayCmd, m_swapchain->imageView(imageIndex), m_swapchain->extent());
 
         const std::array presentBarrier{
             imageBarrier(m_swapchain->image(imageIndex),
