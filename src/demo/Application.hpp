@@ -2,61 +2,53 @@
 
 #include <volk/volk.h>
 
-#include <SDL3/SDL.h>
-
 #include <glm/glm.hpp>
 
-#include <array>
-#include <filesystem>
 #include <memory>
-#include <optional>
-#include <string>
-#include <vector>
 
-#include "harmonia/presentation/Swapchain.hpp"
-#include "harmonia/presentation/ToneMapper.hpp"
-#include "harmonia/vulkan_init/Context.hpp"
-#include "harmonia/core/CommandPool.hpp"
-#include "harmonia/core/Image.hpp"
-#include "harmonia/renderer/Descriptors.hpp"
-#include "harmonia/scene/IblProbe.hpp"
-#include "harmonia/utils/ColorSpace.hpp"
-#include "theia/scene/Scene.hpp"
+#include "harmonia/app/App.hpp"
+#include "harmonia/app/IRenderer.hpp"
 #include "theia/renderer/ForwardRenderer.hpp"
 #include "theia/renderer/IblPrecompute.hpp"
 #include "theia/renderer/LightCuller.hpp"
 #include "theia/renderer/SSRPass.hpp"
+#include "theia/scene/Scene.hpp"
 
 namespace theia {
 
-class Application {
+/// Theia demo: the real-time forward renderer injected into the shared
+/// harmonia::App host.
+///
+/// The host owns window/context/swapchain/HDR image/tonemap/present; this
+/// class owns only what is rasterizer specific — ForwardRenderer, Forward+
+/// light culling, SSR, IBL precompute, the Scene and the interactive camera
+/// controller.  Per the host contract, record() produces a linear image in
+/// the scene-referred working color space and leaves it in
+/// VK_IMAGE_LAYOUT_GENERAL (the SSR pass already does).
+class Application final : public harmonia::App, public harmonia::IRenderer {
   public:
-    struct Config {
-        std::string title = "Theia -- Real-Time Renderer";
-        uint32_t width = 1024;
-        uint32_t height = 768;
-        bool validation = false;
-        std::string initialScene; ///< optional: path or bare filename in assets/
-        /// If set, render offscreen (hidden window), capture the HDR image to this
-        /// path (PNG; ACES SDR tonemapped) and exit — the rasterizer equivalent of
-        /// Hyperion's headless mode.
-        std::filesystem::path outputFile;
-    };
+    // harmonia::IRenderer
+    void record(VkCommandBuffer cmd, const harmonia::RenderTarget& target) noexcept override;
+    void onResize(VkExtent2D extent) noexcept override;
+    [[nodiscard]] VkPipelineStageFlags2 outputStageMask() const noexcept override {
+        return VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    }
+    [[nodiscard]] const char* name() const noexcept override { return "Theia ForwardRenderer"; }
 
-    Application() = default;
-    ~Application();
-
-    int run(const Config& config);
+  protected:
+    // harmonia::App hooks
+    [[nodiscard]] harmonia::IRenderer& renderer() noexcept override { return *this; }
+    [[nodiscard]] ISceneBuilder& sceneBuilder() noexcept override { return *m_scene; }
+    [[nodiscard]] bool onInitialize() override;
+    [[nodiscard]] bool onSceneLoaded(const SceneLoader::SceneConfig& sceneConfig) override;
+    void onSceneUnload() override;
+    bool onEvent(const SDL_Event& event) override;
+    void onUpdate(float dtSeconds) override;
+    // Theia is a real-time renderer (no SPP accumulation); a small fixed
+    // number of warmup frames lets light culling / SSR history settle.
+    [[nodiscard]] uint32_t offscreenFrameCount() const noexcept override { return 4; }
 
   private:
-    /// Per-frame-in-flight resources (double-buffered, same pattern as Hyperion).
-    struct FrameResources {
-        VkCommandBuffer renderCmd{};  ///< scene geometry recording
-        VkCommandBuffer displayCmd{}; ///< tonemap recording
-        VkSemaphore imageAvailable{}; ///< binary: signalled when swapchain image acquired
-        uint64_t completionValue{};   ///< timeline value signalled when this slot completes
-    };
-
     /// First-person camera controller (WASD + right-mouse-drag + scroll).
     struct CameraController {
         float yaw = -90.0f;        ///< degrees, -90 = looking toward -Z (Cornell default)
@@ -68,73 +60,22 @@ class Application {
         bool aDown = false;
         bool sDown = false;
         bool dDown = false;
-        bool qDown = false;    ///< Q = move down
-        bool eDown = false;    ///< E = move up
-        uint64_t lastTick = 0; ///< SDL_GetTicksNS from previous frame
+        bool qDown = false; ///< Q = move down
+        bool eDown = false; ///< E = move up
     };
-
-    bool initialize(const Config& config);
-    void shutdown();
-    void mainLoop();
-
-    /// Offscreen render path: render a few frames into m_hdrImage, then capture it
-    /// to @p outputFile (PNG via the shared Harmonia ImageCapture).  Returns true on
-    /// success.  Used when Config::outputFile is set (no window is shown).
-    bool renderOffscreen(const std::filesystem::path& outputFile);
-
-    /// Submit scene rendering into m_hdrImage; returns timeline value signalled on completion.
-    uint64_t renderFrame();
-    void handleResize(uint32_t w, uint32_t h);
-
-    /// Load (or reload) a scene file.  Waits for GPU idle, destroys existing GPU
-    /// scene/IBL resources, then re-creates them from the new file.
-    bool loadScene(const std::filesystem::path& sceneFile);
 
     /// Compute initial yaw/pitch from a camera direction vector.
     static void directionToYawPitch(const glm::vec3& dir, float& yaw, float& pitch);
 
-    SDL_Window* m_window = nullptr;
-    std::unique_ptr<Context> m_context;
-    std::unique_ptr<Swapchain> m_swapchain;
-    Descriptors m_descriptors;
-    ToneMapper m_toneMapper;
     std::unique_ptr<ForwardRenderer> m_renderer;
-    std::unique_ptr<CommandPool> m_commandPool;
-    std::unique_ptr<Scene> m_scene;
-    std::optional<IblProbe> m_envProbe;
-    IblPrecompute m_ibl;
     LightCuller m_lightCuller;
     SSRPass m_ssrPass;
-
-    Image m_hdrImage;
-
-    std::array<FrameResources, 2> m_frames{};
-    /// One binary semaphore per swapchain image — signalled by display submit,
-    /// consumed by vkQueuePresentKHR.
-    std::vector<VkSemaphore> m_renderComplete;
-    VkSemaphore m_timelineSemaphore = VK_NULL_HANDLE;
-    uint64_t m_nextTimelineValue = 1;
-    uint32_t m_currentFrame = 0;
-    uint32_t m_frameIndex = 0;
-    std::vector<VkImageLayout> m_swapchainLayouts;
+    IblPrecompute m_ibl;
+    std::unique_ptr<Scene> m_scene = std::make_unique<Scene>();
 
     /// Live camera state (updated each frame by CameraController).
     ForwardRenderer::CameraParams m_camera{};
     CameraController m_camCtrl{};
-
-    /// Tone mapper selected by the current scene (matches tonemap.slang switch;
-    /// 0 = ACES, 1 = AgX, 2 = Reinhard, 3 = Hable). Default ACES.
-    uint32_t m_tonemapper = 0;
-
-    /// Scene-referred working color space (from the scene file; default linear Rec.2020).
-    ColorSpace::WorkingColorSpace m_workingColorSpace = ColorSpace::WorkingColorSpace::LinRec2020;
-
-    // Scene switching
-    std::filesystem::path m_assetsDir;
-    std::vector<std::string> m_sceneNames; ///< just filenames (not full paths)
-    int m_selectedScene = 0;               ///< index into m_sceneNames (default scene)
-
-    bool m_running = false;
 };
 
 } // namespace theia

@@ -1,27 +1,22 @@
-#include <cstring>
-#include <filesystem>
+#include <utility>
 
 #include "demo/Application.hpp"
 
 int main(int argc, char* argv[]) {
-    theia::Application::Config config;
+    harmonia::App::Config config;
     config.title = "Theia \xe2\x80\x94 Real-Time Renderer";
     config.width = 1024;
     config.height = 768;
+    // ForwardRenderer / LightCuller / SSRPass cannot recreate their render
+    // targets yet, so interactive resizing stays disabled for now.
+    config.resizable = false;
+    config.assetsDir = THEIA_ASSETS_DIR;
+    config.sceneFile = "cornell_classic.scene.toml";
 
     for (int i = 1; i < argc; ++i) {
-        if ((std::strcmp(argv[i], "--scene") == 0 || std::strcmp(argv[i], "-s") == 0) && i + 1 < argc) {
-            config.initialScene = argv[++i];
-        } else if (std::strcmp(argv[i], "--validation") == 0) {
-            config.validation = true;
-        } else if ((std::strcmp(argv[i], "--output") == 0 || std::strcmp(argv[i], "-o") == 0) && i + 1 < argc) {
-            config.outputFile = argv[++i];
-        } else {
-            // Bare argument treated as scene file path
-            config.initialScene = argv[i];
-        }
+        static_cast<void>(harmonia::App::applyCommonArg(config, i, argc, argv));
     }
 
     theia::Application app;
-    return app.run(config);
+    return app.run(std::move(config));
 }
