@@ -51,7 +51,7 @@ It implements the [OpenPBR Surface v1.1](https://academysoftwarefoundation.githu
 - **Image-based lighting (IBL)** — equirectangular HDR panorama; diffuse irradiance pre-convolution + per-roughness GGX prefiltered specular map; MaterialX analytic GGX directional albedo (no BRDF LUT)
 - **Real-time performance** — **60 FPS @ 4K** target (3840×2160)
 - **Interactive camera control** — WASD movement, mouse look, EV100 physical exposure adjustment
-- **Screen-Space Reflections (SSR)** — linear view-space ray march (64 steps + 8-step binary refinement) with additive composite blend; roughness cutoff 0.45; IBL as fallback for off-screen misses; adjustable strength via ImGui
+- **Screen-Space Reflections (SSR)** — linear view-space ray march (64 steps + 8-step binary refinement) with additive composite blend; roughness cutoff 0.45; IBL as fallback for off-screen misses
 
 ### Material model — OpenPBR Surface v1.1
 All parameters follow the [OpenPBR spec](https://academysoftwarefoundation.github.io/OpenPBR/) naming. All 8 material layers are fully supported:
@@ -71,11 +71,15 @@ All parameters follow the [OpenPBR spec](https://academysoftwarefoundation.githu
 Conductor reflectance uses the OpenPBR generalized-Schlick **F82-tint** model (`base_color` = F0, `specular_color` = 82° tint). Specular and coat microfacets use GGX with the spec's anisotropy remapping.
 
 ### Color pipeline
-- All internal calculations in **linear Rec.2020**
+- Scene-referred rendering in a selectable **working color space**: linear **Rec.2020**
+  (default) or linear **Rec.709**, chosen per scene via `working_color_space` in the
+  `[render]` table; assets (material colors, textures, environment maps) are converted
+  automatically on load
 - Physical camera exposure via **EV100** (`ev100` scene keyword)
 - Physical environment scale via **`env_unit_nits`** (cd/m² per EXR unit)
-- Tone mapping: **AgX** (Troy Sobotka), **ACES** RRT+ODT, **Reinhard** luminance, **Hable** / Uncharted-2 filmic
+- Tone mapping (shared Harmonia stage): **AgX** (Troy Sobotka), **ACES** RRT+ODT, **Reinhard** luminance, **Hable** / Uncharted-2 filmic
 - Display output: **SDR** (sRGB), **HDR10** (PQ/ST2084), **scRGB** — runtime negotiated with swapchain
+- Offscreen output: **EXR** is the scene-referred, untonemapped frame; **PNG** is the tonemapped version
 
 **Identical color pipeline to Hyperion** — same algorithms, same visual output (given identical lighting conditions).
 
@@ -85,34 +89,33 @@ Conductor reflectance uses the OpenPBR generalized-Schlick **F82-tint** model (`
 - Per-material texture maps: `map_base_color`, `map_normal`, `map_orm` (packed occlusion/roughness/metalness), `map_emission_color`
 
 ### Scene format
-Identical to Hyperion. Line-based text format (`.scene`) with companion `.mtlx` material libraries:
+Identical to Hyperion — the TOML-based formats parsed by
+[Aether](https://github.com/McNopper/Aether): a `<name>.scene.toml` scene description
+with companion `<name>.materials.toml` OpenPBR material libraries (`model = "openpbr"`)
+and geometry-only OBJ meshes:
 
-```
-mtllib cornell.mtlx         # load material library (.mtlx)
+```toml
+material_libraries = ["cornell.materials.toml"]
 
-camera
-  translate  278  273  -800
-  look_at    278  273   279
-  vfov       39.1
+[render]
+reference = "presets/preview.render.toml"      # shared preset; inline keys override
+working_color_space = "lin_rec2020_scene"      # or "lin_rec709_scene"
 
-ev100        7.0            # physical camera exposure
-spp          1              # Theia: always 1 SPP (real-time direct frame)
+[camera]
+reference = "presets/cornell.camera.toml"      # translate / look_at / vfov / ev100
 
-instance cornell.obj        # instantiate geometry (materials assigned here)
-  material Floor     WhiteWall
-  material LeftWall  RedWall
-  material RightWall GreenWall
+[tonemap]
+tonemapper = "agx"                             # aces | agx | reinhard | hable
 
-sphere  60.0
-  usemtl Glass
-  translate  430  60  200
-
-env_map       meadow_2_4k.exr
-env_unit_nits 10000
-tonemapper    agx             # aces (default) | agx | reinhard | hable
+[[geometry]]
+type = "instance"                              # instance | box | sphere
+mesh = "cornell.obj"
+materials = { Floor = "WhiteWall", LeftWall = "RedWall", RightWall = "GreenWall" }
 ```
 
-OBJ files contribute **only geometry**; all material assignments are declared in the `.scene` file.
+OBJ files contribute **only geometry**; all material assignments are declared in the
+scene file. See the [Aether README](https://github.com/McNopper/Aether) for the full
+format reference.
 
 ---
 
@@ -122,15 +125,21 @@ Theia is the **real-time** renderer in a family of four repositories:
 
 | Repository | Role |
 |------------|------|
-| [Aether](https://github.com/McNopper/Aether) | GPU-agnostic file formats & scene data (`.scene` / `.mtlx` / OBJ → plain CPU structs); no Vulkan |
-| [Harmonia](https://github.com/McNopper/Harmonia) | Shared Vulkan foundation reused **1:1** by both renderers — core/context, presentation, color management, tonemapping, bindless textures, shared GPU types |
+| [Aether](https://github.com/McNopper/Aether) | GPU-agnostic file formats & scene data (`.scene.toml` / `.materials.toml` / OBJ → plain CPU structs); no Vulkan |
+| [Harmonia](https://github.com/McNopper/Harmonia) | Shared Vulkan foundation reused **1:1** by both renderers — `harmonia::App` host, core/context, presentation, color management, tonemapping, bindless textures, shared GPU types, Slang shader build |
 | [Hyperion](https://github.com/McNopper/Hyperion) | Offline path tracer (ground truth) |
 | **Theia** | This repo — real-time GPU-driven forward renderer |
 
-Theia consumes Aether and Harmonia via CMake `FetchContent`. The **GPU scene layout is
-renderer-specific**: Theia owns its own `Scene`, `GpuInstance` and `GpuMeshlet`
-(`src/theia/scene/`) built around meshlets and the mesh-shader pipeline, distinct from
-Hyperion's index-buffer / ray-tracing layout. Only code shared 1:1 lives in Harmonia.
+Theia consumes Aether and Harmonia via CMake `FetchContent`. The demo application is a
+thin subclass of the shared **`harmonia::App`** host: Harmonia owns the window, swapchain,
+HDR target, tonemapping/presentation, IBL probe and scene loading, while Theia injects its
+renderer through the `harmonia::IRenderer` seam (Hyperion does the same). Slang shaders
+are compiled at build time by Harmonia's shared `compile_slang_shaders` CMake rule
+(`shaders/*.slang` → `build/shaders/*.spv`) and loaded through Harmonia's SPIR-V loader.
+The **GPU scene layout is renderer-specific**: Theia owns its own `Scene`, `GpuInstance`
+and `GpuMeshlet` (`src/theia/scene/`) built around meshlets and the mesh-shader pipeline,
+distinct from Hyperion's index-buffer / ray-tracing layout. Only code shared 1:1 lives in
+Harmonia.
 
 ---
 
@@ -154,38 +163,36 @@ cmake --build build
 
 ```bash
 # Interactive window (default scene: cornell_classic)
-build/theia.exe assets/cornell_classic.scene
+build/theia.exe --scene cornell_classic
 
-# Load different scene
-build/theia.exe assets/meadow_scene.scene
+# Offscreen render → EXR (scene-referred) + PNG (tonemapped), then exit
+build/theia.exe --scene cornell_classic --output out.exr
 
 # Camera controls
 # WASD        — move camera
-# Mouse       — look around
-# E/Q         — adjust exposure (EV100)
-# R           — reload scene
-# ESC         — quit
+# Right mouse — hold to look around
+# Q / E       — move down / up
+# [ / ]       — decrease / increase exposure (EV100)
+# ESC         — release mouse capture, then quit
 ```
 
 ### Command-line flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `<scene>` | `assets/cornell_classic.scene` | Path to `.scene` file (first positional argument) |
-| `--width <n>` | 3840 | Render width in pixels |
-| `--height <n>` | 2160 | Render height in pixels |
-| `--no-validation` | — | Disable Vulkan validation layers |
-| `--vsync` | enabled | Enable vertical sync |
+| `--scene <name>` / `-s` | `cornell_classic.scene.toml` | Scene name or path; bare names resolve against the assets directory (also accepted as first positional argument) |
+| `--output <file>` / `-o` | — | Offscreen mode: render and save EXR (untonemapped) + PNG (tonemapped), then exit |
+| `--width <n>` | 1920 | Render width in pixels |
+| `--height <n>` | 1080 | Render height in pixels |
+| `--validation` / `--no-validation` | disabled | Enable / disable Vulkan validation layers |
 
 ---
 
 ## Tests
 
-Tests cover rendering correctness and material validation:
-
-```bash
-cd build && ctest --output-on-failure
-```
+> ⚠️ Theia does not have its own test suite yet; correctness is currently validated by
+> visual parity against Hyperion (ground truth) on the shared test scenes. The shared
+> foundation is covered by the Harmonia and Aether test suites.
 
 ---
 
@@ -193,18 +200,17 @@ cd build && ctest --output-on-failure
 
 | Library | Purpose |
 |---------|---------|
-| [Aether](https://github.com/McNopper/Aether) | Scene & material file formats (`.scene` / `.mtlx` / OBJ) — GPU-agnostic CPU data |
-| [Harmonia](https://github.com/McNopper/Harmonia) | Shared Vulkan foundation (core, presentation, color, tonemapping, shared GPU types) |
+| [Aether](https://github.com/McNopper/Aether) | Scene & material file formats (`.scene.toml` / `.materials.toml` / OBJ) — GPU-agnostic CPU data |
+| [Harmonia](https://github.com/McNopper/Harmonia) | Shared Vulkan foundation (`harmonia::App` host, core, presentation, color, tonemapping, shared GPU types) |
 | [Vulkan SDK](https://vulkan.lunarg.com/) | Modern Vulkan 1.4 API |
 | [volk](https://github.com/zeux/volk) | Vulkan loader |
-| [VMA](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) | GPU memory allocation |
+| [VMA](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) | GPU memory allocation (via Harmonia) |
 | [SDL3](https://libsdl.org/) | Window management & surface |
 | [GLM](https://github.com/g-truc/glm) | Mathematics |
 | [meshoptimizer](https://github.com/zeux/meshoptimizer) | Meshlet generation and mesh optimization |
 | [stb_image](https://github.com/nothings/stb) | PNG/JPEG image loading |
-| [tinyexr](https://github.com/syoyo/tinyexr) | EXR image I/O |
-| [Slang](https://shader-slang.com/) | Shader compilation (GLSL → SPIR-V) |
-| [Google Test](https://github.com/google/googletest) | Unit testing framework |
+| [OpenEXR](https://openexr.com/) | EXR image I/O |
+| [Slang](https://shader-slang.com/) | Shader compilation (Slang → SPIR-V) |
 
 ---
 
@@ -257,5 +263,5 @@ Where a technique is shared with [Hyperion](https://github.com/McNopper/Hyperion
 |----------|-----------|
 | [OpenUSD](https://openusd.org/release/api/index.html) | Naming conventions: Prim, Xform, Mesh, Material, Light, Camera, Instance |
 | [glTF 2.0 Specification](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html) | PBR material and scene graph conventions |
-| [Wavefront OBJ](http://paulbourke.net/dataformats/obj/) | Geometry-only OBJ import (no MTL — materials are assigned in the `.scene` file) |
+| [Wavefront OBJ](http://paulbourke.net/dataformats/obj/) | Geometry-only OBJ import (no MTL — materials are assigned in the scene TOML) |
 
