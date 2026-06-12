@@ -8,8 +8,6 @@ struct BSDFSample {
     bool   isDelta;
 };
 
-/// Minimum specular weight — F0 at normal incidence for common dielectrics (~4 %).
-static const float kMinSpecularF0 = 0.04;
 
 float3 saturate3(float3 v)
 {
@@ -231,7 +229,7 @@ void computeLobeWeights(
     subsurfaceWeight = saturate(mat.subsurfaceColorWeight.w) * (1.0 - transmission);
     float opaqueBase = baseWeight * (1.0 - transmission);
     diffuseWeight = opaqueBase * (1.0 - metalness) * (1.0 - subsurfaceWeight);
-    specularWeight = opaqueBase * (1.0 - metalness) * max(saturate(mat.specularColorWeight.w), kMinSpecularF0);
+    specularWeight = opaqueBase * (1.0 - metalness) * saturate(mat.specularColorWeight.w);
     metalWeight = baseWeight * metalness;
     transmissionWeight = baseWeight * transmission;
 

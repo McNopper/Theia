@@ -174,17 +174,32 @@ float3 evalIBL(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B)
     float3 prefilteredCoat = t_iblSpecular.SampleLevel(s_iblLinear, dirToLatlong(R), roughnessToLod(coatRough)).xyz;
     float3 prefilteredFuzz = t_iblSpecular.SampleLevel(s_iblLinear, dirToLatlong(N), roughnessToLod(fuzzRough)).xyz;
 
-    // Base layer IBL (diffuse + specular). Coat throughput applied below.
+    // Base layer IBL: specular computed first so its directional albedo (FG) can
+    // mask the diffuse — matching MaterialX mx_layer_bsdf energy conservation.
+    // Diffuse irradiance map stores E = integral(Li*cos(theta) dw); the Lambertian
+    // BRDF is albedo/pi, so Lo_diffuse = (albedo/pi)*E = albedo * kInvPi * E.
     float3 baseLo = 0.0.xxx;
+    float3 specularFG = 0.0.xxx;
+    if (specularWeight > 0.0 || metalWeight > 0.0) {
+        float3 glossyF0 = lerp(iorToF0(eta) * specColor, baseColor, metalness);
+        glossyF0 = thinFilmTint(glossyF0, NoV, mat.thinFilmParams.x, max(mat.thinFilmParams.y, 1.0), mat.thinFilmParams.z);
+        // F90 = specColor for metallic workflow; 1 for pure dielectric
+        float3 specF90 = lerp(1.0.xxx, specColor, metalness);
+        float2 AB = mx_ggx_dir_albedo_AB(NoV, baseRough * baseRough);
+        specularFG = (specularWeight + metalWeight) * (glossyF0 * AB.x + specF90 * AB.y);
+        baseLo += baseLayerScale * prefilteredBase * specularFG;
+    }
+    // Energy transmitted through the specular layer reaches the diffuse sublayer.
+    float3 diffuseMask = saturate(1.0.xxx - specularFG);
     if (diffuseWeight > 0.0) {
-        baseLo += baseLayerScale * diffuseWeight * diffuseIrradiance * baseColor;
+        baseLo += baseLayerScale * diffuseWeight * kInvPi * diffuseIrradiance * baseColor * diffuseMask;
     }
     if (subsurfaceWeight > 0.0) {
         float ssScale = max(mat.subsurfaceRadiusScale.w, 0.001);
         float3 ssTint = subsurfaceColor * (1.0 / (1.0 + ssScale *
             (mat.subsurfaceRadiusScale.x + mat.subsurfaceRadiusScale.y + mat.subsurfaceRadiusScale.z)));
         float ssReflScale = (mat.opacityFlagsPad.w > 0.5) ? 1.0 : saturate(1.0 - ssAniso);
-        baseLo += baseLayerScale * subsurfaceWeight * ssReflScale * diffuseIrradiance * ssTint;
+        baseLo += baseLayerScale * subsurfaceWeight * ssReflScale * kInvPi * diffuseIrradiance * ssTint * diffuseMask;
     }
     // Thin-walled diffuse transmission (translucent base): diffuse light from the
     // BACK hemisphere transmitted through the sheet, tinted by subsurface_color.
@@ -193,16 +208,7 @@ float3 evalIBL(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B)
     // sampled along -N. Lets thin curtains/leaves/paper glow when lit from behind.
     if (diffuseTransWeight > 0.0) {
         float3 backIrradiance = t_iblDiffuse.SampleLevel(s_iblLinear, dirToLatlong(-N), 0.0).xyz;
-        baseLo += baseLayerScale * diffuseTransWeight * backIrradiance * subsurfaceColor;
-    }
-    if (specularWeight > 0.0 || metalWeight > 0.0) {
-        float3 glossyF0 = lerp(iorToF0(eta) * specColor, baseColor, metalness);
-        glossyF0 = thinFilmTint(glossyF0, NoV, mat.thinFilmParams.x, max(mat.thinFilmParams.y, 1.0), mat.thinFilmParams.z);
-        // F90 = specColor for metallic workflow; 1 for pure dielectric
-        float3 specF90 = lerp(1.0.xxx, specColor, metalness);
-        float2 AB = mx_ggx_dir_albedo_AB(NoV, baseRough * baseRough);
-        baseLo += baseLayerScale * (specularWeight + metalWeight) * prefilteredBase
-                  * (glossyF0 * AB.x + specF90 * AB.y);
+        baseLo += baseLayerScale * diffuseTransWeight * kInvPi * backIrradiance * subsurfaceColor * diffuseMask;
     }
     if (fuzzWeight > 0.0) {
         float sheenAlb = t_sheenLut.SampleLevel(s_iblLinear, float2(NoV, fuzzRough), 0.0);
