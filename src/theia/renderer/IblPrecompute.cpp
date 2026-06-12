@@ -114,7 +114,11 @@ bool IblPrecompute::initialize(const DeviceContext& ctx,
                                const CommandPool& pool,
                                VkImageView envImageView,
                                VkSampler envSampler,
-                               float envUnitNits) {
+                               float envUnitNits,
+                               VkBuffer marginalCdf,
+                               VkBuffer conditionalCdf,
+                               uint32_t cdfWidth,
+                               uint32_t cdfHeight) {
     shutdown();
 
     m_ctx = &ctx;
@@ -122,6 +126,10 @@ bool IblPrecompute::initialize(const DeviceContext& ctx,
     m_envImageView = envImageView;
     m_envSampler = envSampler;
     m_envUnitNits = (envUnitNits > 0.0f) ? envUnitNits : 1.0f;
+    m_marginalCdf = marginalCdf;
+    m_conditionalCdf = conditionalCdf;
+    m_cdfWidth = cdfWidth;
+    m_cdfHeight = cdfHeight;
 
     if (!createTextures() || !createSamplers()) {
         shutdown();
@@ -374,10 +382,15 @@ bool IblPrecompute::runDiffusePass(VkCommandBuffer cmd) {
         return true;
     }
 
-    const std::array<VkDescriptorSetLayoutBinding, 3> bindings{
-        VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-        VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-        VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+    // Bindings: 0=envMap (SAMPLED_IMAGE), 1=envSampler (SAMPLER),
+    //           2=outIrrad (STORAGE_IMAGE),
+    //           3=marginalCdf (STORAGE_BUFFER), 4=conditionalCdf (STORAGE_BUFFER)
+    const std::array<VkDescriptorSetLayoutBinding, 5> bindings{
+        VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_SAMPLER,        1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
     };
     const VkDescriptorSetLayoutCreateInfo layoutInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
@@ -392,10 +405,12 @@ bool IblPrecompute::runDiffusePass(VkCommandBuffer cmd) {
     }
     m_tempSetLayouts.push_back(setLayout);
 
-    const std::array<VkDescriptorPoolSize, 3> poolSizes{
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1},
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLER, 1},
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
+    const std::array<VkDescriptorPoolSize, 4> poolSizes{
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLER,        1},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,  1},
+        // Storage buffers (marginal + conditional CDF) counted together:
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2},
     };
     const VkDescriptorPoolCreateInfo poolInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -411,9 +426,15 @@ bool IblPrecompute::runDiffusePass(VkCommandBuffer cmd) {
     }
     m_tempDescriptorPools.push_back(descriptorPool);
 
+    struct DiffusePC {
+        float    envScale;
+        uint32_t cdfWidth;
+        uint32_t cdfHeight;
+        uint32_t _pad{0};
+    };
     VkPipeline pipeline = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
-    if (!createComputePipeline("ibl_diffuse.comp.spv", setLayout, sizeof(float), pipeline, pipelineLayout)) {
+    if (!createComputePipeline("ibl_diffuse.comp.spv", setLayout, sizeof(DiffusePC), pipeline, pipelineLayout)) {
         return false;
     }
 
@@ -437,48 +458,30 @@ bool IblPrecompute::runDiffusePass(VkCommandBuffer cmd) {
                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                   VK_ACCESS_2_SHADER_WRITE_BIT);
 
-    const std::array<VkDescriptorImageInfo, 3> imageInfos{
-        VkDescriptorImageInfo{VK_NULL_HANDLE, m_envImageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        VkDescriptorImageInfo{m_envSampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED},
-        VkDescriptorImageInfo{VK_NULL_HANDLE, m_res.diffuseIrrad.view(), VK_IMAGE_LAYOUT_GENERAL},
-    };
-    const std::array<VkWriteDescriptorSet, 3> writes{
-        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                             nullptr,
-                             descriptorSet,
-                             0,
-                             0,
-                             1,
-                             VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-                             &imageInfos[0],
-                             nullptr,
-                             nullptr},
-        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                             nullptr,
-                             descriptorSet,
-                             1,
-                             0,
-                             1,
-                             VK_DESCRIPTOR_TYPE_SAMPLER,
-                             &imageInfos[1],
-                             nullptr,
-                             nullptr},
-        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                             nullptr,
-                             descriptorSet,
-                             2,
-                             0,
-                             1,
-                             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-                             &imageInfos[2],
-                             nullptr,
-                             nullptr},
+    const VkDescriptorImageInfo envImageInfo{VK_NULL_HANDLE, m_envImageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    const VkDescriptorImageInfo envSamplerInfo{m_envSampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
+    const VkDescriptorImageInfo outIrradInfo{VK_NULL_HANDLE, m_res.diffuseIrrad.view(), VK_IMAGE_LAYOUT_GENERAL};
+    const VkDescriptorBufferInfo marginalInfo{m_marginalCdf, 0, VK_WHOLE_SIZE};
+    const VkDescriptorBufferInfo conditionalInfo{m_conditionalCdf, 0, VK_WHOLE_SIZE};
+
+    const std::array<VkWriteDescriptorSet, 5> writes{
+        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSet,
+                             0, 0, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  &envImageInfo,    nullptr, nullptr},
+        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSet,
+                             1, 0, 1, VK_DESCRIPTOR_TYPE_SAMPLER,        &envSamplerInfo,  nullptr, nullptr},
+        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSet,
+                             2, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,  &outIrradInfo,    nullptr, nullptr},
+        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSet,
+                             3, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &marginalInfo,    nullptr},
+        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSet,
+                             4, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &conditionalInfo, nullptr},
     };
     vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
-    vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(float), &m_envUnitNits);
+    const DiffusePC pc{m_envUnitNits, m_cdfWidth, m_cdfHeight, 0};
+    vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
     vkCmdDispatch(cmd, dispatchCount(kDiffuseExtent.width), dispatchCount(kDiffuseExtent.height), 1);
 
     m_res.diffuseIrrad.transition(cmd,
