@@ -145,6 +145,7 @@ float3 evalIBL(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B)
     float coatEta = max(mat.coatRoughAnisoIorDark.z, 1.01);
     float coatDark = saturate(mat.coatRoughAnisoIorDark.w);
     float metalness = saturate(mat.baseMetalnessDiffRough.x);
+    float diffuseRough = saturate(mat.baseMetalnessDiffRough.y);
 
     float3 baseColor = saturate3(mat.baseColorWeight.xyz);
     float3 specColor = saturate3(mat.specularColorWeight.xyz);
@@ -176,8 +177,9 @@ float3 evalIBL(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B)
 
     // Base layer IBL: specular computed first so its directional albedo (FG) can
     // mask the diffuse — matching MaterialX mx_layer_bsdf energy conservation.
-    // Diffuse irradiance map stores E = integral(Li*cos(theta) dw); the Lambertian
-    // BRDF is albedo/pi, so Lo_diffuse = (albedo/pi)*E = albedo * kInvPi * E.
+    // Diffuse irradiance map stores E = integral(Li*cos(theta) dw); the OpenPBR
+    // Fujii BRDF has Lo_diffuse = kInvPi * E * diffuseColorDirAlbedo(NoV, rough, color),
+    // which reduces to the Lambertian kInvPi*E*color when roughness = 0.
     float3 baseLo = 0.0.xxx;
     float3 specularFG = 0.0.xxx;
     if (specularWeight > 0.0 || metalWeight > 0.0) {
@@ -192,23 +194,23 @@ float3 evalIBL(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B)
     // Energy transmitted through the specular layer reaches the diffuse sublayer.
     float3 diffuseMask = saturate(1.0.xxx - specularFG);
     if (diffuseWeight > 0.0) {
-        baseLo += baseLayerScale * diffuseWeight * kInvPi * diffuseIrradiance * baseColor * diffuseMask;
+        baseLo += baseLayerScale * diffuseWeight * kInvPi * diffuseIrradiance * diffuseColorDirAlbedo(NoV, diffuseRough, baseColor) * diffuseMask;
     }
     if (subsurfaceWeight > 0.0) {
         float ssScale = max(mat.subsurfaceRadiusScale.w, 0.001);
         float3 ssTint = subsurfaceColor * (1.0 / (1.0 + ssScale *
             (mat.subsurfaceRadiusScale.x + mat.subsurfaceRadiusScale.y + mat.subsurfaceRadiusScale.z)));
         float ssReflScale = (mat.opacityFlagsPad.w > 0.5) ? 1.0 : saturate(1.0 - ssAniso);
-        baseLo += baseLayerScale * subsurfaceWeight * ssReflScale * kInvPi * diffuseIrradiance * ssTint * diffuseMask;
+        baseLo += baseLayerScale * subsurfaceWeight * ssReflScale * kInvPi * diffuseIrradiance * diffuseColorDirAlbedo(NoV, saturate(0.25 + 0.5 * diffuseRough), ssTint) * diffuseMask;
     }
     // Thin-walled diffuse transmission (translucent base): diffuse light from the
     // BACK hemisphere transmitted through the sheet, tinted by subsurface_color.
-    // IBL analogue of Hyperion bsdf.slang's evalDiffuseOrenNayar on the flipped
+    // IBL analogue of bsdf.slang's evalDiffuse on the flipped
     // hemisphere — the back-side irradiance is the cosine-prefiltered diffuse map
     // sampled along -N. Lets thin curtains/leaves/paper glow when lit from behind.
     if (diffuseTransWeight > 0.0) {
         float3 backIrradiance = t_iblDiffuse.SampleLevel(s_iblLinear, dirToLatlong(-N), 0.0).xyz;
-        baseLo += baseLayerScale * diffuseTransWeight * kInvPi * backIrradiance * subsurfaceColor * diffuseMask;
+        baseLo += baseLayerScale * diffuseTransWeight * kInvPi * backIrradiance * diffuseColorDirAlbedo(NoV, diffuseRough, subsurfaceColor) * diffuseMask;
     }
     if (fuzzWeight > 0.0) {
         float sheenAlb = t_sheenLut.SampleLevel(s_iblLinear, float2(NoV, fuzzRough), 0.0);

@@ -108,36 +108,75 @@ float3 fresnelF82(float3 F0, float3 F82, float cosTheta)
     return saturate3(fSchlick - a * mu * pow(1.0 - mu, 6.0));
 }
 
-float3 evalDiffuseOrenNayar(float3 albedo, float roughness, float3 wo, float3 wi)
+// Fujii improved Oren-Nayar constants.
+// Ref: https://mimosa-pudica.net/improved-oren-nayar.html
+//      MaterialX mx_oren_nayar_compensated_diffuse
+//      OpenPBR Surface spec §base/glossy-diffuse
+static const float kFujiiC1 = 0.5  - 2.0 / (3.0 * kPi);        // ≈ 0.14697
+static const float kFujiiC2 = 2.0 / 3.0 - 28.0 / (15.0 * kPi); // ≈ 0.06495
+
+/// Directional albedo of the Fujii diffuse BRDF (view-angle dependent, no color).
+/// Models single-scatter energy leaving a rough diffuse surface toward wo.
+float diffuseDirAlbedoFujii(float cosTheta, float roughness)
+{
+    float A  = 1.0 / (1.0 + kFujiiC1 * roughness);
+    float B  = roughness * A;
+    float Si = safeSqrt(max(0.0, 1.0 - cosTheta * cosTheta));
+    float G  = Si * (acos(clamp(cosTheta, -1.0, 1.0)) - Si * cosTheta)
+             + 2.0 * ((Si / max(cosTheta, 1.0e-4)) * (1.0 - Si * Si * Si) - Si) / 3.0;
+    return A + B * G * kInvPi;
+}
+
+/// Cosine-weighted hemisphere average of the Fujii directional albedo.
+/// Used by the multi-scatter energy compensation term.
+float diffuseAvgAlbedoFujii(float roughness)
+{
+    float A = 1.0 / (1.0 + kFujiiC1 * roughness);
+    return A * (1.0 + kFujiiC2 * roughness);
+}
+
+/// OpenPBR energy-compensated diffuse BRDF (Fujii model).
+/// Single-scatter lobe + multi-scatter compensation lobe for full energy conservation.
+/// wo/wi are in local (tangent) space with z = cos(theta).
+float3 evalDiffuse(float3 color, float roughness, float3 wo, float3 wi)
 {
     if (wo.z <= 0.0 || wi.z <= 0.0) {
         return 0.0.xxx;
     }
 
-    float sigma = roughness * roughness * kHalfPi;
-    float sigma2 = sigma * sigma;
-    float A = 1.0 - (sigma2 / (2.0 * (sigma2 + 0.33)));
-    float B = 0.45 * sigma2 / (sigma2 + 0.09);
+    float NdotV = wo.z;
+    float NdotL = wi.z;
+    float s     = dot(wi, wo) - NdotL * NdotV;
+    float stinv = (s > 0.0) ? s / max(NdotL, NdotV) : s;
 
-    float sinThetaI = safeSqrt(max(0.0, 1.0 - wi.z * wi.z));
-    float sinThetaO = safeSqrt(max(0.0, 1.0 - wo.z * wo.z));
-    float maxCos = 0.0;
-    if (sinThetaI > 1.0e-4 && sinThetaO > 1.0e-4) {
-        maxCos = max(0.0, (wi.x * wo.x + wi.y * wo.y) / (sinThetaI * sinThetaO));
-    }
+    float  A          = 1.0 / (1.0 + kFujiiC1 * roughness);
+    float3 lobeSingle = color * A * (1.0 + roughness * stinv);
 
-    float sinAlpha;
-    float tanBeta;
-    if (abs(wi.z) > abs(wo.z)) {
-        sinAlpha = sinThetaO;
-        tanBeta = sinThetaI / max(abs(wi.z), 1.0e-4);
-    } else {
-        sinAlpha = sinThetaI;
-        tanBeta = sinThetaO / max(abs(wo.z), 1.0e-4);
-    }
+    float  dAlbedoV = diffuseDirAlbedoFujii(NdotV, roughness);
+    float  dAlbedoL = diffuseDirAlbedoFujii(NdotL, roughness);
+    float  avgA     = diffuseAvgAlbedoFujii(roughness);
+    float3 colorMS  = color * color * avgA
+                    / max(0.0001.xxx, 1.0.xxx - color * max(0.0, 1.0 - avgA));
+    float3 lobeMS   = colorMS
+                    * max(1.0e-4, 1.0 - dAlbedoV)
+                    * max(1.0e-4, 1.0 - dAlbedoL)
+                    / max(1.0e-4, 1.0 - avgA);
 
-    float eon = A + B * maxCos * sinAlpha * tanBeta;
-    return albedo * (kInvPi * max(eon, 0.0));
+    return kInvPi * (lobeSingle + lobeMS);
+}
+
+/// Directional albedo for IBL diffuse under the OpenPBR Fujii model.
+/// Replaces the plain color factor in the Lambertian IBL formula, encoding
+/// the roughness-dependent energy loss plus multi-scatter compensation.
+///
+/// IBL usage:  Lo_diffuse = kInvPi * E_irradiance * diffuseColorDirAlbedo(NoV, roughness, color)
+float3 diffuseColorDirAlbedo(float cosTheta, float roughness, float3 color)
+{
+    float  dAlbedo = diffuseDirAlbedoFujii(cosTheta, roughness);
+    float  avgA    = diffuseAvgAlbedoFujii(roughness);
+    float3 colorMS = color * color * avgA
+                   / max(0.0001.xxx, 1.0.xxx - color * max(0.0, 1.0 - avgA));
+    return lerp(colorMS, color, dAlbedo);
 }
 
 float3 evalSheen(float3 color, float roughness, float3 wo, float3 wi)
@@ -319,7 +358,7 @@ float3 evalBSDF(GpuMaterial mat, float3 wo, float3 wi, float3 N, float3 T, float
         float3 glossyF82 = specColor;
 
         if (diffuseWeight > 0.0) {
-            result += baseLayerScale * diffuseWeight * evalDiffuseOrenNayar(baseColor, diffuseRough, woL, wiL);
+            result += baseLayerScale * diffuseWeight * evalDiffuse(baseColor, diffuseRough, woL, wiL);
         }
         if (subsurfaceWeight > 0.0) {
             float ssScale = max(mat.subsurfaceRadiusScale.w, 0.001);
@@ -327,7 +366,7 @@ float3 evalBSDF(GpuMaterial mat, float3 wo, float3 wi, float3 N, float3 T, float
             // Bulk subsurface: forward scattering (g>0) reduces back-reflected energy.
             // (In thin-walled mode the split is already baked into the lobe weights.)
             float ssReflScale = (mat.opacityFlagsPad.w > 0.5) ? 1.0 : saturate(1.0 - ssAniso);
-            result += baseLayerScale * subsurfaceWeight * ssReflScale * evalDiffuseOrenNayar(ssTint, saturate(0.25 + 0.5 * diffuseRough), woL, wiL);
+            result += baseLayerScale * subsurfaceWeight * ssReflScale * evalDiffuse(ssTint, saturate(0.25 + 0.5 * diffuseRough), woL, wiL);
         }
         if (specularWeight > 0.0 || metalWeight > 0.0) {
             result += baseLayerScale * (specularWeight + metalWeight) * evalReflectionMicrofacet(glossyF0, glossyF82, woL, wiL, alphaX, alphaY);
@@ -360,7 +399,7 @@ float3 evalBSDF(GpuMaterial mat, float3 wo, float3 wi, float3 N, float3 T, float
     // back hemisphere, tinted by subsurface_color.
     if (diffuseTransWeight > 0.0 && woL.z > 0.0 && wiL.z < 0.0) {
         float3 wiR = float3(wiL.x, wiL.y, -wiL.z);
-        result += diffuseTransWeight * evalDiffuseOrenNayar(subsurfaceColor, diffuseRough, woL, wiR);
+        result += diffuseTransWeight * evalDiffuse(subsurfaceColor, diffuseRough, woL, wiR);
     }
 
     return max(result, 0.0.xxx);
