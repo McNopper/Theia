@@ -213,8 +213,7 @@ build/theia.exe --scene cornell_classic --output out.exr
 | [SDL3](https://libsdl.org/) | Window management & surface |
 | [GLM](https://github.com/g-truc/glm) | Mathematics |
 | [meshoptimizer](https://github.com/zeux/meshoptimizer) | Meshlet generation and mesh optimization |
-| [stb_image](https://github.com/nothings/stb) | PNG/JPEG image loading |
-| [OpenEXR](https://openexr.com/) | EXR image I/O |
+| [OpenImageIO](https://openimageio.readthedocs.io/) | Image I/O — PNG/JPEG/EXR load and save (via Harmonia; stb and OpenEXR are transitive dependencies) |
 | [Slang](https://shader-slang.com/) | Shader compilation (Slang → SPIR-V) |
 
 ---
