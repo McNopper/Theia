@@ -5,10 +5,12 @@ GPU-driven real-time renderer for OpenPBR materials.
 > *[Theia](https://en.wikipedia.org/wiki/Theia_(mythology)) — Titaness of heavenly light, mother of Helios, Selene and Eos.*
 
 Theia is a modern Vulkan 1.4 renderer built on GPU-driven forward rendering techniques.  
-It implements the [OpenPBR Surface v1.1](https://academysoftwarefoundation.github.io/OpenPBR/) material model in real-time, targeting **60 FPS at 4K** and closely matching [Hyperion](https://github.com/McNopper/Hyperion)'s path-traced output on identical test scenes.
+It implements the [OpenPBR Surface v1.1](https://academysoftwarefoundation.github.io/OpenPBR/) material model in real-time and closely matches [Hyperion](https://github.com/McNopper/Hyperion)'s path-traced output on identical test scenes.
 
 **Interactive real-time rendering** — explore complex materials, dynamic lighting, and HDR output in real-time.  
 **Architecture driven by [GPU-Driven Rendering](https://vkguide.dev/docs/gpudriven)** — compute-based culling, indirect dispatch, and clustered lighting.
+
+> **Performance scales with GPU tier.** The mesh-shader pipeline and rendering budget are designed to support HDR output across a range of targets — from 1080p/HDR/30fps on mid-range hardware (e.g. RTX 4050) up to 4K/HDR/60fps on high-end desktop GPUs (RTX 4090/5090 class). Development reference platform: **RTX 4050 at 1080p HDR**.
 
 > ⚠️ **Early stage / work in progress.** Theia is under active development. APIs, rendering
 > techniques, and visual output are still evolving, and some features are incomplete or
@@ -53,7 +55,7 @@ It implements the [OpenPBR Surface v1.1](https://academysoftwarefoundation.githu
 - **GPU-driven forward rendering** — compute-based culling, indirect command generation, and dispatch
 - **Direct lighting** — 1-2 directional lights + Forward+ tile-based point light culling (16×16 px tiles, up to 128 lights/tile)
 - **Image-based lighting (IBL)** — equirectangular HDR panorama; diffuse irradiance pre-convolution + per-roughness GGX prefiltered specular map; MaterialX analytic GGX directional albedo (no BRDF LUT)
-- **Real-time performance** — **60 FPS @ 4K** target (3840×2160)
+- **Real-time performance** — GPU-tier dependent: 1080p/HDR/30fps on mid-range (RTX 4050 class); 4K/HDR/60fps on high-end (RTX 4090/5090 class); development reference: RTX 4050 at 1080p HDR
 - **Interactive camera control** — WASD movement, mouse look, EV100 physical exposure adjustment
 - **Screen-Space Reflections (SSR)** — linear view-space ray march (64 steps + 8-step binary refinement) with additive composite blend; roughness cutoff 0.45; IBL as fallback for off-screen misses
 - **Screen-Space Ambient Occlusion (SSAO)** — hemisphere depth sampling with bilateral blur denoiser; composited into the HDR buffer alongside SSR

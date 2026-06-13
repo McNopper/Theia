@@ -162,6 +162,10 @@ void Application::onResize(VkExtent2D extent) noexcept {
         return;
     }
 
+    // Shut down SSRPass first — its descriptor sets reference the old depth/GBuffer
+    // image views that ForwardRenderer::resize() is about to destroy.
+    m_ssrPass.shutdown();
+
     // Resize ForwardRenderer: recreates depth/GBuffer at new extent, updates
     // the HDR image handles (App::handleResize has already recreated the HDR image).
     if (!m_renderer->resize(extent.width, extent.height, hdrImage().handle(), hdrImage().view())) {
@@ -181,7 +185,6 @@ void Application::onResize(VkExtent2D extent) noexcept {
     }
 
     // Reinitialize SSRPass with new depth/GBuffer views from the resized ForwardRenderer.
-    m_ssrPass.shutdown();
     const SSRPass::Config ssrCfg{
         .width = extent.width,
         .height = extent.height,
