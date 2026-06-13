@@ -5,7 +5,7 @@ GPU-driven real-time renderer for OpenPBR materials.
 > *[Theia](https://en.wikipedia.org/wiki/Theia_(mythology)) — Titaness of heavenly light, mother of Helios, Selene and Eos.*
 
 Theia is a modern Vulkan 1.4 renderer built on GPU-driven forward rendering techniques.  
-It implements the [OpenPBR Surface v1.1](https://academysoftwarefoundation.github.io/OpenPBR/) material model in real-time, delivering **60 FPS at 4K** with visual parity to [Hyperion](https://github.com/McNopper/Hyperion) on identical test scenes.
+It implements the [OpenPBR Surface v1.1](https://academysoftwarefoundation.github.io/OpenPBR/) material model in real-time, targeting **60 FPS at 4K** and closely matching [Hyperion](https://github.com/McNopper/Hyperion)'s path-traced output on identical test scenes.
 
 **Interactive real-time rendering** — explore complex materials, dynamic lighting, and HDR output in real-time.  
 **Architecture driven by [GPU-Driven Rendering](https://vkguide.dev/docs/gpudriven)** — compute-based culling, indirect dispatch, and clustered lighting.
@@ -32,13 +32,17 @@ It implements the [OpenPBR Surface v1.1](https://academysoftwarefoundation.githu
 |:----:|:--------:|:--------:|
 | ![openpbr_fuzz](screenshots/openpbr_fuzz.png) | ![openpbr_specular](screenshots/openpbr_specular.png) | ![openpbr_organics](screenshots/openpbr_organics.png) |
 
-| Thin-film | Meadow IBL | Textured Cube |
-|:---------:|:----------:|:-------------:|
-| ![openpbr_thinfilm](screenshots/openpbr_thinfilm.png) | ![meadow_scene](screenshots/meadow_scene.png) | ![textured_cube](screenshots/textured_cube.png) |
+| Thin-film | Special Materials | Meadow IBL |
+|:---------:|:-----------------:|:----------:|
+| ![openpbr_thinfilm](screenshots/openpbr_thinfilm.png) | ![openpbr_special](screenshots/openpbr_special.png) | ![meadow_scene](screenshots/meadow_scene.png) |
 
-| A Beautiful Game (IBL) | Dragon & Teapot (IBL) | Advanced Transmission |
-|:----------------------------------:|:---------------------:|:---------------------:|
-| ![ABeautifulGame](screenshots/ABeautifulGame.png) | ![dragon_teapot](screenshots/dragon_teapot.png) | ![openpbr_advanced](screenshots/openpbr_advanced.png) |
+| Textured Cube | Dragon & Teapot (IBL) | Advanced Transmission |
+|:-------------:|:---------------------:|:---------------------:|
+| ![textured_cube](screenshots/textured_cube.png) | ![dragon_teapot](screenshots/dragon_teapot.png) | ![openpbr_advanced](screenshots/openpbr_advanced.png) |
+
+| A Beautiful Game (IBL) |
+|:----------------------:|
+| ![ABeautifulGame](screenshots/ABeautifulGame.png) |
 
 ---
 
@@ -52,6 +56,7 @@ It implements the [OpenPBR Surface v1.1](https://academysoftwarefoundation.githu
 - **Real-time performance** — **60 FPS @ 4K** target (3840×2160)
 - **Interactive camera control** — WASD movement, mouse look, EV100 physical exposure adjustment
 - **Screen-Space Reflections (SSR)** — linear view-space ray march (64 steps + 8-step binary refinement) with additive composite blend; roughness cutoff 0.45; IBL as fallback for off-screen misses
+- **Screen-Space Ambient Occlusion (SSAO)** — hemisphere depth sampling with bilateral blur denoiser; composited into the HDR buffer alongside SSR
 
 ### Material model — OpenPBR Surface v1.1
 All parameters follow the [OpenPBR spec](https://academysoftwarefoundation.github.io/OpenPBR/) naming. All 8 material layers are fully supported:
@@ -65,8 +70,8 @@ All parameters follow the [OpenPBR spec](https://academysoftwarefoundation.githu
 | Emission | `emission_luminance`, `emission_color` | ✅ |
 | Thin-film | `thin_film_weight`, `thin_film_thickness`, `thin_film_ior` | ✅ |
 | Transmission | `transmission_weight`, `transmission_color`, `transmission_depth` | ✅ |
-| Subsurface | `subsurface_weight`, `subsurface_color`, `subsurface_radius`, `subsurface_scale` | ⚠️ (screen-space approximation) |
-| Geometry | `geometry_opacity` | ✅ |
+| Subsurface | `subsurface_weight`, `subsurface_color`, `subsurface_radius`, `subsurface_scale` | ⚠️ screen-space approximation |
+| Geometry | `geometry_opacity` | ⚠️ BRDF weight reduction (not alpha-blended transparency) |
 
 Conductor reflectance uses the OpenPBR generalized-Schlick **F82-tint** model (`base_color` = F0, `specular_color` = 82° tint). Specular and coat microfacets use GGX with the spec's anisotropy remapping.
 
