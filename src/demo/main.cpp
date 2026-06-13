@@ -7,9 +7,7 @@ int main(int argc, char* argv[]) {
     config.title = "Theia \xe2\x80\x94 Real-Time Renderer";
     config.width = 1024;
     config.height = 768;
-    // ForwardRenderer / LightCuller / SSRPass cannot recreate their render
-    // targets yet, so interactive resizing stays disabled for now.
-    config.resizable = false;
+    config.resizable = true;
     config.assetsDir = THEIA_ASSETS_DIR;
     config.sceneFile = "cornell_classic.scene.toml";
 

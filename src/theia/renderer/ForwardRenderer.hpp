@@ -8,6 +8,7 @@
 #include "harmonia/core/Buffer.hpp"
 #include "harmonia/core/CommandPool.hpp"
 #include "harmonia/core/Image.hpp"
+#include "harmonia/renderer/Camera.hpp"
 #include "theia/renderer/IblPrecompute.hpp"
 
 class Scene;
@@ -36,21 +37,21 @@ class ForwardRenderer {
         VkSampler iblLutSampler = VK_NULL_HANDLE;
     };
 
-    struct CameraParams {
-        glm::vec3 position = {278.0f, 273.0f, -800.0f};
-        glm::vec3 target = {278.0f, 273.0f, 279.5f};
-        glm::vec3 up = {0.0f, 1.0f, 0.0f};
-        float vfovDeg = 39.1f;
-        float ev100 = 7.0f;        ///< physical camera exposure (same as Hyperion CameraData.exposure)
-        float nearPlane = 0.1f;    ///< scene-scale-aware near plane (avoids clipping sub-unit scenes)
-        float farPlane = 10000.0f; ///< scene-scale-aware far plane
-    };
+    /// Camera parameters. Uses the shared harmonia::Camera::Params so both
+    /// Hyperion and Theia describe their cameras with the same type.
+    /// ForwardRenderer reads: position, target, up, vfovDeg, nearPlane,
+    /// farPlane, and physical.ev100() for exposure.
+    using CameraParams = Camera::Params;
 
     ForwardRenderer() = default;
     ~ForwardRenderer();
 
     bool initialize(const DeviceContext& ctx, const Config& config);
     void shutdown();
+
+    /// Resize to a new extent after the host (App) has recreated the HDR image.
+    /// Recreates depth/GBuffer targets; the pipeline and descriptors are unchanged.
+    bool resize(uint32_t width, uint32_t height, VkImage hdrImage, VkImageView hdrImageView) noexcept;
 
     void setScene(const Scene* scene) {
         m_scene = scene;

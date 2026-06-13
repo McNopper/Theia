@@ -124,6 +124,20 @@ void ForwardRenderer::shutdown() {
     m_initialized = false;
 }
 
+bool ForwardRenderer::resize(uint32_t width, uint32_t height, VkImage hdrImage, VkImageView hdrImageView) noexcept {
+    if (!m_ctx) {
+        return false;
+    }
+    m_config.width = width;
+    m_config.height = height;
+    m_config.hdrImage = hdrImage;
+    m_config.hdrImageView = hdrImageView;
+    m_depthTarget = {};
+    m_gbufferTarget = {};
+    m_hdrFirstUse = true;
+    return createDepthTarget();
+}
+
 void ForwardRenderer::setTileBuffers(VkBuffer tileLightCounts,
                                      VkBuffer tileLightIndices,
                                      uint32_t tilesX,
@@ -1021,7 +1035,7 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         const SkyPushConstants skyPc{
             .invViewProj = glm::transpose(glm::inverse(skyViewProj)),
             .cameraPos = glm::vec4(m_camera.position, 1.0f),
-            .exposure = 1.0f / (1.2f * std::pow(2.0f, m_camera.ev100)),
+            .exposure = m_camera.physical.exposure(),
             .hasEnv = 1u,
             .envScale = m_envUnitNits,
             ._pad1 = 0u,
@@ -1052,7 +1066,7 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
     const glm::mat4 view = glm::lookAt(m_camera.position, m_camera.target, m_camera.up);
     const glm::mat4 viewProj = proj * view;
     // exposure = 1 / (1.2 * 2^EV100) — matches Hyperion's PhysicalCamera calc
-    const float exposure = 1.0f / (1.2f * std::pow(2.0f, m_camera.ev100));
+    const float exposure = m_camera.physical.exposure();
 
     const ForwardRenderer::MeshPushConstants pc{
         .viewProj = glm::transpose(viewProj), // transposed for Slang mul(pos, mat)

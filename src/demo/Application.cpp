@@ -6,8 +6,10 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <tuple>
 
 #include "harmonia/core/Logger.hpp"
+#include "harmonia/renderer/Camera.hpp"
 
 namespace theia {
 
@@ -74,19 +76,22 @@ bool Application::onSceneLoaded(const SceneLoader::SceneConfig& sceneConfig) {
         m_camera.target = *sceneConfig.cameraAt;
         m_camera.up = sceneConfig.cameraUp.value_or(glm::vec3{0.0f, 1.0f, 0.0f});
         m_camera.vfovDeg = sceneConfig.cameraVfov.value_or(45.0f);
-        m_camera.ev100 = sceneConfig.cameraEv100.value_or(7.0f);
+    }
+    // Physical camera exposure — same pattern as Hyperion (aperture=1, ISO=100).
+    {
+        const float ev100 = sceneConfig.cameraEv100.value_or(7.0f);
+        m_camera.physical.aperture = 1.0f;
+        m_camera.physical.iso = 100.0f;
+        m_camera.physical.shutterSpeedHz = std::pow(2.0f, ev100);
     }
     // Reset camera controller orientation to match the new target.
     const glm::vec3 dir = glm::normalize(m_camera.target - m_camera.position);
     directionToYawPitch(dir, m_camCtrl.yaw, m_camCtrl.pitch);
 
-    // Scene-scale-aware near/far planes. Scenes range from sub-unit (ABeautifulGame)
-    // to hundreds of units (Cornell), so a fixed near=1.0 clips small scenes entirely.
-    // Derive both from the initial camera-to-target distance, which tracks scene scale.
+    // Scene-scale-aware near/far — shared helper from harmonia::Camera.
     const float camDist = glm::length(m_camera.target - m_camera.position);
-    m_camera.nearPlane = std::max(0.001f, camDist * 0.01f);
-    m_camera.farPlane = std::max(10.0f, camDist * 1000.0f);
-    // Camera move speed should also scale with the scene.
+    std::tie(m_camera.nearPlane, m_camera.farPlane) = Camera::nearFarFromDistance(camDist);
+    // Camera move speed also scales with the scene.
     m_camCtrl.speed = std::max(0.1f, camDist * 0.5f);
 
     m_renderer->setCamera(m_camera);
@@ -153,10 +158,43 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
 }
 
 void Application::onResize(VkExtent2D extent) noexcept {
-    // ForwardRenderer / LightCuller / SSRPass cannot recreate their targets
-    // yet — the window is created non-resizable (Config::resizable = false).
-    static_cast<void>(extent);
-    Logger::warn("Theia does not support resizing yet");
+    if (!m_renderer) {
+        return;
+    }
+
+    // Resize ForwardRenderer: recreates depth/GBuffer at new extent, updates
+    // the HDR image handles (App::handleResize has already recreated the HDR image).
+    if (!m_renderer->resize(extent.width, extent.height, hdrImage().handle(), hdrImage().view())) {
+        Logger::error("ForwardRenderer resize failed");
+        return;
+    }
+
+    // Reinitialize LightCuller for the new tile grid.
+    m_lightCuller.shutdown();
+    if (!m_lightCuller.initialize(deviceContext(), extent.width, extent.height)) {
+        Logger::warn("LightCuller resize failed — direct loop fallback active");
+    } else {
+        m_renderer->setTileBuffers(m_lightCuller.tileLightCountsBuffer(),
+                                   m_lightCuller.tileLightIndicesBuffer(),
+                                   m_lightCuller.tilesX(),
+                                   m_lightCuller.tilesY());
+    }
+
+    // Reinitialize SSRPass with new depth/GBuffer views from the resized ForwardRenderer.
+    m_ssrPass.shutdown();
+    const SSRPass::Config ssrCfg{
+        .width = extent.width,
+        .height = extent.height,
+        .depthImage = m_renderer->depthImage(),
+        .depthView = m_renderer->depthView(),
+        .gbufferImage = m_renderer->gbufferImage(),
+        .gbufferView = m_renderer->gbufferView(),
+        .hdrImage = hdrImage().handle(),
+        .hdrView = hdrImage().view(),
+    };
+    if (!m_ssrPass.initialize(deviceContext(), ssrCfg)) {
+        Logger::warn("SSRPass resize failed — reflections disabled");
+    }
 }
 
 bool Application::onEvent(const SDL_Event& event) {
@@ -191,17 +229,19 @@ bool Application::onEvent(const SDL_Event& event) {
                 return true;
             }
             return false;
-        // [ / ] keys: decrease / increase EV100
+        // [ / ] keys: decrease / increase EV100 by 0.5 stops
         case SDL_SCANCODE_LEFTBRACKET:
             if (down) {
-                m_camera.ev100 -= 0.5f;
-                Logger::info("EV100 = {:.1f}", m_camera.ev100);
+                const float ev100 = m_camera.physical.ev100() - 0.5f;
+                m_camera.physical.shutterSpeedHz = std::pow(2.0f, ev100);
+                Logger::info("EV100 = {:.1f}", m_camera.physical.ev100());
             }
             return true;
         case SDL_SCANCODE_RIGHTBRACKET:
             if (down) {
-                m_camera.ev100 += 0.5f;
-                Logger::info("EV100 = {:.1f}", m_camera.ev100);
+                const float ev100 = m_camera.physical.ev100() + 0.5f;
+                m_camera.physical.shutterSpeedHz = std::pow(2.0f, ev100);
+                Logger::info("EV100 = {:.1f}", m_camera.physical.ev100());
             }
             return true;
         default:
@@ -286,7 +326,7 @@ void Application::onUpdate(float dtSeconds) {
         SDL_SetWindowTitle(window(),
                            (std::string("Theia  |  ") + std::to_string(static_cast<int>(fps)) + " FPS  " +
                             std::to_string(static_cast<int>(ms * 10) / 10.0f).substr(0, 4) + " ms" + "  |  EV100 " +
-                            std::to_string(static_cast<int>(m_camera.ev100 * 10) / 10.0f).substr(0, 4) +
+                            std::to_string(static_cast<int>(m_camera.physical.ev100() * 10) / 10.0f).substr(0, 4) +
                             "  |  RMB = look  WASD = move  [/] = EV100")
                                .c_str());
         fpsFrames = 0;
