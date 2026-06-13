@@ -122,7 +122,11 @@ find_package(meshoptimizer CONFIG REQUIRED)
 # Compile Slang shaders at build time into THEIA_SHADER_OUTPUT_DIR; loaded at
 # runtime via the THEIA_SHADER_DIR compile definition (same scheme as Harmonia
 # and Hyperion).
+# Harmonia's shared Slang modules (env_sample, math, bsdf, …) are the source
+# of truth; add their directory so slangc resolves imports from there.
+set(COMPILE_SLANG_EXTRA_INCLUDE_DIRS "${HARMONIA_SHADER_SOURCE_DIR}")
 compile_slang_shaders(theia_shaders "${THEIA_SHADER_OUTPUT_DIR}" ${THEIA_ENTRY_SHADERS})
+unset(COMPILE_SLANG_EXTRA_INCLUDE_DIRS)
 
 add_library(theia_lib STATIC ${THEIA_LIBRARY_SOURCES})
 add_dependencies(theia_lib theia_shaders)

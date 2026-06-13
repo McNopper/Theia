@@ -22,8 +22,7 @@
 // Ref: Pharr, Jakob & Humphreys — "Physically Based Rendering" 4th ed. §12.5,
 //      §13.4.3 (MIS balance heuristic); Veach — "Robust Monte Carlo Methods" §9.2.
 
-static const float kPi    = 3.14159265359;
-static const float kInvPi = 0.31830988618;
+import env_sample;
 
 // Set 0:
 // 0 = env panorama (Texture2D RGBA32F, working colour space)
@@ -60,65 +59,11 @@ float2 hammersley2d(uint i, uint N)
     return float2(float(i) / float(N), radicalInverse_VdC(i));
 }
 
-// ── Lat-long ↔ direction (Hyperion env.slang convention) ───────────────────────
+// ── Lat-long ↔ direction (matches env_sample convention) ─────────────────────
 float2 dirToLatlong(float3 d)
 {
-    return float2(atan2(d.z, d.x) * (kInvPi * 0.5) + 0.5,
-                  acos(clamp(d.y, -1.0, 1.0)) * kInvPi);
-}
-
-// ── 2D separable CDF importance sampling (mirrors Hyperion env.slang) ─────────
-/// Binary search: largest i ∈ [0,n-1] with cdf[base+i+1] <= r.
-uint sampleCdf1D(StructuredBuffer<float> cdf, uint base, uint n, float r)
-{
-    uint lo = 0u, hi = n - 1u;
-    while (lo < hi) {
-        uint mid = (lo + hi) >> 1u;
-        if (cdf[base + mid + 1u] <= r) lo = mid + 1u;
-        else                            hi = mid;
-    }
-    return lo;
-}
-
-/// Sample a world-space direction via the env-map luminance CDF.
-/// Returns the direction and its solid-angle PDF.
-float3 sampleEnvImportance(float2 xi, out float pdfOmega)
-{
-    const uint W = cdfWidth;
-    const uint H = cdfHeight;
-
-    // Sample row via marginal CDF
-    uint row = sampleCdf1D(marginalCdf, 0u, H, xi.x);
-    // Sample column via conditional CDF for that row
-    uint col = sampleCdf1D(conditionalCdf, row * (W + 1u), W, xi.y);
-
-    // Continuous inversion within the selected bin
-    float rowLo = marginalCdf[row];
-    float rowHi = marginalCdf[row + 1u];
-    float tRow  = (rowHi > rowLo) ? clamp((xi.x - rowLo) / (rowHi - rowLo), 0.0, 1.0) : 0.5;
-
-    uint  cBase = row * (W + 1u);
-    float colLo = conditionalCdf[cBase + col];
-    float colHi = conditionalCdf[cBase + col + 1u];
-    float tCol  = (colHi > colLo) ? clamp((xi.y - colLo) / (colHi - colLo), 0.0, 1.0) : 0.5;
-
-    float uFrac = (float(col) + tCol) / float(W);
-    float vFrac = (float(row) + tRow) / float(H);
-
-    // Solid-angle PDF:  p_UV * W * H / (2 * pi^2 * sinTheta)
-    float pRow     = rowHi - rowLo;
-    float pCol     = colHi - colLo;
-    float theta    = kPi * vFrac;
-    float sinTheta = max(sin(theta), 1.0e-5);
-    pdfOmega = (pRow * pCol * float(W) * float(H)) / (2.0 * kPi * kPi * sinTheta);
-
-    // Reconstruct direction (same as Hyperion env.slang)
-    float phi = 2.0 * kPi * (uFrac - 0.5);
-    float3 dir;
-    dir.y = cos(theta);
-    dir.x = sinTheta * cos(phi);
-    dir.z = sinTheta * sin(phi);
-    return normalize(dir);
+    return float2(atan2(d.z, d.x) * (kEnvSampleInvPi * 0.5) + 0.5,
+                  acos(clamp(d.y, -1.0, 1.0)) * kEnvSampleInvPi);
 }
 
 // ── Main ───────────────────────────────────────────────────────────────────────
@@ -132,8 +77,8 @@ void main(uint3 tid : SV_DispatchThreadID)
 
     // Output texel → surface normal direction for which we integrate irradiance.
     float2 uvN  = (float2(tid.xy) + 0.5) / float2(256.0, 128.0);
-    float  phi0 = (uvN.x - 0.5) * (2.0 * kPi);
-    float  th0  = uvN.y * kPi;
+    float  phi0 = (uvN.x - 0.5) * (2.0 * kEnvSamplePi);
+    float  th0  = uvN.y * kEnvSamplePi;
     float  sinT = sin(th0);
     float3 N    = normalize(float3(sinT * cos(phi0), cos(th0), sinT * sin(phi0)));
 
@@ -144,7 +89,8 @@ void main(uint3 tid : SV_DispatchThreadID)
 
     for (uint i = 0u; i < sampleCount; ++i) {
         float  pdfOmega;
-        float3 wi      = sampleEnvImportance(hammersley2d(i, sampleCount), pdfOmega);
+        float3 wi      = sampleEnvImportanceDir(marginalCdf, conditionalCdf,
+                             cdfWidth, cdfHeight, hammersley2d(i, sampleCount), pdfOmega);
         float  cosTheta = dot(N, wi);
         if (cosTheta > 0.0 && pdfOmega > 0.0) {
             float3 Li = max(envMap.SampleLevel(envSampler, dirToLatlong(wi), 0.0).xyz, 0.0.xxx);
