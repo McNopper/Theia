@@ -500,6 +500,8 @@ bool IblPrecompute::runSpecularPass(VkCommandBuffer cmd) {
         return true;
     }
 
+    const uint32_t mipCount = m_res.specularMipped.mipLevels();
+
     const std::array<VkDescriptorSetLayoutBinding, 3> bindings{
         VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
         VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
@@ -518,14 +520,16 @@ bool IblPrecompute::runSpecularPass(VkCommandBuffer cmd) {
     }
     m_tempSetLayouts.push_back(setLayout);
 
+    // One descriptor set per mip level — all sets are fully written before
+    // any CB recording begins, so no descriptor set is ever updated while bound.
     const std::array<VkDescriptorPoolSize, 3> poolSizes{
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1},
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLER, 1},
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  mipCount},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLER,        mipCount},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,  mipCount},
     };
     const VkDescriptorPoolCreateInfo poolInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-        .maxSets = 1,
+        .maxSets = mipCount,
         .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
         .pPoolSizes = poolSizes.data(),
     };
@@ -543,18 +547,44 @@ bool IblPrecompute::runSpecularPass(VkCommandBuffer cmd) {
         return false;
     }
 
+    // Allocate one descriptor set per mip and fully write all descriptors
+    // before recording any commands — no descriptor may be updated while bound.
+    std::vector<VkDescriptorSetLayout> layouts(mipCount, setLayout);
     const VkDescriptorSetAllocateInfo allocInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
         .descriptorPool = descriptorPool,
-        .descriptorSetCount = 1,
-        .pSetLayouts = &setLayout,
+        .descriptorSetCount = mipCount,
+        .pSetLayouts = layouts.data(),
     };
-    VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
-    if (vkAllocateDescriptorSets(m_ctx->device, &allocInfo, &descriptorSet) != VK_SUCCESS) {
-        Logger::error("IblPrecompute: failed to allocate specular descriptor set");
+    std::vector<VkDescriptorSet> mipSets(mipCount, VK_NULL_HANDLE);
+    if (vkAllocateDescriptorSets(m_ctx->device, &allocInfo, mipSets.data()) != VK_SUCCESS) {
+        Logger::error("IblPrecompute: failed to allocate specular descriptor sets");
         return false;
     }
 
+    const VkDescriptorImageInfo envImageInfo{VK_NULL_HANDLE, m_envImageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    const VkDescriptorImageInfo envSamplerInfo{m_envSampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
+
+    for (uint32_t mip = 0; mip < mipCount; ++mip) {
+        VkImageView mipView = createMipView(*m_ctx, m_res.specularMipped, mip);
+        if (mipView == VK_NULL_HANDLE) {
+            return false;
+        }
+        m_tempImageViews.push_back(mipView);
+
+        const VkDescriptorImageInfo outputInfo{VK_NULL_HANDLE, mipView, VK_IMAGE_LAYOUT_GENERAL};
+        const std::array<VkWriteDescriptorSet, 3> writes{
+            VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, mipSets[mip],
+                                 0, 0, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &envImageInfo,   nullptr, nullptr},
+            VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, mipSets[mip],
+                                 1, 0, 1, VK_DESCRIPTOR_TYPE_SAMPLER,       &envSamplerInfo, nullptr, nullptr},
+            VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, mipSets[mip],
+                                 2, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &outputInfo,     nullptr, nullptr},
+        };
+        vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    }
+
+    // All descriptors are now written — safe to record commands.
     m_res.specularMipped.transition(cmd,
                                     VK_IMAGE_LAYOUT_UNDEFINED,
                                     VK_IMAGE_LAYOUT_GENERAL,
@@ -563,69 +593,17 @@ bool IblPrecompute::runSpecularPass(VkCommandBuffer cmd) {
                                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                     VK_ACCESS_2_SHADER_WRITE_BIT);
 
-    const std::array<VkDescriptorImageInfo, 2> staticInfos{
-        VkDescriptorImageInfo{VK_NULL_HANDLE, m_envImageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        VkDescriptorImageInfo{m_envSampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED},
-    };
-    const std::array<VkWriteDescriptorSet, 2> staticWrites{
-        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                             nullptr,
-                             descriptorSet,
-                             0,
-                             0,
-                             1,
-                             VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-                             &staticInfos[0],
-                             nullptr,
-                             nullptr},
-        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                             nullptr,
-                             descriptorSet,
-                             1,
-                             0,
-                             1,
-                             VK_DESCRIPTOR_TYPE_SAMPLER,
-                             &staticInfos[1],
-                             nullptr,
-                             nullptr},
-    };
-    vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(staticWrites.size()), staticWrites.data(), 0, nullptr);
-
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
 
-    for (uint32_t mip = 0; mip < m_res.specularMipped.mipLevels(); ++mip) {
-        VkImageView mipView = createMipView(*m_ctx, m_res.specularMipped, mip);
-        if (mipView == VK_NULL_HANDLE) {
-            return false;
-        }
-        m_tempImageViews.push_back(mipView);
-
-        const VkDescriptorImageInfo outputInfo{
-            .sampler = VK_NULL_HANDLE,
-            .imageView = mipView,
-            .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
-        };
-        const VkWriteDescriptorSet outputWrite{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = descriptorSet,
-            .dstBinding = 2,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-            .pImageInfo = &outputInfo,
-        };
-        vkUpdateDescriptorSets(m_ctx->device, 1, &outputWrite, 0, nullptr);
-
-        const float roughness = (m_res.specularMipped.mipLevels() > 1)
-                                    ? static_cast<float>(mip) / static_cast<float>(m_res.specularMipped.mipLevels() - 1)
+    for (uint32_t mip = 0; mip < mipCount; ++mip) {
+        const float roughness = (mipCount > 1)
+                                    ? static_cast<float>(mip) / static_cast<float>(mipCount - 1)
                                     : 0.0f;
-        const uint32_t mipWidth = std::max(1u, kSpecularExtent.width >> mip);
+        const uint32_t mipWidth  = std::max(1u, kSpecularExtent.width  >> mip);
         const uint32_t mipHeight = std::max(1u, kSpecularExtent.height >> mip);
 
-        const struct {
-            float roughness;
-            float envScale;
-        } pc{roughness, m_envUnitNits};
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
+        const struct { float roughness; float envScale; } pc{roughness, m_envUnitNits};
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &mipSets[mip], 0, nullptr);
         vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
         vkCmdDispatch(cmd, dispatchCount(mipWidth), dispatchCount(mipHeight), 1);
     }
