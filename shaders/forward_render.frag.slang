@@ -140,7 +140,6 @@ float3 evalIBL(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B)
     float ssAniso = clamp(mat.opacityFlagsPad.z, -1.0, 1.0);
     float baseRough = saturate(mat.specularRoughAnisoIor.x);
     float coatRough = saturate(mat.coatRoughAnisoIorDark.x);
-    float fuzzRough = saturate(mat.fuzzRoughPad.x);
     float eta = max(mat.specularRoughAnisoIor.z, 1.01);
     float coatEta = max(mat.coatRoughAnisoIorDark.z, 1.01);
     float coatDark = saturate(mat.coatRoughAnisoIorDark.w);
@@ -173,7 +172,6 @@ float3 evalIBL(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B)
     }
     float3 prefilteredBase = t_iblSpecular.SampleLevel(s_iblLinear, dirToLatlong(Rbase), roughnessToLod(baseRough)).xyz;
     float3 prefilteredCoat = t_iblSpecular.SampleLevel(s_iblLinear, dirToLatlong(R), roughnessToLod(coatRough)).xyz;
-    float3 prefilteredFuzz = t_iblSpecular.SampleLevel(s_iblLinear, dirToLatlong(N), roughnessToLod(fuzzRough)).xyz;
 
     // Base layer IBL: specular computed first so its directional albedo (FG) can
     // mask the diffuse — matching MaterialX mx_layer_bsdf energy conservation.
@@ -213,8 +211,10 @@ float3 evalIBL(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B)
         baseLo += baseLayerScale * diffuseTransWeight * kInvPi * backIrradiance * diffuseColorDirAlbedo(NoV, diffuseRough, subsurfaceColor) * diffuseMask;
     }
     if (fuzzWeight > 0.0) {
-        float sheenAlb = t_sheenLut.SampleLevel(s_iblLinear, float2(NoV, fuzzRough), 0.0);
-        baseLo += fuzzWeight * fuzzColor * prefilteredFuzz * sheenAlb;
+        // The Disney retroreflective sheen model (evalSheen in bsdf.slang) integrates
+        // to approximately Lambertian energy.  Use the diffuse irradiance for a
+        // split-sum approximation that matches the path-tracer's energy budget.
+        baseLo += fuzzWeight * fuzzColor * kInvPi * diffuseIrradiance;
     }
     // Transmission (glass/dielectric): approximate refraction by sampling the
     // environment in the refracted direction, blended against the Fresnel
