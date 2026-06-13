@@ -624,6 +624,12 @@ VkResult Scene::buildTlas(const DeviceContext& ctx, const CommandPool& pool) {
     std::vector<VkAccelerationStructureInstanceKHR> instances(m_geometries.size());
     for (size_t i = 0; i < m_geometries.size(); ++i) {
         instances[i] = m_geometries[i]->makeInstance(static_cast<uint32_t>(i));
+        // Emissive instances get mask 0x01 so shadow rays (culling mask 0xFE) skip them,
+        // preventing self-occlusion when the shadow origin is on a non-emissive surface.
+        const uint32_t matIdx = m_instances[i].materialIndex;
+        const bool isEmissive = matIdx < m_materials.size() &&
+                                m_materials[matIdx].gpu().emissionColorLum.w > 0.0F;
+        instances[i].mask = isEmissive ? 0x01u : 0xFFu;
     }
 
     auto instanceUpload = uploadBytes(

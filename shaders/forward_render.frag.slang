@@ -280,7 +280,7 @@ float traceShadow(float3 origin, float3 dir, float tMin, float tMax) {
     ray.TMax      = tMax;
 
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
-    q.TraceRayInline(t_tlas, RAY_FLAG_NONE, 0xFFu, ray);
+    q.TraceRayInline(t_tlas, RAY_FLAG_NONE, 0xFEu, ray);
     q.Proceed();
     return (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) ? 0.0 : 1.0;
 }
