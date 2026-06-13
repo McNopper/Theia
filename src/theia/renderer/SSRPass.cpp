@@ -339,8 +339,17 @@ bool SSRPass::createDescriptors() {
         {4, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},                // nearest
         {5, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},                // linear
     }};
+    constexpr VkDescriptorBindingFlags kUAB = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+    const std::array<VkDescriptorBindingFlags, 6> ssrBindingFlags{kUAB, kUAB, kUAB, kUAB, kUAB, kUAB};
+    const VkDescriptorSetLayoutBindingFlagsCreateInfo ssrBindingFlagsInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
+        .bindingCount = static_cast<uint32_t>(ssrBindingFlags.size()),
+        .pBindingFlags = ssrBindingFlags.data(),
+    };
     const VkDescriptorSetLayoutCreateInfo ssrSetInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .pNext = &ssrBindingFlagsInfo,
+        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
         .bindingCount = static_cast<uint32_t>(ssrBindings.size()),
         .pBindings = ssrBindings.data(),
     };
@@ -355,6 +364,7 @@ bool SSRPass::createDescriptors() {
     }};
     const VkDescriptorPoolCreateInfo ssrPoolInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
         .maxSets = 1,
         .poolSizeCount = static_cast<uint32_t>(ssrPoolSizes.size()),
         .pPoolSizes = ssrPoolSizes.data(),
@@ -381,8 +391,16 @@ bool SSRPass::createDescriptors() {
         {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},          // hdr
         {3, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},                // linear
     }};
+    const std::array<VkDescriptorBindingFlags, 4> compBindingFlags{kUAB, kUAB, kUAB, kUAB};
+    const VkDescriptorSetLayoutBindingFlagsCreateInfo compBindingFlagsInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
+        .bindingCount = static_cast<uint32_t>(compBindingFlags.size()),
+        .pBindingFlags = compBindingFlags.data(),
+    };
     const VkDescriptorSetLayoutCreateInfo compSetInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .pNext = &compBindingFlagsInfo,
+        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
         .bindingCount = static_cast<uint32_t>(compBindings.size()),
         .pBindings = compBindings.data(),
     };
@@ -397,6 +415,7 @@ bool SSRPass::createDescriptors() {
     }};
     const VkDescriptorPoolCreateInfo compPoolInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
         .maxSets = 1,
         .poolSizeCount = static_cast<uint32_t>(compPoolSizes.size()),
         .pPoolSizes = compPoolSizes.data(),
@@ -424,8 +443,16 @@ bool SSRPass::createDescriptors() {
         {3, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},                // nearest
         {4, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},                // linear
     }};
+    const std::array<VkDescriptorBindingFlags, 5> ssaoBindingFlags{kUAB, kUAB, kUAB, kUAB, kUAB};
+    const VkDescriptorSetLayoutBindingFlagsCreateInfo ssaoBindingFlagsInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
+        .bindingCount = static_cast<uint32_t>(ssaoBindingFlags.size()),
+        .pBindingFlags = ssaoBindingFlags.data(),
+    };
     const VkDescriptorSetLayoutCreateInfo ssaoSetInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .pNext = &ssaoBindingFlagsInfo,
+        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
         .bindingCount = static_cast<uint32_t>(ssaoBindings.size()),
         .pBindings = ssaoBindings.data(),
     };
@@ -440,6 +467,7 @@ bool SSRPass::createDescriptors() {
     }};
     const VkDescriptorPoolCreateInfo ssaoPoolInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
         .maxSets = 1,
         .poolSizeCount = static_cast<uint32_t>(ssaoPoolSizes.size()),
         .pPoolSizes = ssaoPoolSizes.data(),
@@ -467,8 +495,16 @@ bool SSRPass::createDescriptors() {
         {3, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},                // nearest
         {4, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},                // linear
     }};
+    const std::array<VkDescriptorBindingFlags, 5> blurBindingFlags{kUAB, kUAB, kUAB, kUAB, kUAB};
+    const VkDescriptorSetLayoutBindingFlagsCreateInfo blurBindingFlagsInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
+        .bindingCount = static_cast<uint32_t>(blurBindingFlags.size()),
+        .pBindingFlags = blurBindingFlags.data(),
+    };
     const VkDescriptorSetLayoutCreateInfo blurSetInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .pNext = &blurBindingFlagsInfo,
+        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
         .bindingCount = static_cast<uint32_t>(blurBindings.size()),
         .pBindings = blurBindings.data(),
     };
@@ -483,6 +519,7 @@ bool SSRPass::createDescriptors() {
     }};
     const VkDescriptorPoolCreateInfo blurPoolInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
         .maxSets = 1,
         .poolSizeCount = static_cast<uint32_t>(blurPoolSizes.size()),
         .pPoolSizes = blurPoolSizes.data(),

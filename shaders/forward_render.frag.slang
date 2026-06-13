@@ -415,7 +415,15 @@ FS_OUT main(FS_IN input) {
     // Reconstruct orthonormal tangent frame.
     float3 N = normalize(input.normal);
     // Gram-Schmidt re-orthogonalize T against N.
-    float3 T = normalize(input.tangent - dot(input.tangent, N) * N);
+    // Fallback to a frame derived from N when the mesh provides no tangent (e.g. OBJ without UV).
+    float3 rawT = input.tangent - dot(input.tangent, N) * N;
+    float3 T;
+    if (dot(rawT, rawT) < 1e-8) {
+        const float3 up = abs(N.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
+        T = normalize(cross(up, N));
+    } else {
+        T = normalize(rawT);
+    }
     float3 B = normalize(cross(N, T) * input.bitangentSign);
 
     // --- Bindless material textures (base_color, normal, ORM, emission) ---

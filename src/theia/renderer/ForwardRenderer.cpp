@@ -294,8 +294,17 @@ bool ForwardRenderer::createPipeline() {
         VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
         VkDescriptorSetLayoutBinding{5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
     };
+    constexpr VkDescriptorBindingFlags kUAB = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+    const std::array<VkDescriptorBindingFlags, 6> meshBindingFlags{kUAB, kUAB, kUAB, kUAB, kUAB, kUAB};
+    const VkDescriptorSetLayoutBindingFlagsCreateInfo meshBindingFlagsInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
+        .bindingCount = static_cast<uint32_t>(meshBindingFlags.size()),
+        .pBindingFlags = meshBindingFlags.data(),
+    };
     const VkDescriptorSetLayoutCreateInfo meshSetLayoutInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .pNext = &meshBindingFlagsInfo,
+        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
         .bindingCount = static_cast<uint32_t>(meshBindings.size()),
         .pBindings = meshBindings.data(),
     };
@@ -320,8 +329,16 @@ bool ForwardRenderer::createPipeline() {
         VkDescriptorSetLayoutBinding{
             5, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}, // scene TLAS
     };
+    const std::array<VkDescriptorBindingFlags, 6> matBindingFlags{kUAB, kUAB, kUAB, kUAB, kUAB, kUAB};
+    const VkDescriptorSetLayoutBindingFlagsCreateInfo matBindingFlagsInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
+        .bindingCount = static_cast<uint32_t>(matBindingFlags.size()),
+        .pBindingFlags = matBindingFlags.data(),
+    };
     const VkDescriptorSetLayoutCreateInfo matSetLayoutInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .pNext = &matBindingFlagsInfo,
+        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
         .bindingCount = static_cast<uint32_t>(matBindings.size()),
         .pBindings = matBindings.data(),
     };
@@ -344,8 +361,16 @@ bool ForwardRenderer::createPipeline() {
         VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
     };
+    const std::array<VkDescriptorBindingFlags, 5> iblBindingFlags{kUAB, kUAB, kUAB, kUAB, kUAB};
+    const VkDescriptorSetLayoutBindingFlagsCreateInfo iblBindingFlagsInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
+        .bindingCount = static_cast<uint32_t>(iblBindingFlags.size()),
+        .pBindingFlags = iblBindingFlags.data(),
+    };
     const VkDescriptorSetLayoutCreateInfo iblSetLayoutInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .pNext = &iblBindingFlagsInfo,
+        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
         .bindingCount = static_cast<uint32_t>(iblBindings.size()),
         .pBindings = iblBindings.data(),
     };
@@ -365,7 +390,8 @@ bool ForwardRenderer::createPipeline() {
     // Uses partially-bound descriptors so only the slots actually populated per scene must be valid.
     const VkDescriptorSetLayoutBinding textureBinding{
         0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-    const VkDescriptorBindingFlags textureBindingFlags = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
+    const VkDescriptorBindingFlags textureBindingFlags =
+        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
     const VkDescriptorSetLayoutBindingFlagsCreateInfo textureBindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = 1,
@@ -374,6 +400,7 @@ bool ForwardRenderer::createPipeline() {
     const VkDescriptorSetLayoutCreateInfo textureSetLayoutInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = &textureBindingFlagsInfo,
+        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
         .bindingCount = 1,
         .pBindings = &textureBinding,
     };
@@ -401,6 +428,7 @@ bool ForwardRenderer::createPipeline() {
     };
     const VkDescriptorPoolCreateInfo poolInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
         .maxSets = 4,
         .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
         .pPoolSizes = poolSizes.data(),
