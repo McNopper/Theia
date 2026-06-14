@@ -51,6 +51,7 @@ bool Application::onInitialize() {
         .gbufferView = m_renderer->gbufferView(),
         .hdrImage = hdrImage().handle(),
         .hdrView = hdrImage().view(),
+        .ssgiStrength = config().ssgiStrength,
     };
     if (!m_ssrPass.initialize(deviceContext(), ssrCfg)) {
         Logger::warn("SSRPass failed to initialize — reflections disabled");
@@ -211,6 +212,7 @@ void Application::onResize(VkExtent2D extent) noexcept {
         .gbufferView = m_renderer->gbufferView(),
         .hdrImage = hdrImage().handle(),
         .hdrView = hdrImage().view(),
+        .ssgiStrength = config().ssgiStrength,
     };
     if (!m_ssrPass.initialize(deviceContext(), ssrCfg)) {
         Logger::warn("SSRPass resize failed — reflections disabled");

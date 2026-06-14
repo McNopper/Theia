@@ -82,6 +82,7 @@ bool SSRPass::initialize(const DeviceContext& ctx,
     m_ctx = &ctx;
     m_cfg = cfg;
     m_ssrResultFirstUse = true;
+    m_ssgiStrength = cfg.ssgiStrength;
 
     // Create SSR result image: RGBA16F, STORAGE for compute write + SAMPLED for composite read
     auto res = Image::create(ctx,
@@ -115,7 +116,7 @@ bool SSRPass::initialize(const DeviceContext& ctx,
     if (!createDescriptors()) {
         return false;
     }
-    if (!createPipelines(ssrSpv, compositeSpv, ssaoSpv, ssaoBlurSpv)) {
+    if (!createPipelines(ssrSpv, compositeSpv, ssaoSpv, ssaoBlurSpv, "ssgi.comp.spv")) {
         return false;
     }
     updateDescriptors();
@@ -157,11 +158,17 @@ void SSRPass::shutdown() {
     destroy(m_ssaoBlurSetLayout, vkDestroyDescriptorSetLayout);
     destroy(m_ssaoBlurPool, vkDestroyDescriptorPool);
 
+    destroy(m_ssgiPipeline, vkDestroyPipeline);
+    destroy(m_ssgiLayout, vkDestroyPipelineLayout);
+    destroy(m_ssgiSetLayout, vkDestroyDescriptorSetLayout);
+    destroy(m_ssgiPool, vkDestroyDescriptorPool);
+
     destroy(m_samplerNearest, vkDestroySampler);
     destroy(m_samplerLinear, vkDestroySampler);
 
     m_ssrResult = {};
     m_ssaoResult = {};
+    m_ssgiStrength = 0.0f;
     m_ctx = nullptr;
 }
 
@@ -246,6 +253,24 @@ void SSRPass::dispatch(VkCommandBuffer cmd, const glm::mat4& proj, const glm::ma
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_compositeLayout, 0, 1, &m_compositeSet, 0, nullptr);
     vkCmdPushConstants(cmd, m_compositeLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(cpc), &cpc);
     vkCmdDispatch(cmd, gx, gy, 1);
+
+    if (m_ssgiStrength > 0.0f) {
+        // SSGI reads and writes the same HDR buffer in-place, so make the
+        // prior composite writes visible to sampled reads before dispatch.
+        pipelineBarrier(cmd,
+                        {
+                            imgBarrier(m_cfg.hdrImage,
+                                       VK_IMAGE_LAYOUT_GENERAL,
+                                       VK_IMAGE_LAYOUT_GENERAL,
+                                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                       VK_ACCESS_2_SHADER_WRITE_BIT,
+                                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                       VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT),
+                        });
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_ssgiPipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_ssgiLayout, 0, 1, &m_ssgiSet, 0, nullptr);
+        vkCmdDispatch(cmd, gx, gy, 1);
+    }
 
     // ---- SSAO / contact-shadow dispatch ----
     // Writes a raw (noisy) ambient-occlusion factor to m_ssaoResult. A following bilateral
@@ -539,13 +564,67 @@ bool SSRPass::createDescriptors() {
         return false;
     }
 
+    // --- SSGI set: 0=depth(sampled), 1=gbuffer(sampled), 2=hdr(sampled), 3=hdr(storage), 4=nearest, 5=linear ---
+    const std::array<VkDescriptorSetLayoutBinding, 6> ssgiBindings{{
+        {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // depth
+        {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // gbuffer
+        {2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // hdr sampled
+        {3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},          // hdr storage
+        {4, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},                // nearest
+        {5, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},                // linear
+    }};
+    const std::array<VkDescriptorBindingFlags, 6> ssgiBindingFlags{kUAB, kUAB, kUAB, kUAB, kUAB, kUAB};
+    const VkDescriptorSetLayoutBindingFlagsCreateInfo ssgiBindingFlagsInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
+        .bindingCount = static_cast<uint32_t>(ssgiBindingFlags.size()),
+        .pBindingFlags = ssgiBindingFlags.data(),
+    };
+    const VkDescriptorSetLayoutCreateInfo ssgiSetInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .pNext = &ssgiBindingFlagsInfo,
+        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
+        .bindingCount = static_cast<uint32_t>(ssgiBindings.size()),
+        .pBindings = ssgiBindings.data(),
+    };
+    if (vkCreateDescriptorSetLayout(m_ctx->device, &ssgiSetInfo, nullptr, &m_ssgiSetLayout) != VK_SUCCESS) {
+        Logger::error("SSRPass: failed to create SSGI descriptor set layout");
+        return false;
+    }
+    const std::array<VkDescriptorPoolSize, 3> ssgiPoolSizes{{
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
+        {VK_DESCRIPTOR_TYPE_SAMPLER, 2},
+    }};
+    const VkDescriptorPoolCreateInfo ssgiPoolInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
+        .maxSets = 1,
+        .poolSizeCount = static_cast<uint32_t>(ssgiPoolSizes.size()),
+        .pPoolSizes = ssgiPoolSizes.data(),
+    };
+    if (vkCreateDescriptorPool(m_ctx->device, &ssgiPoolInfo, nullptr, &m_ssgiPool) != VK_SUCCESS) {
+        Logger::error("SSRPass: failed to create SSGI descriptor pool");
+        return false;
+    }
+    const VkDescriptorSetAllocateInfo ssgiAllocInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .descriptorPool = m_ssgiPool,
+        .descriptorSetCount = 1,
+        .pSetLayouts = &m_ssgiSetLayout,
+    };
+    if (vkAllocateDescriptorSets(m_ctx->device, &ssgiAllocInfo, &m_ssgiSet) != VK_SUCCESS) {
+        Logger::error("SSRPass: failed to allocate SSGI descriptor set");
+        return false;
+    }
+
     return true;
 }
 
 bool SSRPass::createPipelines(const char* ssrSpv,
                               const char* compositeSpv,
                               const char* ssaoSpv,
-                              const char* ssaoBlurSpv) {
+                              const char* ssaoBlurSpv,
+                              const char* ssgiSpv) {
     // --- SSR pipeline ---
     const VkPushConstantRange ssrPCRange{
         .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
@@ -695,6 +774,38 @@ bool SSRPass::createPipelines(const char* ssrSpv,
     vkDestroyShaderModule(m_ctx->device, blurModule, nullptr);
     if (blurRes != VK_SUCCESS) {
         Logger::error("SSRPass: failed to create SSAO blur compute pipeline");
+        return false;
+    }
+
+    // --- SSGI pipeline ---
+    const VkPipelineLayoutCreateInfo ssgiLayoutInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = &m_ssgiSetLayout,
+        .pushConstantRangeCount = 0,
+        .pPushConstantRanges = nullptr,
+    };
+    if (vkCreatePipelineLayout(m_ctx->device, &ssgiLayoutInfo, nullptr, &m_ssgiLayout) != VK_SUCCESS) {
+        Logger::error("SSRPass: failed to create SSGI pipeline layout");
+        return false;
+    }
+    VkShaderModule ssgiModule = loadSpv(m_ctx->device, ssgiSpv);
+    if (!ssgiModule) {
+        return false;
+    }
+    const VkComputePipelineCreateInfo ssgiPipeInfo{
+        .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+        .stage = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                  .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+                  .module = ssgiModule,
+                  .pName = "main"},
+        .layout = m_ssgiLayout,
+    };
+    const VkResult ssgiRes =
+        vkCreateComputePipelines(m_ctx->device, VK_NULL_HANDLE, 1, &ssgiPipeInfo, nullptr, &m_ssgiPipeline);
+    vkDestroyShaderModule(m_ctx->device, ssgiModule, nullptr);
+    if (ssgiRes != VK_SUCCESS) {
+        Logger::error("SSRPass: failed to create SSGI compute pipeline");
         return false;
     }
 
@@ -976,6 +1087,90 @@ void SSRPass::updateDescriptors() {
          nullptr},
     }};
     vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(blurWrites.size()), blurWrites.data(), 0, nullptr);
+
+    // SSGI pass descriptor writes (depth + gbuffer sampled, HDR sampled + storage, two samplers).
+    const VkDescriptorImageInfo ssgiDepthInfo{
+        .sampler = m_samplerNearest,
+        .imageView = m_cfg.depthView,
+        .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+    };
+    const VkDescriptorImageInfo ssgiGbufferInfo{
+        .sampler = m_samplerLinear,
+        .imageView = m_cfg.gbufferView,
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    };
+    const VkDescriptorImageInfo ssgiHdrSampledInfo{
+        .sampler = m_samplerLinear,
+        .imageView = m_cfg.hdrView,
+        .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+    };
+    const VkDescriptorImageInfo ssgiHdrStorageInfo{
+        .imageView = m_cfg.hdrView,
+        .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+    };
+    const std::array<VkWriteDescriptorSet, 6> ssgiWrites{{
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         nullptr,
+         m_ssgiSet,
+         0,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+         &ssgiDepthInfo,
+         nullptr,
+         nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         nullptr,
+         m_ssgiSet,
+         1,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+         &ssgiGbufferInfo,
+         nullptr,
+         nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         nullptr,
+         m_ssgiSet,
+         2,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+         &ssgiHdrSampledInfo,
+         nullptr,
+         nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         nullptr,
+         m_ssgiSet,
+         3,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+         &ssgiHdrStorageInfo,
+         nullptr,
+         nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         nullptr,
+         m_ssgiSet,
+         4,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_SAMPLER,
+         &nearestSamplerInfo,
+         nullptr,
+         nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         nullptr,
+         m_ssgiSet,
+         5,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_SAMPLER,
+         &linearSamplerInfo,
+         nullptr,
+         nullptr},
+    }};
+    vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(ssgiWrites.size()), ssgiWrites.data(), 0, nullptr);
 }
 
 } // namespace theia

@@ -33,6 +33,7 @@ class SSRPass {
         VkImage hdrImage = VK_NULL_HANDLE;        ///< externally owned HDR render target
         VkImageView hdrView = VK_NULL_HANDLE;     ///< view for HDR image (sampled + storage)
         float ssrStrength = 1.0f;                 ///< global blend [0,1], adjustable at runtime
+        float ssgiStrength = 0.0f;                ///< optional screen-space GI complement [0,1]
     };
 
     SSRPass() = default;
@@ -64,6 +65,7 @@ class SSRPass {
 
     void setSSRStrength(float s) { m_cfg.ssrStrength = s; }
     void setSSAOStrength(float s) { m_ssaoStrength = s; }
+    void setSSGIStrength(float s) { m_ssgiStrength = s; }
     [[nodiscard]] bool isInitialized() const noexcept { return m_ssrPipeline != VK_NULL_HANDLE; }
 
   private:
@@ -102,7 +104,11 @@ class SSRPass {
     static_assert(sizeof(SSAOBlurPushConstants) == 80);
 
     [[nodiscard]] bool
-    createPipelines(const char* ssrSpv, const char* compositeSpv, const char* ssaoSpv, const char* ssaoBlurSpv);
+    createPipelines(const char* ssrSpv,
+                    const char* compositeSpv,
+                    const char* ssaoSpv,
+                    const char* ssaoBlurSpv,
+                    const char* ssgiSpv);
     [[nodiscard]] bool createDescriptors();
     [[nodiscard]] bool createSamplers();
     void updateDescriptors();
@@ -145,6 +151,14 @@ class SSRPass {
     VkDescriptorPool m_ssaoBlurPool = VK_NULL_HANDLE;
     VkDescriptorSet m_ssaoBlurSet = VK_NULL_HANDLE;
     bool m_ssaoResultFirstUse = true;
+
+    // Optional SSGI pass (screen-space color bleed / low-frequency bounce).
+    VkPipeline m_ssgiPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout m_ssgiLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_ssgiSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool m_ssgiPool = VK_NULL_HANDLE;
+    VkDescriptorSet m_ssgiSet = VK_NULL_HANDLE;
+    float m_ssgiStrength = 0.0f;
 
     bool m_ssrResultFirstUse = true;
 };

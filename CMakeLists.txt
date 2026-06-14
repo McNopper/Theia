@@ -53,6 +53,7 @@ set(THEIA_ENTRY_SHADERS
     ssr_composite.comp.slang
     ssao.comp.slang
     ssao_blur.comp.slang
+    ssgi.comp.slang
 )
 
 # Theia-specific sources only. Common Vulkan code now lives in Harmonia and the
