@@ -170,6 +170,7 @@ class ForwardRenderer {
     VkDescriptorImageInfo m_iblDiffuseInfo{};
     VkDescriptorImageInfo m_iblSpecularInfo{};
     VkDescriptorImageInfo m_sheenLutInfo{};
+    VkDescriptorImageInfo m_brdfLutInfo{};
     VkDescriptorImageInfo m_iblEnvSamplerInfo{};
     VkDescriptorImageInfo m_iblEnvRawInfo{};
     float m_envUnitNits = 1.0f; ///< env_unit_nits for the raw-env sky background

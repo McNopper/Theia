@@ -39,11 +39,12 @@ cbuffer ForwardPC {
 [[vk::binding(5, 1)]] RaytracingAccelerationStructure t_tlas;
 
 // Set 2: IBL textures
-// Bindings: 0=diffuse irradiance, 1=specular prefilter (mipped), 2=sheen LUT, 3=sampler
+// Bindings: 0=diffuse irradiance, 1=specular prefilter (mipped), 2=sheen LUT, 3=sampler, 5=GGX BRDF LUT
 [[vk::binding(0, 2)]] Texture2D<float4> t_iblDiffuse;
 [[vk::binding(1, 2)]] Texture2D<float4> t_iblSpecular;
 [[vk::binding(2, 2)]] Texture2D<float>  t_sheenLut;
 [[vk::binding(3, 2)]] SamplerState      s_iblLinear;
+[[vk::binding(5, 2)]] Texture2D<float2> t_brdfLut;
 
 // Set 3: bindless material textures (base_color, normal, ORM, emission).
 // Indexed by GpuMaterial::textureIndices; kNoTexture (~0u) means "no map, use constant".
@@ -186,7 +187,7 @@ float3 evalIBL(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B)
         glossyF0 = thinFilmTint(glossyF0, NoV, mat.thinFilmParams.x, max(mat.thinFilmParams.y, 1.0), mat.thinFilmParams.z);
         // F90 = specColor for metallic workflow; 1 for pure dielectric
         float3 specF90 = lerp(1.0.xxx, specColor, metalness);
-        float2 AB = mx_ggx_dir_albedo_AB(NoV, baseRough * baseRough);
+        float2 AB = t_brdfLut.SampleLevel(s_iblLinear, float2(saturate(NoV), baseRough), 0.0);
         specularFG = (specularWeight + metalWeight) * (glossyF0 * AB.x + specF90 * AB.y);
         baseLo += baseLayerScale * prefilteredBase * specularFG;
     }
@@ -260,7 +261,7 @@ float3 evalIBL(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B)
                                      mat.thinFilmParams.x,
                                      max(mat.thinFilmParams.y, 1.0),
                                      mat.thinFilmParams.z);
-        float2 coatAB = mx_ggx_dir_albedo_AB(NoV, coatRough * coatRough);
+        float2 coatAB = t_brdfLut.SampleLevel(s_iblLinear, float2(saturate(NoV), coatRough), 0.0);
         float3 coatFG = coatF0 * coatAB.x + 1.0.xxx * coatAB.y; // F90=1 for dielectric coat
         float3 coatIBL = coatWeight * prefilteredCoat * coatFG;
         float3 coatThroughput = 1.0.xxx - coatWeight * coatFG;

@@ -154,7 +154,8 @@ bool IblPrecompute::initialize(const DeviceContext& ctx,
         return true;
     };
 
-    if (!runPass(&IblPrecompute::runSheenLutPass, "sheen LUT") ||
+    if (!runPass(&IblPrecompute::runBrdfLutPass, "BRDF LUT") ||
+        !runPass(&IblPrecompute::runSheenLutPass, "sheen LUT") ||
         !runPass(&IblPrecompute::runDiffusePass, "diffuse irradiance") ||
         !runPass(&IblPrecompute::runSpecularPass, "specular prefilter")) {
         shutdown();
@@ -181,6 +182,7 @@ void IblPrecompute::shutdown() {
     }
 
     m_res.sheenLut = {};
+    m_res.brdfLut = {};
     m_res.diffuseIrrad = {};
     m_res.specularMipped = {};
 
@@ -203,6 +205,18 @@ bool IblPrecompute::createTextures() {
         return false;
     }
     m_res.sheenLut = std::move(*sheen);
+
+    auto brdf = Image::create(*m_ctx,
+                              kSheenExtent,
+                              VK_FORMAT_R16G16_SFLOAT,
+                              VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                              VK_IMAGE_ASPECT_COLOR_BIT,
+                              "theia.ibl.brdf");
+    if (!brdf) {
+        Logger::error("IblPrecompute: failed to create BRDF LUT image");
+        return false;
+    }
+    m_res.brdfLut = std::move(*brdf);
 
     auto diffuse =
         Image::create(*m_ctx,
@@ -281,6 +295,92 @@ bool IblPrecompute::createSamplers() {
         return false;
     }
 
+    return true;
+}
+
+bool IblPrecompute::runBrdfLutPass(VkCommandBuffer cmd) {
+    const VkDescriptorSetLayoutBinding binding{
+        0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
+    const VkDescriptorSetLayoutCreateInfo layoutInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 1,
+        .pBindings = &binding,
+    };
+
+    VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
+    if (vkCreateDescriptorSetLayout(m_ctx->device, &layoutInfo, nullptr, &setLayout) != VK_SUCCESS) {
+        Logger::error("IblPrecompute: failed to create BRDF LUT set layout");
+        return false;
+    }
+    m_tempSetLayouts.push_back(setLayout);
+
+    const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1};
+    const VkDescriptorPoolCreateInfo poolInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .maxSets = 1,
+        .poolSizeCount = 1,
+        .pPoolSizes = &poolSize,
+    };
+
+    VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
+    if (vkCreateDescriptorPool(m_ctx->device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
+        Logger::error("IblPrecompute: failed to create BRDF LUT descriptor pool");
+        return false;
+    }
+    m_tempDescriptorPools.push_back(descriptorPool);
+
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+    if (!createComputePipeline("ibl_brdf_lut.comp.spv", setLayout, 0, pipeline, pipelineLayout)) {
+        return false;
+    }
+
+    const VkDescriptorSetAllocateInfo allocInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .descriptorPool = descriptorPool,
+        .descriptorSetCount = 1,
+        .pSetLayouts = &setLayout,
+    };
+    VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
+    if (vkAllocateDescriptorSets(m_ctx->device, &allocInfo, &descriptorSet) != VK_SUCCESS) {
+        Logger::error("IblPrecompute: failed to allocate BRDF LUT descriptor set");
+        return false;
+    }
+
+    m_res.brdfLut.transition(cmd,
+                             VK_IMAGE_LAYOUT_UNDEFINED,
+                             VK_IMAGE_LAYOUT_GENERAL,
+                             VK_PIPELINE_STAGE_2_NONE,
+                             0,
+                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_ACCESS_2_SHADER_WRITE_BIT);
+
+    const VkDescriptorImageInfo outputInfo{
+        .sampler = VK_NULL_HANDLE,
+        .imageView = m_res.brdfLut.view(),
+        .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+    };
+    const VkWriteDescriptorSet write{
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = descriptorSet,
+        .dstBinding = 0,
+        .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+        .pImageInfo = &outputInfo,
+    };
+    vkUpdateDescriptorSets(m_ctx->device, 1, &write, 0, nullptr);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
+    vkCmdDispatch(cmd, dispatchCount(kSheenExtent.width), dispatchCount(kSheenExtent.height), 1);
+
+    m_res.brdfLut.transition(cmd,
+                             VK_IMAGE_LAYOUT_GENERAL,
+                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                             VK_ACCESS_2_SHADER_WRITE_BIT,
+                             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                             VK_ACCESS_2_SHADER_READ_BIT);
     return true;
 }
 

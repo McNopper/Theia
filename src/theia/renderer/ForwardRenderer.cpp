@@ -107,7 +107,9 @@ void ForwardRenderer::shutdown() {
     m_iblDiffuseInfo = {};
     m_iblSpecularInfo = {};
     m_sheenLutInfo = {};
+    m_brdfLutInfo = {};
     m_iblEnvSamplerInfo = {};
+    m_iblEnvRawInfo = {};
 
     m_dummyTileCounts = {};
     m_dummyTileIndices = {};
@@ -159,6 +161,8 @@ void ForwardRenderer::setIbl(const IblResources& res, VkImageView rawEnvView, fl
         VkDescriptorImageInfo{VK_NULL_HANDLE, res.specularMipped.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     m_sheenLutInfo =
         VkDescriptorImageInfo{VK_NULL_HANDLE, res.sheenLut.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    m_brdfLutInfo =
+        VkDescriptorImageInfo{VK_NULL_HANDLE, res.brdfLut.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     m_iblEnvSamplerInfo = VkDescriptorImageInfo{res.envSampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
     // Raw env panorama for the sky background. Fall back to the specular view (a valid
     // SAMPLED_IMAGE) when no raw env is supplied, so the descriptor stays valid.
@@ -166,7 +170,7 @@ void ForwardRenderer::setIbl(const IblResources& res, VkImageView rawEnvView, fl
     m_iblEnvRawInfo = VkDescriptorImageInfo{VK_NULL_HANDLE, envView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     m_envUnitNits = envUnitNits;
 
-    const std::array<VkWriteDescriptorSet, 5> writes{
+    const std::array<VkWriteDescriptorSet, 6> writes{
         VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                              nullptr,
                              m_iblSet,
@@ -195,6 +199,16 @@ void ForwardRenderer::setIbl(const IblResources& res, VkImageView rawEnvView, fl
                              1,
                              VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
                              &m_sheenLutInfo,
+                             nullptr,
+                             nullptr},
+        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                             nullptr,
+                             m_iblSet,
+                             5,
+                             0,
+                             1,
+                             VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+                             &m_brdfLutInfo,
                              nullptr,
                              nullptr},
         VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -353,15 +367,16 @@ bool ForwardRenderer::createPipeline() {
     }
 
     // Set 2: IBL textures + sampler (fragment stage)
-    // binding 0: t_iblDiffuse, 1: t_iblSpecular, 2: t_sheenLut, 3: s_iblLinear, 4: t_envRaw (sky)
-    const std::array<VkDescriptorSetLayoutBinding, 5> iblBindings{
+    // binding 0: t_iblDiffuse, 1: t_iblSpecular, 2: t_sheenLut, 3: s_iblLinear, 4: t_envRaw (sky), 5: t_brdfLut
+    const std::array<VkDescriptorSetLayoutBinding, 6> iblBindings{
         VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        VkDescriptorSetLayoutBinding{5, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
     };
-    const std::array<VkDescriptorBindingFlags, 5> iblBindingFlags{kUAB, kUAB, kUAB, kUAB, kUAB};
+    const std::array<VkDescriptorBindingFlags, 6> iblBindingFlags{kUAB, kUAB, kUAB, kUAB, kUAB, kUAB};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo iblBindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = static_cast<uint32_t>(iblBindingFlags.size()),
@@ -421,7 +436,7 @@ bool ForwardRenderer::createPipeline() {
     // Single pool for all four sets.
     const std::array<VkDescriptorPoolSize, 5> poolSizes{
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 11},
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 4},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 5},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLER, 1},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},

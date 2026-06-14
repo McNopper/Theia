@@ -12,6 +12,7 @@ namespace theia {
 
 struct IblResources {
     Image sheenLut;                        // 512×512 R16F  — Charlie sheen directional albedo
+    Image brdfLut;                         // 512×512 RG16F — GGX split-sum BRDF integration (A/B)
     Image diffuseIrrad;                    // 256×128 RGBA16F — Lambertian-convolved irradiance
     Image specularMipped;                  // 512×256 RGBA16F, 8 mip levels — GGX prefiltered specular
     VkSampler lutSampler = VK_NULL_HANDLE; // clamp+linear, no mip (for sheenLut)
@@ -50,6 +51,7 @@ class IblPrecompute {
   private:
     bool createTextures();
     bool createSamplers();
+    bool runBrdfLutPass(VkCommandBuffer cmd);
     bool runSheenLutPass(VkCommandBuffer cmd);
     bool runDiffusePass(VkCommandBuffer cmd);
     bool runSpecularPass(VkCommandBuffer cmd);

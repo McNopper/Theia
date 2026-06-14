@@ -45,6 +45,7 @@ set(THEIA_ENTRY_SHADERS
     forward_render.frag.slang
     sky.vert.slang
     sky.frag.slang
+    ibl_brdf_lut.comp.slang
     ibl_sheen_lut.comp.slang
     ibl_diffuse.comp.slang
     ibl_specular.comp.slang

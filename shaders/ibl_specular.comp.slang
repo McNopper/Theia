@@ -69,7 +69,7 @@ void main(uint3 tid : SV_DispatchThreadID)
         return;
     }
 
-    const uint sampleCount = 256;
+    const uint sampleCount = 1024;
     float2 uv = (float2(tid.xy) + 0.5) / float2(float(width), float(height));
     float3 N = latlongToDir(uv);
     float3 V = N;
