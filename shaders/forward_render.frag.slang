@@ -39,11 +39,12 @@ cbuffer ForwardPC {
 [[vk::binding(5, 1)]] RaytracingAccelerationStructure t_tlas;
 
 // Set 2: IBL textures
-// Bindings: 0=diffuse irradiance, 1=specular prefilter (mipped), 2=sheen LUT, 3=sampler, 5=GGX BRDF LUT
+// Bindings: 0=diffuse irradiance, 1=specular prefilter (mipped), 2=sheen LUT, 3=sampler, 4=raw env, 5=GGX BRDF LUT
 [[vk::binding(0, 2)]] Texture2D<float4> t_iblDiffuse;
 [[vk::binding(1, 2)]] Texture2D<float4> t_iblSpecular;
 [[vk::binding(2, 2)]] Texture2D<float>  t_sheenLut;
 [[vk::binding(3, 2)]] SamplerState      s_iblLinear;
+[[vk::binding(4, 2)]] Texture2D<float4> t_envRaw;
 [[vk::binding(5, 2)]] Texture2D<float2> t_brdfLut;
 
 // Set 3: bindless material textures (base_color, normal, ORM, emission).
@@ -98,6 +99,11 @@ float2 mx_ggx_dir_albedo_AB(float NdotV, float alpha) {
 /// Roughness → mip level for the prefiltered specular map (8 mip levels, linear distribution).
 float roughnessToLod(float roughness) {
     return roughness * 7.0; // mip 0 = roughness 0, mip 7 = roughness 1
+}
+
+float3 sampleSpecularEnv(float3 dir, float roughness, float gain) {
+    const float2 uv = dirToLatlong(dir);
+    return gain * t_iblSpecular.SampleLevel(s_iblLinear, uv, roughnessToLod(roughness)).xyz;
 }
 
 /// IBL evaluation per OpenPBR layer, matching MaterialX split-sum:
@@ -172,12 +178,13 @@ float3 evalIBL(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B)
         float  bend         = baseAniso * saturate(5.0 * baseRough);
         Rbase = reflect(-wo, normalize(lerp(N, anisoNormal, bend)));
     }
-    // Small compensation for split-sum under-energy vs path-traced multi-bounce specular.
-    const float iblSpecularGain = 1.10;
-    float3 prefilteredBase =
-        iblSpecularGain * t_iblSpecular.SampleLevel(s_iblLinear, dirToLatlong(Rbase), roughnessToLod(baseRough)).xyz;
-    float3 prefilteredCoat =
-        iblSpecularGain * t_iblSpecular.SampleLevel(s_iblLinear, dirToLatlong(R), roughnessToLod(coatRough)).xyz;
+    // Compensation for split-sum under-energy vs path-traced multi-bounce specular.
+    // Stronger for smooth lobes (where missing high-frequency env energy is most visible),
+    // tapering toward rough surfaces.
+    const float iblSpecularGainBase = lerp(1.70, 1.00, saturate(baseRough * 1.35));
+    const float iblSpecularGainCoat = lerp(1.55, 1.00, saturate(coatRough * 1.35));
+    float3 prefilteredBase = sampleSpecularEnv(Rbase, baseRough, iblSpecularGainBase);
+    float3 prefilteredCoat = sampleSpecularEnv(R, coatRough, iblSpecularGainCoat);
 
     // Base layer IBL: specular computed first so its directional albedo (FG) can
     // mask the diffuse — matching MaterialX mx_layer_bsdf energy conservation.
@@ -249,8 +256,7 @@ float3 evalIBL(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B)
             // IBL refraction: sample the prefiltered environment radiance in the
             // refracted direction at the transmission roughness (MaterialX
             // mx_environment_prefilter convention for the transmission lobe).
-            refracted = iblSpecularGain * t_iblSpecular.SampleLevel(s_iblLinear,
-                dirToLatlong(normalize(refrDir)), roughnessToLod(baseRough)).xyz;
+            refracted = sampleSpecularEnv(normalize(refrDir), baseRough, iblSpecularGainBase);
         }
         float3 glass = Fr * prefilteredBase + (1.0 - Fr) * refracted * transTint;
         baseLo += baseLayerScale * transmissionWeight * glass;
