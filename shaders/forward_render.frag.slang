@@ -351,7 +351,7 @@ float3 shadeRectLight(GpuLight light, GpuMaterial mat, float3 worldPos, float3 w
     const float3 Lt = normalize(cross(up, Ln));
     const float3 Lb = cross(Ln, Lt);
 
-    const int   NS = 7;
+    const int   NS = 11;
     const float dA = (4.0 * light.halfWidth * light.halfHeight) / float(NS * NS);
 
     float3 acc = 0..xxx;
@@ -460,6 +460,12 @@ FS_OUT main(FS_IN input) {
     // Outgoing direction: surface to camera.
     const float3 wo = normalize(cameraPos.xyz - input.worldPos);
 
+    // Match Hyperion emissive-hit behavior: emissive triangles are one-sided and
+    // terminate primary shading when seen from their emitting side.
+    const float3 rawEmission = mat.emissionColorLum.xyz * mat.emissionColorLum.w;
+    const float3 emission = (dot(wo, input.normal) > 0.0) ? rawEmission : 0..xxx;
+    const bool hitVisibleEmitter = max(emission.x, max(emission.y, emission.z)) > 0.0;
+
     float3 Lo = 0..xxx;
 
     // Ray-traced shadows: offset the ray origin slightly along the shading normal to
@@ -467,46 +473,46 @@ FS_OUT main(FS_IN input) {
     const float  shadowBias   = shadowParams.x;
     const float3 shadowOrigin = input.worldPos + N * shadowBias;
 
-    // Tile-based direct lighting (Forward+).
-    // When tilesX == 0 (fallback), evaluate all lights directly.
-    static const uint kMaxLightsPerTile = 128;
-    if (tilesX > 0 && tilesY > 0) {
-        const uint tileX = uint(input.pos.x) / 16u;
-        const uint tileY = uint(input.pos.y) / 16u;
-        const uint tileId = clamp(tileY, 0u, tilesY - 1u) * tilesX
-                          + clamp(tileX, 0u, tilesX - 1u);
-        const uint tileCount = min(tileLightCounts[tileId], kMaxLightsPerTile);
-        for (uint j = 0; j < tileCount; ++j) {
-            const uint i = tileLightIndices[tileId * kMaxLightsPerTile + j];
-            if (i >= lightCount) continue;
-            Lo += shadeOneLight(lights[i], mat, input.worldPos, wo, N, T, B, shadowOrigin, shadowBias);
+    if (!hitVisibleEmitter) {
+        // Tile-based direct lighting (Forward+).
+        // When tilesX == 0 (fallback), evaluate all lights directly.
+        static const uint kMaxLightsPerTile = 128;
+        if (tilesX > 0 && tilesY > 0) {
+            const uint tileX = uint(input.pos.x) / 16u;
+            const uint tileY = uint(input.pos.y) / 16u;
+            const uint tileId = clamp(tileY, 0u, tilesY - 1u) * tilesX
+                              + clamp(tileX, 0u, tilesX - 1u);
+            const uint tileCount = min(tileLightCounts[tileId], kMaxLightsPerTile);
+            for (uint j = 0; j < tileCount; ++j) {
+                const uint i = tileLightIndices[tileId * kMaxLightsPerTile + j];
+                if (i >= lightCount) continue;
+                Lo += shadeOneLight(lights[i], mat, input.worldPos, wo, N, T, B, shadowOrigin, shadowBias);
+            }
+        } else {
+            // Fallback: evaluate all lights (used when light culler hasn't run).
+            for (uint i = 0; i < lightCount; ++i) {
+                Lo += shadeOneLight(lights[i], mat, input.worldPos, wo, N, T, B, shadowOrigin, shadowBias);
+            }
         }
-    } else {
-        // Fallback: evaluate all lights (used when light culler hasn't run).
-        for (uint i = 0; i < lightCount; ++i) {
-            Lo += shadeOneLight(lights[i], mat, input.worldPos, wo, N, T, B, shadowOrigin, shadowBias);
-        }
-    }
 
-    // IBL with ray-traced directional ("sun") shadow.  The brightest region of the
-    // environment is treated as a dominant light; points it cannot see keep only a
-    // `skyFloor` fraction of indirect light (residual sky), giving Hyperion-style
-    // cast shadows on IBL-lit scenes.  `sunDirection.w` scales the effect by how
-    // concentrated the dominant light is (0 → no shadow, e.g. overcast skies).
-    float iblShadow = 1.0;
-    const float sunStrength = sunDirection.w;
-    if (sunStrength > 0.0) {
-        const float3 sunDir = normalize(sunDirection.xyz);
-        if (dot(N, sunDir) > 0.0) {
-            const float sunVis = traceShadow(shadowOrigin, sunDir, shadowBias, 1e16);
-            const float skyFloor = shadowParams.y;
-            iblShadow = 1.0 - sunStrength * (1.0 - skyFloor) * (1.0 - sunVis);
+        // IBL with ray-traced directional ("sun") shadow.  The brightest region of the
+        // environment is treated as a dominant light; points it cannot see keep only a
+        // `skyFloor` fraction of indirect light (residual sky), giving Hyperion-style
+        // cast shadows on IBL-lit scenes.  `sunDirection.w` scales the effect by how
+        // concentrated the dominant light is (0 → no shadow, e.g. overcast skies).
+        float iblShadow = 1.0;
+        const float sunStrength = sunDirection.w;
+        if (sunStrength > 0.0) {
+            const float3 sunDir = normalize(sunDirection.xyz);
+            if (dot(N, sunDir) > 0.0) {
+                const float sunVis = traceShadow(shadowOrigin, sunDir, shadowBias, 1e16);
+                const float skyFloor = shadowParams.y;
+                iblShadow = 1.0 - sunStrength * (1.0 - skyFloor) * (1.0 - sunVis);
+            }
         }
+        Lo += evalIBL(mat, wo, N, T, B) * iblShadow;
     }
-    Lo += evalIBL(mat, wo, N, T, B) * iblShadow;
-
     // Emission (self-luminous surfaces, e.g. Cornell box ceiling lamp geometry).
-    const float3 emission = mat.emissionColorLum.xyz * mat.emissionColorLum.w;
     Lo += emission;
 
     // Apply physical camera exposure: maps scene-linear radiance into [0,1] range

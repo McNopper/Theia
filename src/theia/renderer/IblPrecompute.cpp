@@ -60,9 +60,9 @@ VkImageView createMipView(const DeviceContext& ctx, const Image& image, uint32_t
     return view;
 }
 
-// Fill an image with a small neutral ambient value instead of black.
-// Used when no env_map is provided so scenes without an environment get a
-// subtle ambient contribution rather than pure darkness.
+// Fill an image with black when no env_map is provided.
+// Direct-light-only scenes must remain free of synthetic ambient terms so
+// Hyperion/Theia parity comparisons stay physically consistent.
 void clearNeutralAmbientImage(VkCommandBuffer cmd, const Image& image) {
     image.transition(cmd,
                      VK_IMAGE_LAYOUT_UNDEFINED,
@@ -72,13 +72,7 @@ void clearNeutralAmbientImage(VkCommandBuffer cmd, const Image& image) {
                      VK_PIPELINE_STAGE_2_TRANSFER_BIT,
                      VK_ACCESS_2_TRANSFER_WRITE_BIT);
 
-    // Faint neutral ambient as a cheap stand-in for the single indirect bounce
-    // that a path tracer (Hyperion) resolves for free.  Kept deliberately low so
-    // it does NOT flatten directional contrast: in Hyperion's non-IBL scenes
-    // surfaces that face away from the area light stay very dark (the front face
-    // of the Cornell box is nearly black).  A large constant fill washes that
-    // contrast out, so only a token amount of fill is applied here.
-    static constexpr float kAmbient = 0.015f;
+    static constexpr float kAmbient = 0.0f;
     const VkClearColorValue clearValue{{kAmbient, kAmbient, kAmbient, 1.0f}};
     const VkImageSubresourceRange range{
         .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
