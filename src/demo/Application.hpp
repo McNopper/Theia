@@ -31,7 +31,10 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     void record(VkCommandBuffer cmd, const harmonia::RenderTarget& target) noexcept override;
     void onResize(VkExtent2D extent) noexcept override;
     [[nodiscard]] VkPipelineStageFlags2 outputStageMask() const noexcept override {
-        return VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        // SSR/SSAO compute writes the final HDR pixels; with post-fx disabled
+        // (--no-postfx) the forward graphics pass is the last producer.
+        return config().postProcess ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                                    : VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
     }
     [[nodiscard]] const char* name() const noexcept override { return "Theia ForwardRenderer"; }
 

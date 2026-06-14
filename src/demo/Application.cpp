@@ -4,10 +4,12 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <string>
 #include <tuple>
 
+#include "harmonia/core/Barrier.hpp"
 #include "harmonia/core/Logger.hpp"
 #include "harmonia/renderer/Camera.hpp"
 
@@ -150,11 +152,24 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
 
     // SSR pass: linear ray march + composite into the HDR buffer.
     // Runs after the forward pass; transitions HDR to GENERAL and leaves it there.
-    if (m_ssrPass.isInitialized()) {
+    // Skipped under --no-postfx (parity comparison contract: SSR/SSAO/bloom off).
+    if (config().postProcess && m_ssrPass.isInitialized()) {
         glm::mat4 proj =
             glm::perspective(glm::radians(m_camera.vfovDeg), aspect, m_camera.nearPlane, m_camera.farPlane);
         proj[1][1] *= -1.0f;
         m_ssrPass.dispatch(cmd, proj, glm::inverse(proj));
+    } else {
+        // Post-fx skipped: the forward pass left the HDR image in
+        // ATTACHMENT_OPTIMAL, but the host's tonemap pass requires GENERAL
+        // (IRenderer contract). Issue the transition the SSR pass would have.
+        const std::array hdrToGeneral{harmonia::imageBarrier(target.image,
+                                                             VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                                                             VK_IMAGE_LAYOUT_GENERAL,
+                                                             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                                             VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                                             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                                             VK_ACCESS_2_SHADER_READ_BIT)};
+        harmonia::pipelineBarrier(cmd, hdrToGeneral);
     }
 }
 
