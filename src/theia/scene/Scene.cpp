@@ -19,61 +19,10 @@
 #include <vma/vk_mem_alloc.h>
 
 #include "harmonia/GpuTypes.hpp"
+#include "harmonia/core/Buffer.hpp"
 #include "harmonia/core/Logger.hpp"
 #include "harmonia/scene/Geometry.hpp"
 #include "harmonia/scene/ProceduralGeometry.hpp"
-
-namespace {
-[[nodiscard]] constexpr VkDeviceSize alignUp(VkDeviceSize value, VkDeviceSize alignment) noexcept {
-    return alignment == 0 ? value : ((value + alignment - 1) / alignment) * alignment;
-}
-
-[[nodiscard]] std::expected<Buffer, VkResult> uploadBytes(const DeviceContext& ctx,
-                                                          const CommandPool& pool,
-                                                          std::span<const std::byte> bytes,
-                                                          VkBufferUsageFlags usage,
-                                                          std::string_view name) {
-    const VkDeviceSize size = std::max<VkDeviceSize>(bytes.size(), 16);
-
-    auto deviceBuffer =
-        Buffer::create(ctx, size, usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT, VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, name);
-    if (!deviceBuffer) {
-        return std::unexpected(deviceBuffer.error());
-    }
-
-    auto staging = Buffer::create(ctx,
-                                  size,
-                                  VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                  VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
-                                  std::string(name).append(".staging"));
-    if (!staging) {
-        return std::unexpected(staging.error());
-    }
-
-    if (!bytes.empty()) {
-        staging->uploadData(bytes.data(), bytes.size(), 0);
-    }
-
-    auto cmd = pool.beginOneShot();
-    if (!cmd) {
-        return std::unexpected(cmd.error());
-    }
-
-    const VkBufferCopy copy{
-        .srcOffset = 0,
-        .dstOffset = 0,
-        .size = size,
-    };
-    vkCmdCopyBuffer(*cmd, staging->handle(), deviceBuffer->handle(), 1, &copy);
-
-    if (const VkResult result = pool.endOneShot(*cmd); result != VK_SUCCESS) {
-        return std::unexpected(result);
-    }
-
-    return std::move(*deviceBuffer);
-}
-
-} // namespace
 
 uint32_t Scene::addMaterial(Material mat) {
     m_materials.push_back(std::move(mat));
@@ -286,26 +235,26 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     }
 
     auto instanceBuf =
-        uploadBytes(ctx,
-                    pool,
-                    std::as_bytes(std::span<const GpuInstance>(m_instances.data(), m_instances.size())),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    "scene.instances");
+        Buffer::upload(ctx,
+                       pool,
+                       std::as_bytes(std::span<const GpuInstance>(m_instances.data(), m_instances.size())),
+                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                       "scene.instances");
     if (!instanceBuf) {
         return instanceBuf.error();
     }
 
     auto materialBuf =
-        uploadBytes(ctx,
-                    pool,
-                    std::as_bytes(std::span<const GpuMaterial>(gpuMaterials.data(), gpuMaterials.size())),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    "scene.materials");
+        Buffer::upload(ctx,
+                       pool,
+                       std::as_bytes(std::span<const GpuMaterial>(gpuMaterials.data(), gpuMaterials.size())),
+                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                       "scene.materials");
     if (!materialBuf) {
         return materialBuf.error();
     }
 
-    auto vertexBuf = uploadBytes(ctx,
+    auto vertexBuf = Buffer::upload(ctx,
                                     pool,
                                     std::as_bytes(std::span<const GpuVertex>(vertices.data(), vertices.size())),
                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
@@ -314,7 +263,7 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
         return vertexBuf.error();
     }
 
-    auto indexBuf = uploadBytes(ctx,
+    auto indexBuf = Buffer::upload(ctx,
                                    pool,
                                    std::as_bytes(std::span<const uint32_t>(indices.data(), indices.size())),
                                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
@@ -323,7 +272,7 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
         return indexBuf.error();
     }
 
-    auto meshletBuf = uploadBytes(ctx,
+    auto meshletBuf = Buffer::upload(ctx,
                                      pool,
                                      std::as_bytes(std::span<const GpuMeshlet>(gpuMeshlets.data(), gpuMeshlets.size())),
                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
@@ -333,21 +282,21 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     }
 
     auto meshletVertexBuf =
-        uploadBytes(ctx,
-                    pool,
-                    std::as_bytes(std::span<const uint32_t>(meshletVertices.data(), meshletVertices.size())),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    "scene.meshletVertices");
+        Buffer::upload(ctx,
+                       pool,
+                       std::as_bytes(std::span<const uint32_t>(meshletVertices.data(), meshletVertices.size())),
+                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                       "scene.meshletVertices");
     if (!meshletVertexBuf) {
         return meshletVertexBuf.error();
     }
 
     auto meshletTriangleBuf =
-        uploadBytes(ctx,
-                    pool,
-                    std::as_bytes(std::span<const uint32_t>(meshletTriangles.data(), meshletTriangles.size())),
-                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                    "scene.meshletTriangles");
+        Buffer::upload(ctx,
+                       pool,
+                       std::as_bytes(std::span<const uint32_t>(meshletTriangles.data(), meshletTriangles.size())),
+                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                       "scene.meshletTriangles");
     if (!meshletTriangleBuf) {
         return meshletTriangleBuf.error();
     }
@@ -539,7 +488,7 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     if (gpuLights.empty()) {
         gpuLights.push_back(GpuLight{});
     }
-    auto lightBuf = uploadBytes(ctx,
+    auto lightBuf = Buffer::upload(ctx,
                                    pool,
                                    std::as_bytes(std::span<const GpuLight>(gpuLights.data(), gpuLights.size())),
                                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
@@ -606,7 +555,7 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     if (emissiveTriangles.empty()) {
         emissiveTriangles.push_back(GpuEmissiveTriangle{}); // sentinel — keeps the binding valid
     }
-    auto emissiveBuf = uploadBytes(
+    auto emissiveBuf = Buffer::upload(
         ctx,
         pool,
         std::as_bytes(std::span<const GpuEmissiveTriangle>(emissiveTriangles.data(), emissiveTriangles.size())),
@@ -631,7 +580,7 @@ VkResult Scene::buildTlas(const DeviceContext& ctx, const CommandPool& pool) {
         instances[i].mask = isEmissive ? 0x01u : 0xFFu;
     }
 
-    auto instanceUpload = uploadBytes(
+    auto instanceUpload = Buffer::upload(
         ctx,
         pool,
         std::as_bytes(std::span<const VkAccelerationStructureInstanceKHR>(instances.data(), instances.size())),
@@ -699,7 +648,7 @@ VkResult Scene::buildTlas(const DeviceContext& ctx, const CommandPool& pool) {
 
     buildInfo.dstAccelerationStructure = tlasAS->handle();
     buildInfo.scratchData.deviceAddress =
-        alignUp(scratch->deviceAddress(), asProps.minAccelerationStructureScratchOffsetAlignment);
+        bufferAlignUp(scratch->deviceAddress(), asProps.minAccelerationStructureScratchOffsetAlignment);
     const VkAccelerationStructureBuildRangeInfoKHR rangeInfo{
         .primitiveCount = primitiveCount,
         .primitiveOffset = 0,

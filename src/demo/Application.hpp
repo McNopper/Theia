@@ -24,7 +24,8 @@ namespace theia {
 /// light culling, SSR, IBL precompute, the Scene and the interactive camera
 /// controller.  Per the host contract, record() produces a linear image in
 /// the scene-referred working color space and leaves it in
-/// VK_IMAGE_LAYOUT_GENERAL (the SSR pass already does).
+/// VK_IMAGE_LAYOUT_GENERAL (SSR does this when post-fx is active; record()
+/// issues the transition explicitly otherwise).
 class Application final : public harmonia::App, public harmonia::IRenderer {
   public:
     // harmonia::IRenderer
@@ -36,6 +37,9 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
         // --no-postfx (or SSR uninitialized) the forward graphics pass is last.
         return postFxActive() ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
                               : VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    }
+    [[nodiscard]] VkAccessFlags2 outputAccessMask() const noexcept override {
+        return postFxActive() ? VK_ACCESS_2_SHADER_WRITE_BIT : VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
     }
     [[nodiscard]] const char* name() const noexcept override { return "Theia ForwardRenderer"; }
 
