@@ -1,7 +1,22 @@
-# Placeholder tests CMakeLists.txt for Theia
-# TODO: Add unit tests as the project develops
+include(GoogleTest)
 
-# For now, disable tests
-# add_executable(theia_tests ...)
-# target_link_libraries(theia_tests PRIVATE theia_lib GTest::gtest_main)
-# add_test(NAME TheiaTests COMMAND theia_tests)
+# ---------------------------------------------------------------------------
+# Module tests — GPU scene build workflows (TLAS + meshlet/light buffers)
+# ---------------------------------------------------------------------------
+set(THEIA_MODULE_TEST_SOURCES
+    module/main.cpp
+    module/test_scene_build.cpp
+)
+
+add_executable(theia_module_tests ${THEIA_MODULE_TEST_SOURCES})
+add_dependencies(theia_module_tests theia_shaders)
+target_link_libraries(theia_module_tests
+    PRIVATE
+        theia_demo
+        GTest::gtest
+)
+target_include_directories(theia_module_tests PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../src"
+    "${harmonia_SOURCE_DIR}/tests"
+)
+gtest_discover_tests(theia_module_tests)
