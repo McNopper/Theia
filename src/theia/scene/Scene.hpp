@@ -60,8 +60,11 @@ class Scene : public ISceneBuilder {
                                    MeshData data,
                                    uint32_t materialIdx,
                                    std::string_view name = "") override;
-    [[nodiscard]] uint32_t
-    addSphere(const DeviceContext& ctx, const CommandPool& pool, glm::vec3 center, float radius, uint32_t materialIdx) override;
+    [[nodiscard]] uint32_t addSphere(const DeviceContext& ctx,
+                                     const CommandPool& pool,
+                                     glm::vec3 center,
+                                     float radius,
+                                     uint32_t materialIdx) override;
 
     /// Add a light to the scene. Returns the light index.
     /// Must be called before build().

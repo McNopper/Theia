@@ -104,18 +104,17 @@ bool Application::onSceneLoaded(const SceneLoader::SceneConfig& sceneConfig) {
     // IBL: the host loaded the environment probe (if any); precompute the
     // renderer-specific BRDF LUT / irradiance resources from it.
     const bool hasEnv = iblProbe().has_value() && iblProbe()->isValid();
-    const VkImageView envView    = hasEnv ? iblProbe()->imageView() : VK_NULL_HANDLE;
-    const VkSampler   envSampler = hasEnv ? iblProbe()->sampler()   : VK_NULL_HANDLE;
-    const float       envNits    = sceneConfig.envUnitNits.value_or(1.0f);
+    const VkImageView envView = hasEnv ? iblProbe()->imageView() : VK_NULL_HANDLE;
+    const VkSampler envSampler = hasEnv ? iblProbe()->sampler() : VK_NULL_HANDLE;
+    const float envNits = sceneConfig.envUnitNits.value_or(1.0f);
     // CDF buffers for env importance sampling in the diffuse irradiance precompute.
-    const VkBuffer marginalCdf    = hasEnv ? iblProbe()->marginalCdfBuffer().handle()    : VK_NULL_HANDLE;
+    const VkBuffer marginalCdf = hasEnv ? iblProbe()->marginalCdfBuffer().handle() : VK_NULL_HANDLE;
     const VkBuffer conditionalCdf = hasEnv ? iblProbe()->conditionalCdfBuffer().handle() : VK_NULL_HANDLE;
-    const uint32_t cdfW           = hasEnv ? iblProbe()->cdfWidth()  : 0u;
-    const uint32_t cdfH           = hasEnv ? iblProbe()->cdfHeight() : 0u;
+    const uint32_t cdfW = hasEnv ? iblProbe()->cdfWidth() : 0u;
+    const uint32_t cdfH = hasEnv ? iblProbe()->cdfHeight() : 0u;
 
-    if (!m_ibl.initialize(deviceContext(), commandPool(),
-                          envView, envSampler, envNits,
-                          marginalCdf, conditionalCdf, cdfW, cdfH)) {
+    if (!m_ibl.initialize(
+            deviceContext(), commandPool(), envView, envSampler, envNits, marginalCdf, conditionalCdf, cdfW, cdfH)) {
         Logger::error("IBL precomputation failed");
         return false;
     }
@@ -134,7 +133,8 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
 
     // Forward+ light culling compute pass (runs before geometry rendering).
     if (m_scene && m_scene->lightCount() > 0 && m_lightCuller.tilesX() > 0) {
-        glm::mat4 proj = glm::perspective(glm::radians(m_camera.vfovDeg), aspect, m_camera.nearPlane, m_camera.farPlane);
+        glm::mat4 proj =
+            glm::perspective(glm::radians(m_camera.vfovDeg), aspect, m_camera.nearPlane, m_camera.farPlane);
         proj[1][1] *= -1.0f;
         const glm::mat4 view = glm::lookAt(m_camera.position, m_camera.target, m_camera.up);
         m_lightCuller.dispatch(cmd,
@@ -151,7 +151,8 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
     // SSR pass: linear ray march + composite into the HDR buffer.
     // Runs after the forward pass; transitions HDR to GENERAL and leaves it there.
     if (m_ssrPass.isInitialized()) {
-        glm::mat4 proj = glm::perspective(glm::radians(m_camera.vfovDeg), aspect, m_camera.nearPlane, m_camera.farPlane);
+        glm::mat4 proj =
+            glm::perspective(glm::radians(m_camera.vfovDeg), aspect, m_camera.nearPlane, m_camera.farPlane);
         proj[1][1] *= -1.0f;
         m_ssrPass.dispatch(cmd, proj, glm::inverse(proj));
     }

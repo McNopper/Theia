@@ -386,9 +386,9 @@ bool IblPrecompute::runDiffusePass(VkCommandBuffer cmd) {
     //           2=outIrrad (STORAGE_IMAGE),
     //           3=marginalCdf (STORAGE_BUFFER), 4=conditionalCdf (STORAGE_BUFFER)
     const std::array<VkDescriptorSetLayoutBinding, 5> bindings{
-        VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-        VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_SAMPLER,        1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
-        VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,  1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
         VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
         VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
     };
@@ -406,9 +406,9 @@ bool IblPrecompute::runDiffusePass(VkCommandBuffer cmd) {
     m_tempSetLayouts.push_back(setLayout);
 
     const std::array<VkDescriptorPoolSize, 4> poolSizes{
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  1},
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLER,        1},
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,  1},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLER, 1},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
         // Storage buffers (marginal + conditional CDF) counted together:
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2},
     };
@@ -427,7 +427,7 @@ bool IblPrecompute::runDiffusePass(VkCommandBuffer cmd) {
     m_tempDescriptorPools.push_back(descriptorPool);
 
     struct DiffusePC {
-        float    envScale;
+        float envScale;
         uint32_t cdfWidth;
         uint32_t cdfHeight;
         uint32_t _pad{0};
@@ -465,16 +465,56 @@ bool IblPrecompute::runDiffusePass(VkCommandBuffer cmd) {
     const VkDescriptorBufferInfo conditionalInfo{m_conditionalCdf, 0, VK_WHOLE_SIZE};
 
     const std::array<VkWriteDescriptorSet, 5> writes{
-        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSet,
-                             0, 0, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  &envImageInfo,    nullptr, nullptr},
-        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSet,
-                             1, 0, 1, VK_DESCRIPTOR_TYPE_SAMPLER,        &envSamplerInfo,  nullptr, nullptr},
-        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSet,
-                             2, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,  &outIrradInfo,    nullptr, nullptr},
-        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSet,
-                             3, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &marginalInfo,    nullptr},
-        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSet,
-                             4, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &conditionalInfo, nullptr},
+        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                             nullptr,
+                             descriptorSet,
+                             0,
+                             0,
+                             1,
+                             VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+                             &envImageInfo,
+                             nullptr,
+                             nullptr},
+        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                             nullptr,
+                             descriptorSet,
+                             1,
+                             0,
+                             1,
+                             VK_DESCRIPTOR_TYPE_SAMPLER,
+                             &envSamplerInfo,
+                             nullptr,
+                             nullptr},
+        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                             nullptr,
+                             descriptorSet,
+                             2,
+                             0,
+                             1,
+                             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                             &outIrradInfo,
+                             nullptr,
+                             nullptr},
+        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                             nullptr,
+                             descriptorSet,
+                             3,
+                             0,
+                             1,
+                             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                             nullptr,
+                             &marginalInfo,
+                             nullptr},
+        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                             nullptr,
+                             descriptorSet,
+                             4,
+                             0,
+                             1,
+                             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                             nullptr,
+                             &conditionalInfo,
+                             nullptr},
     };
     vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 
@@ -523,9 +563,9 @@ bool IblPrecompute::runSpecularPass(VkCommandBuffer cmd) {
     // One descriptor set per mip level — all sets are fully written before
     // any CB recording begins, so no descriptor set is ever updated while bound.
     const std::array<VkDescriptorPoolSize, 3> poolSizes{
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  mipCount},
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLER,        mipCount},
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,  mipCount},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, mipCount},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLER, mipCount},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, mipCount},
     };
     const VkDescriptorPoolCreateInfo poolInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -574,12 +614,36 @@ bool IblPrecompute::runSpecularPass(VkCommandBuffer cmd) {
 
         const VkDescriptorImageInfo outputInfo{VK_NULL_HANDLE, mipView, VK_IMAGE_LAYOUT_GENERAL};
         const std::array<VkWriteDescriptorSet, 3> writes{
-            VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, mipSets[mip],
-                                 0, 0, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &envImageInfo,   nullptr, nullptr},
-            VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, mipSets[mip],
-                                 1, 0, 1, VK_DESCRIPTOR_TYPE_SAMPLER,       &envSamplerInfo, nullptr, nullptr},
-            VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, mipSets[mip],
-                                 2, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &outputInfo,     nullptr, nullptr},
+            VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                 nullptr,
+                                 mipSets[mip],
+                                 0,
+                                 0,
+                                 1,
+                                 VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+                                 &envImageInfo,
+                                 nullptr,
+                                 nullptr},
+            VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                 nullptr,
+                                 mipSets[mip],
+                                 1,
+                                 0,
+                                 1,
+                                 VK_DESCRIPTOR_TYPE_SAMPLER,
+                                 &envSamplerInfo,
+                                 nullptr,
+                                 nullptr},
+            VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                                 nullptr,
+                                 mipSets[mip],
+                                 2,
+                                 0,
+                                 1,
+                                 VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                                 &outputInfo,
+                                 nullptr,
+                                 nullptr},
         };
         vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
@@ -596,13 +660,14 @@ bool IblPrecompute::runSpecularPass(VkCommandBuffer cmd) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
 
     for (uint32_t mip = 0; mip < mipCount; ++mip) {
-        const float roughness = (mipCount > 1)
-                                    ? static_cast<float>(mip) / static_cast<float>(mipCount - 1)
-                                    : 0.0f;
-        const uint32_t mipWidth  = std::max(1u, kSpecularExtent.width  >> mip);
+        const float roughness = (mipCount > 1) ? static_cast<float>(mip) / static_cast<float>(mipCount - 1) : 0.0f;
+        const uint32_t mipWidth = std::max(1u, kSpecularExtent.width >> mip);
         const uint32_t mipHeight = std::max(1u, kSpecularExtent.height >> mip);
 
-        const struct { float roughness; float envScale; } pc{roughness, m_envUnitNits};
+        const struct {
+            float roughness;
+            float envScale;
+        } pc{roughness, m_envUnitNits};
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &mipSets[mip], 0, nullptr);
         vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
         vkCmdDispatch(cmd, dispatchCount(mipWidth), dispatchCount(mipHeight), 1);
