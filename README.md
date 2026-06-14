@@ -195,6 +195,13 @@ build/theia.exe --scene cornell_classic --output out.exr
 | `--no-postfx` | off | Disable SSR/SSAO/bloom (required for locked parity comparison renders) |
 | `--indirect-ambient <x>` | `0.0` | Presentation-only constant indirect ambient boost (scene-linear); keep `0.0` for parity fixtures |
 
+### Indirect-light divergence policy
+Theia is a real-time renderer and currently uses a presentation-only approximation for
+missing bounce light (`--indirect-ambient`). This intentionally does **not** match
+Hyperion's multi-bounce path tracing. For parity measurements and fixture diffs, keep
+`--indirect-ambient 0.0` and `--no-postfx`; non-zero ambient is acceptable only for
+interactive presentation quality.
+
 ---
 
 ## Tests
