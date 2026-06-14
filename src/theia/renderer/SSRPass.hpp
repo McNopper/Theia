@@ -74,10 +74,10 @@ class SSRPass {
     static_assert(sizeof(SSRPushConstants) == 128);
 
     struct CompositePushConstants {
-        float ssrStrength;
-        float roughnessMax;
-        float _pad0;
-        float _pad1;
+        float ssrStrength  = 0.0f;
+        float roughnessMax = 0.0f;
+        float _pad0        = 0.0f;
+        float _pad1        = 0.0f;
     };
     static_assert(sizeof(CompositePushConstants) == 16);
 
@@ -85,10 +85,10 @@ class SSRPass {
     struct SSAOPushConstants {
         glm::mat4 proj;    ///< GLM projection (not transposed)
         glm::mat4 invProj; ///< inverse(proj)
-        float radius;      ///< view-space sampling radius (scene units)
-        float intensity;   ///< occlusion strength multiplier
-        float bias;        ///< depth bias to avoid self-occlusion
-        float power;       ///< AO falloff exponent
+        float radius    = 0.0f; ///< view-space sampling radius (scene units)
+        float intensity = 0.0f; ///< occlusion strength multiplier
+        float bias      = 0.0f; ///< depth bias to avoid self-occlusion
+        float power     = 0.0f; ///< AO falloff exponent
     };
     static_assert(sizeof(SSAOPushConstants) == 144);
 
@@ -96,8 +96,8 @@ class SSRPass {
     struct SSAOBlurPushConstants {
         glm::mat4 invProj;   ///< inverse(proj), to linearise depth for edge-aware weighting
         glm::vec2 texelSize; ///< 1/width, 1/height
-        float _pad0;
-        float _pad1;
+        float     _pad0 = 0.0f;
+        float     _pad1 = 0.0f;
     };
     static_assert(sizeof(SSAOBlurPushConstants) == 80);
 

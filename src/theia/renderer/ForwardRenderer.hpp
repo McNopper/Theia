@@ -94,15 +94,15 @@ class ForwardRenderer {
     struct MeshPushConstants {
         glm::mat4 viewProj; ///< transposed for Slang mul(pos, mat) convention
         glm::mat4 view;
-        glm::vec4 cameraPos; ///< xyz = world-space camera position
-        float exposure;      ///< 1 / (1.2 * 2^EV100) — same as Hyperion
-        uint32_t lightCount;
-        uint32_t emissiveTriangleCount;
-        uint32_t tilesX; ///< screen width / 16
-        uint32_t tilesY; ///< screen height / 16
-        uint32_t screenWidth;
-        uint32_t screenHeight;
-        uint32_t _pad;
+        glm::vec4 cameraPos;               ///< xyz = world-space camera position
+        float     exposure             = 0.0f; ///< 1 / (1.2 * 2^EV100) — same as Hyperion
+        uint32_t  lightCount           = 0;
+        uint32_t  emissiveTriangleCount = 0;
+        uint32_t  tilesX               = 0; ///< screen width / 16
+        uint32_t  tilesY               = 0; ///< screen height / 16
+        uint32_t  screenWidth          = 0;
+        uint32_t  screenHeight         = 0;
+        uint32_t  _pad                 = 0;
         glm::vec4 sunDirection; ///< xyz = world dir toward sun, w = shadow strength (0 disables)
         glm::vec4 shadowParams; ///< x = ray tMin (scene-scale bias), y = sky ambient floor
     };
@@ -129,10 +129,10 @@ class ForwardRenderer {
     struct SkyPushConstants {
         glm::mat4 invViewProj;
         glm::vec4 cameraPos;
-        float exposure;
-        uint32_t hasEnv;
-        float envScale; ///< env_unit_nits — physical cd/m² per raw EXR unit
-        uint32_t _pad1;
+        float    exposure  = 0.0f;
+        uint32_t hasEnv    = 0;
+        float    envScale  = 0.0f; ///< env_unit_nits — physical cd/m² per raw EXR unit
+        uint32_t _pad1     = 0;
     };
     static_assert(sizeof(SkyPushConstants) == 96);
     VkPipelineLayout m_skyPipelineLayout = VK_NULL_HANDLE;

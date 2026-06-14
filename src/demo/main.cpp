@@ -2,7 +2,7 @@
 
 #include "demo/Application.hpp"
 
-int main(int argc, char* argv[]) {
+int main(int argc, char* const argv[]) {
     harmonia::App::Config config;
     config.title = "Theia \xe2\x80\x94 Real-Time Renderer";
     config.width = 1024;

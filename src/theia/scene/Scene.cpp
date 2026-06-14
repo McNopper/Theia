@@ -285,80 +285,80 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
         meshletTriangles.push_back(0);
     }
 
-    auto instanceBuffer =
+    auto instanceBuf =
         uploadBytes(ctx,
                     pool,
                     std::as_bytes(std::span<const GpuInstance>(m_instances.data(), m_instances.size())),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                     "scene.instances");
-    if (!instanceBuffer) {
-        return instanceBuffer.error();
+    if (!instanceBuf) {
+        return instanceBuf.error();
     }
 
-    auto materialBuffer =
+    auto materialBuf =
         uploadBytes(ctx,
                     pool,
                     std::as_bytes(std::span<const GpuMaterial>(gpuMaterials.data(), gpuMaterials.size())),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                     "scene.materials");
-    if (!materialBuffer) {
-        return materialBuffer.error();
+    if (!materialBuf) {
+        return materialBuf.error();
     }
 
-    auto vertexBuffer = uploadBytes(ctx,
+    auto vertexBuf = uploadBytes(ctx,
                                     pool,
                                     std::as_bytes(std::span<const GpuVertex>(vertices.data(), vertices.size())),
                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                     "scene.vertices");
-    if (!vertexBuffer) {
-        return vertexBuffer.error();
+    if (!vertexBuf) {
+        return vertexBuf.error();
     }
 
-    auto indexBuffer = uploadBytes(ctx,
+    auto indexBuf = uploadBytes(ctx,
                                    pool,
                                    std::as_bytes(std::span<const uint32_t>(indices.data(), indices.size())),
                                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                    "scene.indices");
-    if (!indexBuffer) {
-        return indexBuffer.error();
+    if (!indexBuf) {
+        return indexBuf.error();
     }
 
-    auto meshletBuffer = uploadBytes(ctx,
+    auto meshletBuf = uploadBytes(ctx,
                                      pool,
                                      std::as_bytes(std::span<const GpuMeshlet>(gpuMeshlets.data(), gpuMeshlets.size())),
                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                      "scene.meshlets");
-    if (!meshletBuffer) {
-        return meshletBuffer.error();
+    if (!meshletBuf) {
+        return meshletBuf.error();
     }
 
-    auto meshletVertexBuffer =
+    auto meshletVertexBuf =
         uploadBytes(ctx,
                     pool,
                     std::as_bytes(std::span<const uint32_t>(meshletVertices.data(), meshletVertices.size())),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                     "scene.meshletVertices");
-    if (!meshletVertexBuffer) {
-        return meshletVertexBuffer.error();
+    if (!meshletVertexBuf) {
+        return meshletVertexBuf.error();
     }
 
-    auto meshletTriangleBuffer =
+    auto meshletTriangleBuf =
         uploadBytes(ctx,
                     pool,
                     std::as_bytes(std::span<const uint32_t>(meshletTriangles.data(), meshletTriangles.size())),
                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                     "scene.meshletTriangles");
-    if (!meshletTriangleBuffer) {
-        return meshletTriangleBuffer.error();
+    if (!meshletTriangleBuf) {
+        return meshletTriangleBuf.error();
     }
 
-    m_instanceBuffer = std::move(*instanceBuffer);
-    m_materialBuffer = std::move(*materialBuffer);
-    m_vertexBuffer = std::move(*vertexBuffer);
-    m_indexBuffer = std::move(*indexBuffer);
-    m_meshletBuffer = std::move(*meshletBuffer);
-    m_meshletVertexBuffer = std::move(*meshletVertexBuffer);
-    m_meshletTriangleBuffer = std::move(*meshletTriangleBuffer);
+    m_instanceBuffer = std::move(*instanceBuf);
+    m_materialBuffer = std::move(*materialBuf);
+    m_vertexBuffer = std::move(*vertexBuf);
+    m_indexBuffer = std::move(*indexBuf);
+    m_meshletBuffer = std::move(*meshletBuf);
+    m_meshletVertexBuffer = std::move(*meshletVertexBuf);
+    m_meshletTriangleBuffer = std::move(*meshletTriangleBuf);
     Logger::info("Scene built: {} meshlets", gpuMeshlets.size());
 
     // Light buffer — always upload at least one sentinel entry so the binding is valid.
@@ -539,15 +539,15 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     if (gpuLights.empty()) {
         gpuLights.push_back(GpuLight{});
     }
-    auto lightBuffer = uploadBytes(ctx,
+    auto lightBuf = uploadBytes(ctx,
                                    pool,
                                    std::as_bytes(std::span<const GpuLight>(gpuLights.data(), gpuLights.size())),
                                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                    "scene.lights");
-    if (!lightBuffer) {
-        return lightBuffer.error();
+    if (!lightBuf) {
+        return lightBuf.error();
     }
-    m_lightBuffer = std::move(*lightBuffer);
+    m_lightBuffer = std::move(*lightBuf);
 
     // Emissive triangle buffer — collect one GpuEmissiveTriangle per emissive mesh triangle
     // for NEE direct area sampling.  Bounding spheres are not used.
@@ -606,16 +606,16 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     if (emissiveTriangles.empty()) {
         emissiveTriangles.push_back(GpuEmissiveTriangle{}); // sentinel — keeps the binding valid
     }
-    auto emissiveTriangleBuffer = uploadBytes(
+    auto emissiveBuf = uploadBytes(
         ctx,
         pool,
         std::as_bytes(std::span<const GpuEmissiveTriangle>(emissiveTriangles.data(), emissiveTriangles.size())),
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
         "scene.emissiveTriangles");
-    if (!emissiveTriangleBuffer) {
-        return emissiveTriangleBuffer.error();
+    if (!emissiveBuf) {
+        return emissiveBuf.error();
     }
-    m_emissiveTriangleBuffer = std::move(*emissiveTriangleBuffer);
+    m_emissiveTriangleBuffer = std::move(*emissiveBuf);
 
     return VK_SUCCESS;
 }
@@ -674,10 +674,10 @@ VkResult Scene::buildTlas(const DeviceContext& ctx, const CommandPool& pool) {
     vkGetAccelerationStructureBuildSizesKHR(
         ctx.device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo, &primitiveCount, &sizeInfo);
 
-    auto tlas = AccelerationStructure::create(
+    auto tlasAS = AccelerationStructure::create(
         ctx, VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, sizeInfo.accelerationStructureSize, "scene.tlas");
-    if (!tlas) {
-        return tlas.error();
+    if (!tlasAS) {
+        return tlasAS.error();
     }
 
     VkPhysicalDeviceAccelerationStructurePropertiesKHR asProps{};
@@ -697,7 +697,7 @@ VkResult Scene::buildTlas(const DeviceContext& ctx, const CommandPool& pool) {
         return scratch.error();
     }
 
-    buildInfo.dstAccelerationStructure = tlas->handle();
+    buildInfo.dstAccelerationStructure = tlasAS->handle();
     buildInfo.scratchData.deviceAddress =
         alignUp(scratch->deviceAddress(), asProps.minAccelerationStructureScratchOffsetAlignment);
     const VkAccelerationStructureBuildRangeInfoKHR rangeInfo{
@@ -717,7 +717,7 @@ VkResult Scene::buildTlas(const DeviceContext& ctx, const CommandPool& pool) {
         return result;
     }
 
-    m_tlas = std::move(*tlas);
+    m_tlas = std::move(*tlasAS);
     m_tlasAddress = m_tlas.deviceAddress();
     return VK_SUCCESS;
 }

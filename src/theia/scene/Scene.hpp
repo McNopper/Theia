@@ -24,28 +24,28 @@ class SceneBuilder;
 /// draws meshlets, so this carries meshletOffset/meshletCount. Distinct from Hyperion's
 /// path-tracer layout, which carries indexOffset instead.
 struct GpuInstance {
-    uint32_t meshIndex;
-    uint32_t materialIndex;
-    uint32_t vertexOffset;  ///< first vertex in global vertex buffer (absolute)
-    uint32_t meshletOffset; ///< first meshlet index in meshlet buffer
-    uint32_t meshletCount;  ///< number of meshlets for this instance
-    uint32_t geometryKind;  ///< 0 = triangle mesh, 1 = sphere
-    float sphereRadius;
-    uint32_t _pad;
+    uint32_t meshIndex     = 0;
+    uint32_t materialIndex = 0;
+    uint32_t vertexOffset  = 0; ///< first vertex in global vertex buffer (absolute)
+    uint32_t meshletOffset = 0; ///< first meshlet index in meshlet buffer
+    uint32_t meshletCount  = 0; ///< number of meshlets for this instance
+    uint32_t geometryKind  = 0; ///< 0 = triangle mesh, 1 = sphere
+    float    sphereRadius  = 0.0f;
+    uint32_t _pad          = 0;
 };
 static_assert(std::is_trivially_copyable_v<GpuInstance>);
 static_assert(sizeof(GpuInstance) == 32);
 
 /// Per-meshlet descriptor uploaded to GPU (std430, 32 bytes).
 struct GpuMeshlet {
-    uint32_t vertexOffset;   ///< first entry in meshletVertices[]
-    uint32_t triangleOffset; ///< first uint32 in meshletTriangles[] (holds 4 packed uint8)
-    uint32_t vertexCount;    ///< number of vertices  (<= 64)
-    uint32_t triangleCount;  ///< number of triangles (<= 124)
-    float centerX;
-    float centerY;
-    float centerZ;
-    float radius; ///< bounding sphere radius for task-shader culling
+    uint32_t vertexOffset   = 0; ///< first entry in meshletVertices[]
+    uint32_t triangleOffset = 0; ///< first uint32 in meshletTriangles[] (holds 4 packed uint8)
+    uint32_t vertexCount    = 0; ///< number of vertices  (<= 64)
+    uint32_t triangleCount  = 0; ///< number of triangles (<= 124)
+    float    centerX        = 0.0f;
+    float    centerY        = 0.0f;
+    float    centerZ        = 0.0f;
+    float    radius         = 0.0f; ///< bounding sphere radius for task-shader culling
 };
 static_assert(std::is_trivially_copyable_v<GpuMeshlet>);
 static_assert(sizeof(GpuMeshlet) == 32);
