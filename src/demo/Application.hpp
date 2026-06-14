@@ -31,10 +31,11 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     void record(VkCommandBuffer cmd, const harmonia::RenderTarget& target) noexcept override;
     void onResize(VkExtent2D extent) noexcept override;
     [[nodiscard]] VkPipelineStageFlags2 outputStageMask() const noexcept override {
-        // SSR/SSAO compute writes the final HDR pixels; with post-fx disabled
-        // (--no-postfx) the forward graphics pass is the last producer.
-        return config().postProcess ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-                                    : VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        // Must name the *actual* final producer of the HDR write this frame.
+        // SSR/SSAO compute writes the final pixels only when post-fx runs; with
+        // --no-postfx (or SSR uninitialized) the forward graphics pass is last.
+        return postFxActive() ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                              : VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
     }
     [[nodiscard]] const char* name() const noexcept override { return "Theia ForwardRenderer"; }
 
@@ -69,6 +70,12 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
 
     /// Compute initial yaw/pitch from a camera direction vector.
     static void directionToYawPitch(const glm::vec3& dir, float& yaw, float& pitch);
+
+    /// Single source of truth for "are screen-space post-effects running this
+    /// frame?". Both the dispatch decision in record() and the producer stage
+    /// reported via outputStageMask() must agree, or the host's pre-tonemap
+    /// barrier would name the wrong source stage.
+    [[nodiscard]] bool postFxActive() const noexcept { return config().postProcess && m_ssrPass.isInitialized(); }
 
     std::unique_ptr<ForwardRenderer> m_renderer;
     LightCuller m_lightCuller;

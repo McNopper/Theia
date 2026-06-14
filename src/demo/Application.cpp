@@ -153,7 +153,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
     // SSR pass: linear ray march + composite into the HDR buffer.
     // Runs after the forward pass; transitions HDR to GENERAL and leaves it there.
     // Skipped under --no-postfx (parity comparison contract: SSR/SSAO/bloom off).
-    if (config().postProcess && m_ssrPass.isInitialized()) {
+    if (postFxActive()) {
         glm::mat4 proj =
             glm::perspective(glm::radians(m_camera.vfovDeg), aspect, m_camera.nearPlane, m_camera.farPlane);
         proj[1][1] *= -1.0f;
