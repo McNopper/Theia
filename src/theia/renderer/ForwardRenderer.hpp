@@ -4,6 +4,8 @@
 
 #include <glm/glm.hpp>
 
+#include <algorithm>
+
 #include "harmonia/DeviceContext.hpp"
 #include "harmonia/core/Buffer.hpp"
 #include "harmonia/core/CommandPool.hpp"
@@ -75,6 +77,8 @@ class ForwardRenderer {
         m_sunDir = dirToSun;
         m_sunStrength = strength;
     }
+    /// Presentation-only constant indirect ambient term (default off for parity).
+    void setIndirectAmbient(float strength) noexcept { m_indirectAmbientStrength = std::max(0.0f, strength); }
 
     /// Update tile light list buffers (called by LightCuller each frame before recordFrame).
     void setTileBuffers(VkBuffer tileLightCounts, VkBuffer tileLightIndices, uint32_t tilesX, uint32_t tilesY);
@@ -105,8 +109,9 @@ class ForwardRenderer {
         uint32_t  _pad                 = 0;
         glm::vec4 sunDirection; ///< xyz = world dir toward sun, w = shadow strength (0 disables)
         glm::vec4 shadowParams; ///< x = ray tMin (scene-scale bias), y = sky ambient floor
+        glm::vec4 presentationParams; ///< x = indirect ambient strength (scene-linear), yzw reserved
     };
-    static_assert(sizeof(MeshPushConstants) == 208);
+    static_assert(sizeof(MeshPushConstants) == 224);
 
     bool createDepthTarget();
     bool createPipeline();
@@ -140,6 +145,7 @@ class ForwardRenderer {
     bool m_hasEnv = false;
     glm::vec3 m_sunDir{0.0f, 1.0f, 0.0f}; ///< world dir toward dominant IBL light
     float m_sunStrength = 0.0f;           ///< [0,1] ray-traced sun shadow strength
+    float m_indirectAmbientStrength = 0.0f;
 
     // Set 0: geometry buffers (vertex/instance/index/meshlet data — task + mesh stages)
     VkDescriptorSetLayout m_meshSetLayout = VK_NULL_HANDLE;

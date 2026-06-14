@@ -29,6 +29,7 @@ bool Application::onInitialize() {
         Logger::error("Failed to initialize ForwardRenderer");
         return false;
     }
+    m_renderer->setIndirectAmbient(config().indirectAmbient);
 
     // LightCuller (Forward+ tile-based light culling)
     if (!m_lightCuller.initialize(deviceContext(), swapchain().extent().width, swapchain().extent().height)) {

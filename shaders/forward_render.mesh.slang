@@ -9,7 +9,14 @@ cbuffer ForwardPC {
     float    exposure;
     uint     lightCount;
     uint     emissiveTriangleCount;
+    uint     tilesX;
+    uint     tilesY;
+    uint     screenWidth;
+    uint     screenHeight;
     uint     _pad;
+    float4   sunDirection;
+    float4   shadowParams;
+    float4   presentationParams;
 };
 
 struct GpuVertex {

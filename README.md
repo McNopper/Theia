@@ -192,6 +192,8 @@ build/theia.exe --scene cornell_classic --output out.exr
 | `--width <n>` | 1920 | Render width in pixels |
 | `--height <n>` | 1080 | Render height in pixels |
 | `--validation` / `--no-validation` | disabled | Enable / disable Vulkan validation layers |
+| `--no-postfx` | off | Disable SSR/SSAO/bloom (required for locked parity comparison renders) |
+| `--indirect-ambient <x>` | `0.0` | Presentation-only constant indirect ambient boost (scene-linear); keep `0.0` for parity fixtures |
 
 ---
 
@@ -270,4 +272,3 @@ Where a technique is shared with [Hyperion](https://github.com/McNopper/Hyperion
 | [OpenUSD](https://openusd.org/release/api/index.html) | Naming conventions: Prim, Xform, Mesh, Material, Light, Camera, Instance |
 | [glTF 2.0 Specification](https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html) | PBR material and scene graph conventions |
 | [Wavefront OBJ](http://paulbourke.net/dataformats/obj/) | Geometry-only OBJ import (no MTL — materials are assigned in the scene TOML) |
-

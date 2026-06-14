@@ -23,6 +23,7 @@ cbuffer ForwardPC {
     uint     _pad;
     float4   sunDirection;          // xyz = world dir toward sun, w = shadow strength (0 disables)
     float4   shadowParams;          // x = ray tMin (scene-scale bias), y = sky ambient floor
+    float4   presentationParams;    // x = indirect ambient strength (presentation-only), yzw reserved
 };
 
 // Set 1: material / lighting buffers
@@ -511,6 +512,13 @@ FS_OUT main(FS_IN input) {
             }
         }
         Lo += evalIBL(mat, wo, N, T, B) * iblShadow;
+
+        const float indirectAmbient = presentationParams.x;
+        if (indirectAmbient > 0.0) {
+            // Presentation-only fallback for scenes that would otherwise look too
+            // contrasty without bounce lighting. Keep disabled for parity runs.
+            Lo += mat.baseColorWeight.xyz * mat.baseColorWeight.w * indirectAmbient;
+        }
     }
     // Emission (self-luminous surfaces, e.g. Cornell box ceiling lamp geometry).
     Lo += emission;

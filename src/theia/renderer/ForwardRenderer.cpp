@@ -1112,6 +1112,7 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         // shadowParams: x = ray tMin (scene-scale bias from camera near plane), y = sky ambient floor.
         .sunDirection = glm::vec4(m_sunDir, m_hasEnv ? m_sunStrength : 0.0f),
         .shadowParams = glm::vec4(std::max(m_camera.nearPlane, 1e-4f), 0.35f, 0.0f, 0.0f),
+        .presentationParams = glm::vec4(m_indirectAmbientStrength, 0.0f, 0.0f, 0.0f),
     };
     vkCmdPushConstants(cmd,
                        m_pipelineLayout,
