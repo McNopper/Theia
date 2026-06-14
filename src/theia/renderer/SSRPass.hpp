@@ -143,7 +143,8 @@ class SSRPass {
     VkDescriptorSet m_ssaoSet = VK_NULL_HANDLE;
     float m_ssaoStrength = 1.0f;
 
-    // SSAO bilateral blur pipeline (denoises m_ssaoResult, multiplies HDR in place)
+    // SSAO bilateral blur pipeline (denoises m_ssaoResult, then attenuates the
+    // indirect/ambient fraction of HDR using the alpha channel as a weight)
     Image m_ssaoResult; ///< R16F: raw (noisy) AO factor written by SSAO pass
     VkPipeline m_ssaoBlurPipeline = VK_NULL_HANDLE;
     VkPipelineLayout m_ssaoBlurLayout = VK_NULL_HANDLE;

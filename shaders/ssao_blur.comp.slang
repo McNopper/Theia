@@ -2,8 +2,9 @@
 //
 // The raw SSAO pass (ssao.comp) produces a noisy per-pixel occlusion factor because it
 // rotates a small hemisphere kernel by a per-pixel random angle. This pass removes that
-// grain with a depth-aware (bilateral) box blur and multiplies the smoothed factor into
-// the composited HDR colour, yielding clean soft contact shadows instead of speckle.
+// grain with a depth-aware (bilateral) box blur and attenuates only the indirect/ambient
+// fraction of the composited HDR colour, yielding clean soft contact shadows instead of
+// dimming direct lighting.
 //
 // Edge-aware weighting uses view-space Z (reconstructed from depth via invProj) so the
 // blur does not bleed occlusion across depth discontinuities (e.g. a piece against the
@@ -75,5 +76,7 @@ void main(uint3 id : SV_DispatchThreadID) {
     float ao = (wSum > 0.0) ? (aoSum / wSum) : t_ao.SampleLevel(s_nearest, uv, 0.0);
 
     float4 hdr = rw_hdr[id.xy];
-    rw_hdr[id.xy] = float4(hdr.rgb * ao, hdr.a);
+    const float indirectWeight = saturate(hdr.a);
+    const float aoMix = lerp(1.0, ao, indirectWeight);
+    rw_hdr[id.xy] = float4(hdr.rgb * aoMix, hdr.a);
 }

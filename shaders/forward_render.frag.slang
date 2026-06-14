@@ -478,7 +478,8 @@ FS_OUT main(FS_IN input) {
     const float3 emission = (dot(wo, input.normal) > 0.0) ? rawEmission : 0..xxx;
     const bool hitVisibleEmitter = max(emission.x, max(emission.y, emission.z)) > 0.0;
 
-    float3 Lo = 0..xxx;
+    float3 directLo = 0..xxx;
+    float3 indirectLo = 0..xxx;
 
     // Ray-traced shadows: offset the ray origin slightly along the shading normal to
     // avoid self-intersection. `bias` is a scene-scale epsilon (camera near plane).
@@ -498,12 +499,12 @@ FS_OUT main(FS_IN input) {
             for (uint j = 0; j < tileCount; ++j) {
                 const uint i = tileLightIndices[tileId * kMaxLightsPerTile + j];
                 if (i >= lightCount) continue;
-                Lo += shadeOneLight(lights[i], mat, input.worldPos, wo, N, T, B, shadowOrigin, shadowBias);
+                directLo += shadeOneLight(lights[i], mat, input.worldPos, wo, N, T, B, shadowOrigin, shadowBias);
             }
         } else {
             // Fallback: evaluate all lights (used when light culler hasn't run).
             for (uint i = 0; i < lightCount; ++i) {
-                Lo += shadeOneLight(lights[i], mat, input.worldPos, wo, N, T, B, shadowOrigin, shadowBias);
+                directLo += shadeOneLight(lights[i], mat, input.worldPos, wo, N, T, B, shadowOrigin, shadowBias);
             }
         }
 
@@ -522,17 +523,26 @@ FS_OUT main(FS_IN input) {
                 iblShadow = 1.0 - sunStrength * (1.0 - skyFloor) * (1.0 - sunVis);
             }
         }
-        Lo += evalIBL(mat, wo, N, T, B) * iblShadow;
+        indirectLo += evalIBL(mat, wo, N, T, B) * iblShadow;
 
         const float indirectAmbient = presentationParams.x;
         if (indirectAmbient > 0.0) {
             // Presentation-only fallback for scenes that would otherwise look too
             // contrasty without bounce lighting. Keep disabled for parity runs.
-            Lo += mat.baseColorWeight.xyz * mat.baseColorWeight.w * indirectAmbient;
+            indirectLo += mat.baseColorWeight.xyz * mat.baseColorWeight.w * indirectAmbient;
         }
     }
     // Emission (self-luminous surfaces, e.g. Cornell box ceiling lamp geometry).
-    Lo += emission;
+    float3 Lo = directLo + indirectLo + emission;
+
+    // Carry an indirect-light weight in alpha so post-fx can damp ambient/IBL
+    // without dimming direct lighting. The tone mapper ignores alpha.
+    float indirectWeight = 0.0;
+    if (!hitVisibleEmitter) {
+        const float directLum = dot(max(directLo, 0.0.xxx), kRec2020Luma);
+        const float indirectLum = dot(max(indirectLo, 0.0.xxx), kRec2020Luma);
+        indirectWeight = indirectLum / max(directLum + indirectLum, 1e-6);
+    }
 
     // Apply physical camera exposure: maps scene-linear radiance into [0,1] range
     // for the ToneMapper.  Same formula as Hyperion's PhysicalCamera.
@@ -547,7 +557,7 @@ FS_OUT main(FS_IN input) {
     const float    roughness = saturate(mat.specularRoughAnisoIor.x);
 
     FS_OUT output;
-    output.hdrColor = float4(Lo, 1.0);
+    output.hdrColor = float4(Lo, indirectWeight);
     output.gbuffer  = float4(viewN * 0.5 + 0.5, roughness); // encode to [0,1]
     return output;
 }
