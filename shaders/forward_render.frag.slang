@@ -340,7 +340,7 @@ float3 evalLightWi(GpuLight light, float3 worldPos, out float3 wi) {
 /// the emitter surface (NxN samples). A single point approximation produces a hard
 /// 1/dist² hotspot; integrating over the extended source gives the smooth, even
 /// illumination of a real area light (matches Hyperion's emissive-mesh result).
-/// Visibility uses one shadow ray to the light center to keep cost bounded.
+/// Visibility is evaluated per sample to preserve soft-shadow penumbra quality.
 /// Lo = ∫ f(wo,wi) · L · cos_i · cos_l / r² dA   (L = light.color·intensity, W/sr/m²)
 float3 shadeRectLight(GpuLight light, GpuMaterial mat, float3 worldPos, float3 wo,
                       float3 N, float3 T, float3 B, float3 shadowOrigin, float shadowBias) {
@@ -351,15 +351,7 @@ float3 shadeRectLight(GpuLight light, GpuMaterial mat, float3 worldPos, float3 w
     const float3 Lt = normalize(cross(up, Ln));
     const float3 Lb = cross(Ln, Lt);
 
-    // Single visibility ray to the center.
-    const float3 toCenter = light.position - worldPos;
-    const float  distC    = length(toCenter);
-    const float3 wiC      = toCenter / max(distC, 1e-4);
-    const float  tMax     = max(distC - shadowBias, shadowBias * 2.0);
-    const float  vis      = traceShadow(shadowOrigin, wiC, shadowBias, tMax);
-    if (vis <= 0.0) { return 0..xxx; }
-
-    const int   NS = 3;
+    const int   NS = 7;
     const float dA = (4.0 * light.halfWidth * light.halfHeight) / float(NS * NS);
 
     float3 acc = 0..xxx;
@@ -379,11 +371,14 @@ float3 shadeRectLight(GpuLight light, GpuMaterial mat, float3 worldPos, float3 w
             if (NdotL <= 0.0) continue;
             const float cosL = max(dot(-wi, Ln), 0.0); // one-sided emission
             if (cosL <= 0.0) continue;
+            const float tMax = max(dist - shadowBias, shadowBias * 2.0);
+            const float vis = traceShadow(shadowOrigin, wi, shadowBias, tMax);
+            if (vis <= 0.0) continue;
             acc += evalBSDF(mat, wo, wi, N, T, B, N, T, B)
-                 * (light.intensity * NdotL * cosL * dA / distSq);
+                 * (light.intensity * NdotL * cosL * dA * vis / distSq);
         }
     }
-    return acc * light.color * vis;
+    return acc * light.color;
 }
 
 /// Full direct-lighting contribution of one light, including shadow + BSDF.
