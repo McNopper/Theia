@@ -49,3 +49,24 @@ TEST_F(RtFixture, Scene_SynthesizesLightFromEmissiveMesh) {
     EXPECT_TRUE(scene.lightBuffer().isValid());
     EXPECT_TRUE(scene.emissiveTriangleBuffer().isValid());
 }
+
+TEST_F(RtFixture, Scene_BuildEmptyFails) {
+    Scene scene;
+    const VkResult result = scene.build(deviceCtx(), commandPool());
+    EXPECT_EQ(result, VK_ERROR_INITIALIZATION_FAILED);
+}
+
+TEST_F(RtFixture, Scene_DoesNotSynthesizeLightsForNonEmissiveGeometry) {
+    Scene scene;
+    const uint32_t matDiffuse = scene.addMaterial(Material::diffuse(glm::vec3(0.7F), 1.0F));
+
+    MeshData floor = ProceduralGeometry::makeBox(glm::vec3(1.0F, 0.1F, 1.0F), glm::mat4(1.0F));
+    const uint32_t meshInst = scene.addMesh(deviceCtx(), commandPool(), std::move(floor), matDiffuse, "test.floor");
+    ASSERT_NE(meshInst, std::numeric_limits<uint32_t>::max());
+
+    ASSERT_EQ(scene.build(deviceCtx(), commandPool()), VK_SUCCESS);
+    EXPECT_EQ(scene.lightCount(), 0U);
+    EXPECT_EQ(scene.emissiveTriangleCount(), 0U);
+    EXPECT_TRUE(scene.lightBuffer().isValid());
+    EXPECT_TRUE(scene.emissiveTriangleBuffer().isValid());
+}
