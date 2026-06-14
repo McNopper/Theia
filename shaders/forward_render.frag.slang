@@ -172,8 +172,12 @@ float3 evalIBL(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B)
         float  bend         = baseAniso * saturate(5.0 * baseRough);
         Rbase = reflect(-wo, normalize(lerp(N, anisoNormal, bend)));
     }
-    float3 prefilteredBase = t_iblSpecular.SampleLevel(s_iblLinear, dirToLatlong(Rbase), roughnessToLod(baseRough)).xyz;
-    float3 prefilteredCoat = t_iblSpecular.SampleLevel(s_iblLinear, dirToLatlong(R), roughnessToLod(coatRough)).xyz;
+    // Small compensation for split-sum under-energy vs path-traced multi-bounce specular.
+    const float iblSpecularGain = 1.10;
+    float3 prefilteredBase =
+        iblSpecularGain * t_iblSpecular.SampleLevel(s_iblLinear, dirToLatlong(Rbase), roughnessToLod(baseRough)).xyz;
+    float3 prefilteredCoat =
+        iblSpecularGain * t_iblSpecular.SampleLevel(s_iblLinear, dirToLatlong(R), roughnessToLod(coatRough)).xyz;
 
     // Base layer IBL: specular computed first so its directional albedo (FG) can
     // mask the diffuse — matching MaterialX mx_layer_bsdf energy conservation.
@@ -245,7 +249,7 @@ float3 evalIBL(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B)
             // IBL refraction: sample the prefiltered environment radiance in the
             // refracted direction at the transmission roughness (MaterialX
             // mx_environment_prefilter convention for the transmission lobe).
-            refracted = t_iblSpecular.SampleLevel(s_iblLinear,
+            refracted = iblSpecularGain * t_iblSpecular.SampleLevel(s_iblLinear,
                 dirToLatlong(normalize(refrDir)), roughnessToLod(baseRough)).xyz;
         }
         float3 glass = Fr * prefilteredBase + (1.0 - Fr) * refracted * transTint;
