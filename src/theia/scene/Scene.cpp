@@ -324,6 +324,8 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     if (m_lights.empty()) {
         for (size_t i = 0; i < m_geometries.size(); ++i) {
             const GpuInstance& inst = m_instances[i];
+            if (inst.materialIndex >= m_materials.size() || !m_materials[inst.materialIndex].emissiveAsLightSource())
+                continue;
             const GpuMaterial& gpuMat = gpuMaterials[inst.materialIndex];
             const float luminance = gpuMat.emissionColorLum.w;
             if (luminance <= 0.0f)
@@ -506,6 +508,9 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
         if (inst.geometryKind != 0U) {
             continue; // spheres not supported for NEE yet
         }
+        if (inst.materialIndex >= m_materials.size() || !m_materials[inst.materialIndex].emissiveAsLightSource()) {
+            continue;
+        }
         const GpuMaterial& gpuMat = gpuMaterials[inst.materialIndex];
         if (gpuMat.emissionColorLum.w <= 0.0F) { // NOLINT(cppcoreguidelines-pro-type-union-access)
             continue;
@@ -576,7 +581,8 @@ VkResult Scene::buildTlas(const DeviceContext& ctx, const CommandPool& pool) {
         // Emissive instances get mask 0x01 so shadow rays (culling mask 0xFE) skip them,
         // preventing self-occlusion when the shadow origin is on a non-emissive surface.
         const uint32_t matIdx = m_instances[i].materialIndex;
-        const bool isEmissive = matIdx < m_materials.size() && m_materials[matIdx].gpu().emissionColorLum.w > 0.0F;
+        const bool isEmissive = matIdx < m_materials.size() && m_materials[matIdx].emissiveAsLightSource() &&
+                                m_materials[matIdx].gpu().emissionColorLum.w > 0.0F;
         instances[i].mask = isEmissive ? 0x01u : 0xFFu;
     }
 
