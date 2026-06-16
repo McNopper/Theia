@@ -19,6 +19,33 @@ Consumes Aether + Harmonia via CMake FetchContent. The demo is a thin `harmonia:
 subclass injecting `harmonia::IRenderer`. GPU-optimized scene upload / meshlet layouts are
 Theia-specific (not in Harmonia).
 
+## Algorithm strategy (drives every technique decision)
+
+- **Best quality, future hardware, ONE approach.** Theia targets future hardware, so pick the
+  single best-quality real-time algorithm that matches the Hyperion path-traced ground truth —
+  **no cheap fallbacks, no dual-track.** Heavy-but-correct is fine; it scales with hardware.
+- **Still almost real-time on current hardware.** The chosen technique must stay near-interactive
+  on today's dev machine (bounded work + denoise), not offline brute force. For local testing the
+  technique still runs here — just **lower the render resolution** (e.g. the 320x240 parity size)
+  rather than swapping in a cheaper algorithm. Resolution is the performance knob; the approach
+  never forks.
+- **Target hardware (capability, not a brand):** a high-end GPU class with **hardware ray
+  tracing**, a **large (~100GB-class) unified memory** pool, and AI-based denoising/upscaling.
+  HW ray tracing is first-class and memory is abundant → favor ray-traced techniques;
+  low-memory approximations (e.g. WBOIT) have no advantage here. It must also run on **other
+  hardware**, so keep the technique single and scale it by resolution (below), not by branching.
+- **Transparency/refraction (Group 4, v0.6.0):** committed to **HW ray-traced transmission &
+  refraction** via the existing scene TLAS (`t_tlas`, inline `TraceRayInline` already used for
+  shadows). Same mechanism as Hyperion's BSDF → best parity, order-independent, refraction
+  native, and leaves the HDR alpha (indirect-weight) channel untouched. WBOIT is superseded.
+
+- **GPU-driven, latest standard Vulkan, no vendor extensions.** Prefer GPU-driven rendering
+  (indirect/mesh-shader draws, GPU-side culling, bindless) using the latest Vulkan features
+  available, but **cross-vendor only** — core + `KHR`/`EXT`. **Never** vendor-specific
+  extensions (`VK_NV_*`, `VK_AMD_*`, `VK_INTEL_*`). E.g. ray tracing uses
+  `VK_KHR_ray_query` / `VK_KHR_acceleration_structure` (already in use), not a vendor RT path.
+  This keeps Theia portable to the "other hardware" requirement above.
+
 ## Running
 
 ```powershell
