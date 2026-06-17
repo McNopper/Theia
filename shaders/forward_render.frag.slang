@@ -597,21 +597,44 @@ FS_OUT main(FS_IN input) {
     if (presentationParams.y >= 0.5) {
         const float opacity = saturate(mat.opacityFlagsPad.x);
         const float transmissionWeight = saturate(mat.transmissionColorWeight.w);
-        const float3 rayDir = -wo;
-        const RayHitData behind = traceClosestHit(input.worldPos, rayDir, kRayEpsilon, kInstanceMaskOpaque);
-        const float3 missLo = sampleSpecularEnv(rayDir, 0.0, 1.0);
-        const float3 behindLo = behind.hit ? shadeHitRadiance(behind, cameraPos.xyz, shadowParams.x) : missLo;
+        const float3 coverageRayDir = -wo;
+        const RayHitData behindCoverage =
+            traceClosestHit(input.worldPos, coverageRayDir, kRayEpsilon, kInstanceMaskOpaque);
+        const float3 missCoverage = sampleSpecularEnv(coverageRayDir, 0.0, 1.0);
+        const float3 coverageBehindLo =
+            behindCoverage.hit ? shadeHitRadiance(behindCoverage, cameraPos.xyz, shadowParams.x) : missCoverage;
 
         // Coverage path (`opacity < 1`): keep straight-through visibility from behind-radiance.
         // 26c intentionally skips front-layer energy-conserving BSDF composition; that arrives
         // once hit shading/transmission compositing is tightened in the next sub-steps.
-        float3 outLo = behindLo;
+        float3 outLo = coverageBehindLo;
 
         // Transmission path (`transmission_weight > 0`): replace IBL-only "refracted env"
-        // approximation with scene-traced behind-radiance (straight ray in 26c; no IOR bend yet).
+        // approximation with scene-traced behind-radiance. In 26d this ray is bent by
+        // Snell/IOR (enter/exit aware) before tracing.
         if (transmissionWeight > 0.0) {
+            const float eta = max(mat.specularRoughAnisoIor.z, 1.01);
+            float3 Nf = N;
+            float etaRatio = 1.0 / eta; // air -> material
+            if (dot(-wo, N) < 0.0) {
+                Nf = -N; // exiting medium
+                etaRatio = eta;
+            }
+            float3 transmissionDir = refract(-wo, Nf, etaRatio);
+            if (dot(transmissionDir, transmissionDir) < 1e-6) {
+                transmissionDir = reflect(-wo, Nf); // total internal reflection fallback
+            } else {
+                transmissionDir = normalize(transmissionDir);
+            }
+
+            const RayHitData behindTransmission =
+                traceClosestHit(input.worldPos, transmissionDir, kRayEpsilon, kInstanceMaskOpaque);
+            const float3 missTransmission = sampleSpecularEnv(transmissionDir, 0.0, 1.0);
+            const float3 transmissionBehindLo = behindTransmission.hit
+                                                    ? shadeHitRadiance(behindTransmission, cameraPos.xyz, shadowParams.x)
+                                                    : missTransmission;
             const float3 transTint = saturate3(mat.transmissionColorWeight.xyz);
-            outLo = lerp(outLo, behindLo * transTint, transmissionWeight);
+            outLo = lerp(outLo, transmissionBehindLo * transTint, transmissionWeight);
         }
 
         FS_OUT outTransparent;
