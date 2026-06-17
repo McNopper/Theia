@@ -71,6 +71,10 @@ void ForwardRenderer::shutdown() {
         vkDestroyPipeline(m_ctx->device, m_graphicsPipeline, nullptr);
         m_graphicsPipeline = VK_NULL_HANDLE;
     }
+    if (m_graphicsPipelineTransparent != VK_NULL_HANDLE) {
+        vkDestroyPipeline(m_ctx->device, m_graphicsPipelineTransparent, nullptr);
+        m_graphicsPipelineTransparent = VK_NULL_HANDLE;
+    }
     if (m_skyPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_ctx->device, m_skyPipeline, nullptr);
         m_skyPipeline = VK_NULL_HANDLE;
@@ -299,17 +303,18 @@ bool ForwardRenderer::createPipeline() {
         .size = sizeof(ForwardRenderer::MeshPushConstants),
     };
 
-    // Set 0: geometry buffers (vertices, instances, indices, meshlets, meshletVerts, meshletTris)
-    const std::array<VkDescriptorSetLayoutBinding, 6> meshBindings{
+    // Set 0: geometry buffers + material table for task-shader bucketing.
+    const std::array<VkDescriptorSetLayoutBinding, 7> meshBindings{
         VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTaskAndMeshStages, nullptr},
         VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTaskAndMeshStages, nullptr},
         VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
         VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTaskAndMeshStages, nullptr},
         VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
         VkDescriptorSetLayoutBinding{5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
+        VkDescriptorSetLayoutBinding{6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_TASK_BIT_EXT, nullptr},
     };
     constexpr VkDescriptorBindingFlags kUAB = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
-    const std::array<VkDescriptorBindingFlags, 6> meshBindingFlags{kUAB, kUAB, kUAB, kUAB, kUAB, kUAB};
+    const std::array<VkDescriptorBindingFlags, 7> meshBindingFlags{kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo meshBindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = static_cast<uint32_t>(meshBindingFlags.size()),
@@ -435,7 +440,7 @@ bool ForwardRenderer::createPipeline() {
 
     // Single pool for all four sets.
     const std::array<VkDescriptorPoolSize, 5> poolSizes{
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 11},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 12},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 5},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLER, 1},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures},
@@ -565,6 +570,12 @@ bool ForwardRenderer::createPipeline() {
         .depthWriteEnable = VK_TRUE,
         .depthCompareOp = VK_COMPARE_OP_LESS,
     };
+    const VkPipelineDepthStencilStateCreateInfo depthStencilTransparent{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .depthTestEnable = VK_TRUE,
+        .depthWriteEnable = VK_FALSE,
+        .depthCompareOp = VK_COMPARE_OP_LESS,
+    };
     const VkPipelineColorBlendAttachmentState colorAttachment{
         .blendEnable = VK_FALSE,
         .colorWriteMask =
@@ -577,6 +588,17 @@ bool ForwardRenderer::createPipeline() {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
         .attachmentCount = static_cast<uint32_t>(colorAttachments.size()),
         .pAttachments = colorAttachments.data(),
+    };
+    const VkPipelineColorBlendAttachmentState transparentGbufferAttachment{
+        .blendEnable = VK_FALSE,
+        .colorWriteMask = 0,
+    };
+    const std::array<VkPipelineColorBlendAttachmentState, 2> transparentColorAttachments{
+        colorAttachment, transparentGbufferAttachment};
+    const VkPipelineColorBlendStateCreateInfo transparentColorBlend{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .attachmentCount = static_cast<uint32_t>(transparentColorAttachments.size()),
+        .pAttachments = transparentColorAttachments.data(),
     };
     const VkPipelineVertexInputStateCreateInfo vertexInput{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
@@ -618,6 +640,45 @@ bool ForwardRenderer::createPipeline() {
         m_pipelineLayout = VK_NULL_HANDLE;
         vkDestroyDescriptorPool(m_ctx->device, m_descriptorPool, nullptr);
         m_descriptorPool = VK_NULL_HANDLE;
+        vkDestroyDescriptorSetLayout(m_ctx->device, m_iblSetLayout, nullptr);
+        m_iblSetLayout = VK_NULL_HANDLE;
+        vkDestroyDescriptorSetLayout(m_ctx->device, m_matSetLayout, nullptr);
+        m_matSetLayout = VK_NULL_HANDLE;
+        vkDestroyDescriptorSetLayout(m_ctx->device, m_meshSetLayout, nullptr);
+        m_meshSetLayout = VK_NULL_HANDLE;
+        vkDestroyShaderModule(m_ctx->device, taskModule, nullptr);
+        vkDestroyShaderModule(m_ctx->device, meshModule, nullptr);
+        vkDestroyShaderModule(m_ctx->device, fragModule, nullptr);
+        return false;
+    }
+
+    const VkGraphicsPipelineCreateInfo transparentPipelineInfo{
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .pNext = &rendering,
+        .stageCount = static_cast<uint32_t>(graphicsStages.size()),
+        .pStages = graphicsStages.data(),
+        .pVertexInputState = &vertexInput,
+        .pInputAssemblyState = nullptr,
+        .pViewportState = &viewport,
+        .pRasterizationState = &rasterization,
+        .pMultisampleState = &multisample,
+        .pDepthStencilState = &depthStencilTransparent,
+        .pColorBlendState = &transparentColorBlend,
+        .pDynamicState = &dynamicState,
+        .layout = m_pipelineLayout,
+    };
+    if (vkCreateGraphicsPipelines(
+            m_ctx->device, VK_NULL_HANDLE, 1, &transparentPipelineInfo, nullptr, &m_graphicsPipelineTransparent) !=
+        VK_SUCCESS) {
+        Logger::error("Failed to create transparent graphics pipeline");
+        vkDestroyPipeline(m_ctx->device, m_graphicsPipeline, nullptr);
+        m_graphicsPipeline = VK_NULL_HANDLE;
+        vkDestroyPipelineLayout(m_ctx->device, m_pipelineLayout, nullptr);
+        m_pipelineLayout = VK_NULL_HANDLE;
+        vkDestroyDescriptorPool(m_ctx->device, m_descriptorPool, nullptr);
+        m_descriptorPool = VK_NULL_HANDLE;
+        vkDestroyDescriptorSetLayout(m_ctx->device, m_textureSetLayout, nullptr);
+        m_textureSetLayout = VK_NULL_HANDLE;
         vkDestroyDescriptorSetLayout(m_ctx->device, m_iblSetLayout, nullptr);
         m_iblSetLayout = VK_NULL_HANDLE;
         vkDestroyDescriptorSetLayout(m_ctx->device, m_matSetLayout, nullptr);
@@ -875,7 +936,7 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         .pAccelerationStructures = &sceneTlas,
     };
 
-    std::array<VkWriteDescriptorSet, 12> writes{
+    std::array<VkWriteDescriptorSet, 13> writes{
         VkWriteDescriptorSet{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .dstSet = m_meshSet,
@@ -923,6 +984,14 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             .pBufferInfo = &meshletTriangleBufferInfo,
+        },
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_meshSet,
+            .dstBinding = 6,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &materialBufferInfo,
         },
         // Set 1: materials / lights / emissive triangles
         VkWriteDescriptorSet{
@@ -1111,7 +1180,7 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
     // exposure = 1 / (1.2 * 2^EV100) — matches Hyperion's PhysicalCamera calc
     const float exposure = m_camera.physical.exposure();
 
-    const ForwardRenderer::MeshPushConstants pc{
+    const ForwardRenderer::MeshPushConstants pcBase{
         .viewProj = glm::transpose(viewProj), // transposed for Slang mul(pos, mat)
         .view = glm::transpose(view),
         .cameraPos = glm::vec4(m_camera.position, 1.0f),
@@ -1129,18 +1198,35 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         .shadowParams = glm::vec4(std::max(m_camera.nearPlane, 1e-4f), 0.35f, 0.0f, 0.0f),
         .presentationParams = glm::vec4(m_indirectAmbientStrength, 0.0f, 0.0f, 0.0f),
     };
-    vkCmdPushConstants(cmd,
-                       m_pipelineLayout,
-                       VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                       0,
-                       sizeof(ForwardRenderer::MeshPushConstants),
-                       &pc);
 
     const uint32_t instanceCount = m_scene->instanceCount();
     if (instanceCount > 0) {
         if (vkCmdDrawMeshTasksEXT == nullptr) {
             Logger::error("vkCmdDrawMeshTasksEXT is NULL - mesh shader extension not loaded!");
         } else {
+            // Opaque pass: depth-test + depth-write.
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_graphicsPipeline);
+            auto opaquePc = pcBase;
+            opaquePc.presentationParams.y = 0.0f;
+            vkCmdPushConstants(cmd,
+                               m_pipelineLayout,
+                               VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0,
+                               sizeof(ForwardRenderer::MeshPushConstants),
+                               &opaquePc);
+            vkCmdDrawMeshTasksEXT(cmd, instanceCount, 1, 1);
+
+            // Transparent pass: depth-test against opaque depth, no depth writes.
+            // Shader routes only non-opaque instances and outputs a debug flat color for 26a.
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_graphicsPipelineTransparent);
+            auto transparentPc = pcBase;
+            transparentPc.presentationParams.y = 1.0f;
+            vkCmdPushConstants(cmd,
+                               m_pipelineLayout,
+                               VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0,
+                               sizeof(ForwardRenderer::MeshPushConstants),
+                               &transparentPc);
             vkCmdDrawMeshTasksEXT(cmd, instanceCount, 1, 1);
         }
     }

@@ -419,6 +419,13 @@ float3 shadeOneLight(GpuLight light, GpuMaterial mat, float3 worldPos, float3 wo
 FS_OUT main(FS_IN input) {
     GpuMaterial mat = materials[input.materialIdx];
 
+    if (presentationParams.y >= 0.5) {
+        FS_OUT outDebug;
+        outDebug.hdrColor = float4(0.0, 1.0, 1.0, 1.0);
+        outDebug.gbuffer = float4(0.5, 0.5, 0.5, 1.0);
+        return outDebug;
+    }
+
     // Reconstruct orthonormal tangent frame.
     float3 N = normalize(input.normal);
     // Gram-Schmidt re-orthogonalize T against N.

@@ -129,6 +129,7 @@ class ForwardRenderer {
     // Mesh + fragment graphics pipeline
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
     VkPipeline m_graphicsPipeline = VK_NULL_HANDLE;
+    VkPipeline m_graphicsPipelineTransparent = VK_NULL_HANDLE;
 
     // Sky/background fullscreen pipeline (samples env panorama, or black).
     struct SkyPushConstants {
