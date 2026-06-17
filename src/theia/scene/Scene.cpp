@@ -583,12 +583,23 @@ VkResult Scene::buildTlas(const DeviceContext& ctx, const CommandPool& pool) {
     std::vector<VkAccelerationStructureInstanceKHR> instances(m_geometries.size());
     for (size_t i = 0; i < m_geometries.size(); ++i) {
         instances[i] = m_geometries[i]->makeInstance(static_cast<uint32_t>(i));
-        // Emissive instances get mask 0x01 so shadow rays (culling mask 0xFE) skip them,
-        // preventing self-occlusion when the shadow origin is on a non-emissive surface.
+        // Instance masks:
+        //   0x01 = emissive geometry
+        //   0x02 = transparent non-emissive geometry
+        //   0x04 = opaque non-emissive geometry
+        // Shadow rays use non-emissive mask (0x06). 26c transmission rays can target
+        // opaque-only geometry (0x04) before stacked transparent traversal (26e).
         const uint32_t matIdx = m_instances[i].materialIndex;
         const bool isEmissive = matIdx < m_materials.size() && m_materials[matIdx].emissiveAsLightSource() &&
                                 m_materials[matIdx].gpu().emissionColorLum.w > 0.0F;
-        instances[i].mask = isEmissive ? 0x01u : 0xFFu;
+        bool isTransparent = false;
+        if (!isEmissive && matIdx < m_materials.size()) {
+            const auto gpuMat = m_materials[matIdx].gpu();
+            const float opacity = std::clamp(gpuMat.opacityFlagsPad.x, 0.0f, 1.0f);
+            const float transmissionWeight = std::max(gpuMat.transmissionColorWeight.w, 0.0f);
+            isTransparent = (opacity < 0.9999f) || (transmissionWeight > 0.0f);
+        }
+        instances[i].mask = isEmissive ? 0x01u : (isTransparent ? 0x02u : 0x04u);
     }
 
     auto instanceUpload = Buffer::upload(

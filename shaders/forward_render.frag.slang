@@ -297,7 +297,7 @@ float traceShadow(float3 origin, float3 dir, float tMin, float tMax) {
     ray.TMax      = tMax;
 
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
-    q.TraceRayInline(t_tlas, RAY_FLAG_NONE, 0xFFu, ray);
+    q.TraceRayInline(t_tlas, RAY_FLAG_NONE, kInstanceMaskNonEmissive, ray);
     q.Proceed();
     return (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) ? 0.0 : 1.0;
 }
@@ -427,22 +427,22 @@ struct RayHitData {
     float3 normal;
 };
 
-RayHitData tracePrimaryOpaqueHit(float3 cameraPosWs, float3 targetWorldPos, float tMin) {
+RayHitData traceClosestHit(float3 originWs, float3 dirWs, float tMin, uint instanceMask) {
     RayHitData hit;
     hit.hit = false;
     hit.materialIdx = 0u;
     hit.worldPos = 0.0.xxx;
     hit.normal = float3(0.0, 1.0, 0.0);
 
-    const float3 rayDir = normalize(targetWorldPos - cameraPosWs);
+    const float3 rayDir = normalize(dirWs);
     RayDesc ray;
-    ray.Origin = cameraPosWs + rayDir * tMin;
+    ray.Origin = originWs + rayDir * tMin;
     ray.Direction = rayDir;
     ray.TMin = tMin;
     ray.TMax = kInf;
 
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
-    q.TraceRayInline(t_tlas, RAY_FLAG_NONE, 0xFEu, ray);
+    q.TraceRayInline(t_tlas, RAY_FLAG_NONE, instanceMask, ray);
     while (q.Proceed()) {}
     if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) {
         return hit;
@@ -478,6 +478,39 @@ RayHitData tracePrimaryOpaqueHit(float3 cameraPosWs, float3 targetWorldPos, floa
     return hit;
 }
 
+RayHitData tracePrimaryOpaqueHit(float3 cameraPosWs, float3 targetWorldPos, float tMin) {
+    return traceClosestHit(cameraPosWs, targetWorldPos - cameraPosWs, tMin, kInstanceMaskAll);
+}
+
+float3 shadeHitRadiance(RayHitData hit, float3 viewPos, float shadowBias) {
+    const GpuMaterial mat = materials[hit.materialIdx];
+    const float3 N = normalize(hit.normal);
+    const float3 wo = normalize(viewPos - hit.worldPos);
+    const float3 up = abs(N.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
+    const float3 T = normalize(cross(up, N));
+    const float3 B = normalize(cross(N, T));
+    const float3 shadowOrigin = hit.worldPos + N * shadowBias;
+
+    float3 directLo = 0.0.xxx;
+    for (uint i = 0; i < lightCount; ++i) {
+        directLo += shadeOneLight(lights[i], mat, hit.worldPos, wo, N, T, B, shadowOrigin, shadowBias);
+    }
+
+    float iblShadow = 1.0;
+    const float sunStrength = sunDirection.w;
+    if (sunStrength > 0.0) {
+        const float3 sunDir = normalize(sunDirection.xyz);
+        if (dot(N, sunDir) > 0.0) {
+            const float sunVis = traceShadow(shadowOrigin, sunDir, shadowBias, 1e16);
+            const float skyFloor = shadowParams.y;
+            iblShadow = lerp(1.0, lerp(skyFloor, 1.0, sunVis), sunStrength);
+        }
+    }
+    const float3 indirectLo = evalIBL(mat, wo, N, T, B) * iblShadow;
+    const float3 emission = mat.emissionColorLum.xyz * mat.emissionColorLum.w;
+    return directLo + indirectLo + emission;
+}
+
 [shader("fragment")]
 FS_OUT main(FS_IN input) {
     GpuMaterial mat = materials[input.materialIdx];
@@ -501,39 +534,8 @@ FS_OUT main(FS_IN input) {
             return outDbg;
         }
 
-        const float3 N = normalize(hit.normal);
-        const float3 wo = normalize(cameraPos.xyz - hit.worldPos);
-        const float3 up = abs(N.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
-        const float3 T = normalize(cross(up, N));
-        const float3 B = normalize(cross(N, T));
-        const float3 shadowOrigin = hit.worldPos + N * shadowBias;
-
-        float3 directLo = 0.0.xxx;
-        for (uint i = 0; i < lightCount; ++i) {
-            directLo += shadeOneLight(lights[i], hitMat, hit.worldPos, wo, N, T, B, shadowOrigin, shadowBias);
-        }
-
-        float iblShadow = 1.0;
-        const float sunStrength = sunDirection.w;
-        if (sunStrength > 0.0) {
-            const float3 sunDir = normalize(sunDirection.xyz);
-            if (dot(N, sunDir) > 0.0) {
-                const float sunVis = traceShadow(shadowOrigin, sunDir, shadowBias, 1e16);
-                const float skyFloor = shadowParams.y;
-                iblShadow = lerp(1.0, lerp(skyFloor, 1.0, sunVis), sunStrength);
-            }
-        }
-        const float3 indirectLo = evalIBL(hitMat, wo, N, T, B) * iblShadow;
-        const float3 emission = hitMat.emissionColorLum.xyz * hitMat.emissionColorLum.w;
-        outDbg.hdrColor = float4(exposure * (directLo + indirectLo + emission), 1.0);
+        outDbg.hdrColor = float4(exposure * shadeHitRadiance(hit, cameraPos.xyz, shadowBias), 1.0);
         return outDbg;
-    }
-
-    if (presentationParams.y >= 0.5) {
-        FS_OUT outDebug;
-        outDebug.hdrColor = float4(0.0, 1.0, 1.0, 1.0);
-        outDebug.gbuffer = float4(0.5, 0.5, 0.5, 1.0);
-        return outDebug;
     }
 
     // Reconstruct orthonormal tangent frame.
@@ -588,6 +590,35 @@ FS_OUT main(FS_IN input) {
 
     // Outgoing direction: surface to camera.
     const float3 wo = normalize(cameraPos.xyz - input.worldPos);
+
+    // 26c transparent pass: straight-through transmission query against opaque-only mask.
+    // Opaque pass already filled the background color/depth; this pass resolves transparent
+    // front surfaces by querying behind-radiance and writing final HDR RGB (no depth write).
+    if (presentationParams.y >= 0.5) {
+        const float opacity = saturate(mat.opacityFlagsPad.x);
+        const float transmissionWeight = saturate(mat.transmissionColorWeight.w);
+        const float3 rayDir = -wo;
+        const RayHitData behind = traceClosestHit(input.worldPos, rayDir, kRayEpsilon, kInstanceMaskOpaque);
+        const float3 missLo = sampleSpecularEnv(rayDir, 0.0, 1.0);
+        const float3 behindLo = behind.hit ? shadeHitRadiance(behind, cameraPos.xyz, shadowParams.x) : missLo;
+
+        // Coverage path (`opacity < 1`): keep straight-through visibility from behind-radiance.
+        // 26c intentionally skips front-layer energy-conserving BSDF composition; that arrives
+        // once hit shading/transmission compositing is tightened in the next sub-steps.
+        float3 outLo = behindLo;
+
+        // Transmission path (`transmission_weight > 0`): replace IBL-only "refracted env"
+        // approximation with scene-traced behind-radiance (straight ray in 26c; no IOR bend yet).
+        if (transmissionWeight > 0.0) {
+            const float3 transTint = saturate3(mat.transmissionColorWeight.xyz);
+            outLo = lerp(outLo, behindLo * transTint, transmissionWeight);
+        }
+
+        FS_OUT outTransparent;
+        outTransparent.hdrColor = float4(outLo * exposure, 0.0);
+        outTransparent.gbuffer = float4(0.5, 0.5, 0.5, 1.0);
+        return outTransparent;
+    }
 
     // Match Hyperion emissive-hit behavior: emissive triangles are one-sided and
     // terminate primary shading when seen from their emitting side.

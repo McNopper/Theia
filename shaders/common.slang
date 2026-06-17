@@ -89,5 +89,9 @@ static const float kInf        = 1.0e30;
 /// Rec.2020 luminance coefficients (ITU-R BT.2020).
 static const float3 kRec2020Luma = float3(0.2627, 0.6780, 0.0593);
 
-static const uint kInstanceMaskAll = 0xFF;
+static const uint kInstanceMaskEmissive    = 0x01u;
+static const uint kInstanceMaskTransparent = 0x02u;
+static const uint kInstanceMaskOpaque      = 0x04u;
+static const uint kInstanceMaskNonEmissive = kInstanceMaskTransparent | kInstanceMaskOpaque;
+static const uint kInstanceMaskAll         = 0xFFu;
 static const uint kNoTexture = 0xFFFFFFFFu;
