@@ -458,7 +458,7 @@ RayHitData traceClosestHit(float3 originWs, float3 dirWs, float tMin, uint insta
         return hit;
     }
 
-    const uint instIdx = q.CommittedInstanceIndex();
+    const uint instIdx = q.CommittedInstanceID();
     const GpuInstance inst = instances[instIdx];
     const uint tri = q.CommittedPrimitiveIndex();
     const uint base = inst.indexOffset + tri * 3u;
@@ -624,6 +624,24 @@ FS_OUT main(FS_IN input) {
     // 26b debug modes (primary-ray hit reconstruction), gated and off by default:
     // presentationParams.z >= 1: show ray-hit base color
     // presentationParams.z >= 2: show ray-hit shaded radiance (no texture normal maps)
+    // presentationParams.z >= 3: show instance index as color (debug indexing)
+    if (presentationParams.z >= 3.0 && presentationParams.y >= 0.5) {
+        const RayHitData hit = tracePrimaryOpaqueHit(cameraPos.xyz, input.worldPos, kRayEpsilon);
+        FS_OUT outDbg;
+        outDbg.gbuffer = float4(0.5, 0.5, 0.5, 1.0);
+        if (!hit.hit) {
+            outDbg.hdrColor = float4(0.0, 0.0, 0.0, 1.0);
+            return outDbg;
+        }
+        // Visualize instance index: 0=red, 1=green, 2=blue
+        float3 debugColor = float3(0.0, 0.0, 0.0);
+        if (hit.materialIdx == 0u) debugColor = float3(1.0, 0.0, 0.0);
+        else if (hit.materialIdx == 1u) debugColor = float3(0.0, 1.0, 0.0);
+        else if (hit.materialIdx == 2u) debugColor = float3(0.0, 0.0, 1.0);
+        else debugColor = float3(1.0, 1.0, 0.0); // yellow for unexpected
+        outDbg.hdrColor = float4(debugColor, 1.0);
+        return outDbg;
+    }
     if (presentationParams.z >= 1.0 && presentationParams.y < 0.5) {
         const float shadowBias = shadowParams.x;
         const RayHitData hit = tracePrimaryOpaqueHit(cameraPos.xyz, input.worldPos, kRayEpsilon);
