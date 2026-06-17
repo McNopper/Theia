@@ -446,7 +446,7 @@ RayHitData traceClosestHit(float3 originWs, float3 dirWs, float tMin, uint insta
 
     const float3 rayDir = normalize(dirWs);
     RayDesc ray;
-    ray.Origin = originWs + rayDir * tMin;
+    ray.Origin = originWs;
     ray.Direction = rayDir;
     ray.TMin = tMin;
     ray.TMax = kInf;
@@ -458,8 +458,8 @@ RayHitData traceClosestHit(float3 originWs, float3 dirWs, float tMin, uint insta
         return hit;
     }
 
-    const uint instId = q.CommittedInstanceID();
-    const GpuInstance inst = instances[instId];
+    const uint instIdx = q.CommittedInstanceIndex();
+    const GpuInstance inst = instances[instIdx];
     const uint tri = q.CommittedPrimitiveIndex();
     const uint base = inst.indexOffset + tri * 3u;
     if (base + 2u >= inst.indexOffset + inst.indexCount) {
