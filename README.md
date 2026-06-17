@@ -210,6 +210,11 @@ acceptable only for interactive presentation quality.
 > ⚠️ Theia does not have its own test suite yet; correctness is currently validated by
 > visual parity against Hyperion (ground truth) on the shared test scenes. The shared
 > foundation is covered by the Harmonia and Aether test suites.
+>
+> **Transparency parity note:** Group-4 transparency implementation is complete for v0.6.0. The
+> current restricted Hyperion comparison (`--spp 512 --depth 2`, post-fx off) is
+> `mean_diff 22.253` on the current tree; this residual baseline remains tracked for future
+> quality refinement work.
 
 ---
 

@@ -33,12 +33,12 @@ cbuffer SSRPC {
 [[vk::binding(4, 0)]] SamplerState s_nearest;       // for depth (no interpolation)
 [[vk::binding(5, 0)]] SamplerState s_linear;        // for GBuffer + HDR
 
-static const int   kMaxSteps      = 64;
-static const int   kBinarySteps   = 8;
-static const float kThickness     = 0.5;   // view-space surface thickness (units)
-static const float kRoughnessMax  = 0.45;  // skip SSR for roughness above this
-static const float kRoughnessMin  = 0.06;  // skip near-mirrors: IBL is already pixel-sharp
-static const float kStepFraction  = 0.025; // step = abs(viewZ) * fraction
+static const int   kMaxSteps      = 80;
+static const int   kBinarySteps   = 10;
+static const float kThickness     = 0.35;  // view-space surface thickness (units)
+static const float kRoughnessMax  = 0.55;   // skip SSR for roughness above this
+static const float kRoughnessMin  = 0.04;   // skip near-mirrors: IBL is already pixel-sharp
+static const float kStepFraction  = 0.020;  // step = abs(viewZ) * fraction
 
 // Reconstruct view-space position from texture UV and sampled depth.
 // UV: [0,1]² with (0,0) at top-left; depth: [0,1] Vulkan depth range.
@@ -81,6 +81,10 @@ void main(uint3 id : SV_DispatchThreadID) {
     const float4 gb        = t_gbuffer.SampleLevel(s_linear, uv, 0.0);
     const float3 viewN     = normalize(gb.xyz * 2.0 - 1.0); // decode from [0,1] to [-1,1]
     const float  roughness = gb.w;
+    uint depthDimsX;
+    uint depthDimsY;
+    t_depth.GetDimensions(depthDimsX, depthDimsY);
+    const float maxDepthMip = floor(log2(max(float(depthDimsX), float(depthDimsY))));
 
     // Skip rough surfaces — IBL already covers them well.
     // Skip near-mirrors — IBL's sharpest mip is already pixel-sharp there, and SSR's
@@ -102,7 +106,7 @@ void main(uint3 id : SV_DispatchThreadID) {
     }
 
     // Adaptive step: proportional to distance from camera
-    const float stepLen  = max(abs(viewPos.z) * kStepFraction, 0.05);
+    const float stepLen  = max(abs(viewPos.z) * kStepFraction, 0.04);
     const float3 rayStep = reflDir * stepLen;
 
     float3 rayPos = viewPos + rayStep * 1.5; // start slightly off the surface
@@ -117,7 +121,9 @@ void main(uint3 id : SV_DispatchThreadID) {
             break;
         }
 
-        const float sceneDepth = t_depth.SampleLevel(s_nearest, sampleUV, 0.0);
+        const float marchLen = length(rayPos - viewPos);
+        const float sampleMip = clamp(log2(max(marchLen / 0.05, 1.0)), 0.0, maxDepthMip);
+        const float sceneDepth = t_depth.SampleLevel(s_nearest, sampleUV, sampleMip);
         if (sceneDepth >= 1.0) {
             // Background hit — no solid surface
             rayPos += rayStep;
@@ -168,8 +174,8 @@ void main(uint3 id : SV_DispatchThreadID) {
                           * smoothstep(1.0.xx, 0.92.xx, hitUV);
     hitConfidence *= edgeFade.x * edgeFade.y;
 
-    // Roughness fade: mirror-smooth = full, kRoughnessMax = zero
-    hitConfidence *= 1.0 - smoothstep(0.0, kRoughnessMax, roughness);
+    // Roughness fade: mirror-smooth = full, higher roughness stays as a softer SSR hint.
+    hitConfidence *= 1.0 - smoothstep(kRoughnessMin, kRoughnessMax, roughness);
 
     // Grazing fade: reflected rays that skim nearly parallel to the screen plane
     // (|reflDir.z| small) march almost in-screen and produce unreliable silhouette

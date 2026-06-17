@@ -1206,9 +1206,10 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         .screenHeight = m_config.height,
         ._pad = 0u,
         // Ray-traced sun shadow: direction toward the dominant IBL light + strength.
-        // shadowParams: x = ray tMin (scene-scale bias from camera near plane), y = sky ambient floor.
+        // shadowParams: x = ray tMin (scene-scale bias from camera near plane), y = sky ambient floor,
+        // z = env_unit_nits for raw-env transparent rays.
         .sunDirection = glm::vec4(m_sunDir, m_hasEnv ? m_sunStrength : 0.0f),
-        .shadowParams = glm::vec4(std::max(m_camera.nearPlane, 1e-4f), 0.35f, 0.0f, 0.0f),
+        .shadowParams = glm::vec4(std::max(m_camera.nearPlane, 1e-4f), 0.35f, m_envUnitNits, 0.0f),
         .presentationParams = glm::vec4(m_indirectAmbientStrength, 0.0f, m_debugRayHitMode, 0.0f),
     };
 

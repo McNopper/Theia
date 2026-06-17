@@ -22,7 +22,7 @@ cbuffer ForwardPC {
     uint     screenHeight;
     uint     _pad;
     float4   sunDirection;          // xyz = world dir toward sun, w = shadow strength (0 disables)
-    float4   shadowParams;          // x = ray tMin (scene-scale bias), y = sky ambient floor
+    float4   shadowParams;          // x = ray tMin, y = sky ambient floor, z = env_unit_nits
     float4   presentationParams;    // x = indirect ambient strength (presentation-only), yzw reserved
 };
 
@@ -80,6 +80,23 @@ float2 dirToLatlong(float3 d) {
     float longitude = atan2(d.z, d.x) * (1.0 / (2.0 * 3.14159265)) + 0.5;
     float latitude  = acos(clamp(d.y, -1.0, 1.0)) / 3.14159265; // v=0 at top (y=+1)
     return float2(longitude, latitude);
+}
+
+float3 sampleEnvRaw(float3 dir, float envScale) {
+    const float2 uv = dirToLatlong(dir);
+    return envScale * max(t_envRaw.SampleLevel(s_iblLinear, uv, 0.0).xyz, 0.0.xxx);
+}
+
+float3 computeTransmissionTint(GpuMaterial mat) {
+    // OpenPBR transmission tint used consistently across IBL and RT transparent paths.
+    float3 transColor = saturate3(mat.transmissionColorWeight.xyz);
+    float3 scatter = saturate3(mat.transmissionScatter.xyz);
+    float scatterG = clamp(mat.transmissionScatter.w, -1.0, 1.0);
+    float scatterAmt = saturate(dot(scatter, kRec2020Luma)) * saturate(0.5 * (1.0 - scatterG));
+    float3 effTransColor = transColor * lerp(1.0.xxx, scatter, scatterAmt);
+    float transDepth = max(mat.transmissionParams.x, 0.001);
+    float3 absorption = exp(-transDepth * (1.0.xxx - effTransColor));
+    return effTransColor * absorption;
 }
 
 /// MaterialX analytic GGX directional albedo (rational polynomial fit).
@@ -243,14 +260,7 @@ float3 evalIBL(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B)
         // OpenPBR transmission tint = effective transmission_color (incl. single-scatter
         // re-tint) modulated by Beer-Lambert volume absorption over transmission_depth.
         // Matches Hyperion bsdf.slang effectiveTransColor() * exp(-depth*(1-color)).
-        float3 transColor = saturate3(mat.transmissionColorWeight.xyz);
-        float3 scatter = saturate3(mat.transmissionScatter.xyz);
-        float scatterG = clamp(mat.transmissionScatter.w, -1.0, 1.0);
-        float scatterAmt = saturate(dot(scatter, kRec2020Luma)) * saturate(0.5 * (1.0 - scatterG));
-        float3 effTransColor = transColor * lerp(1.0.xxx, scatter, scatterAmt);
-        float transDepth = max(mat.transmissionParams.x, 0.001);
-        float3 absorption = exp(-transDepth * (1.0.xxx - effTransColor));
-        float3 transTint = effTransColor * absorption;
+        float3 transTint = computeTransmissionTint(mat);
         float Fr = fresnelDielectric(NoV, eta);
         float3 refrDir = refract(-wo, N, 1.0 / eta);
         float3 refracted;
@@ -482,10 +492,10 @@ RayHitData tracePrimaryOpaqueHit(float3 cameraPosWs, float3 targetWorldPos, floa
     return traceClosestHit(cameraPosWs, targetWorldPos - cameraPosWs, tMin, kInstanceMaskAll);
 }
 
-float3 shadeHitRadiance(RayHitData hit, float3 viewPos, float shadowBias) {
+float3 shadeHitRadianceWithWo(RayHitData hit, float3 wo, float shadowBias) {
     const GpuMaterial mat = materials[hit.materialIdx];
     const float3 N = normalize(hit.normal);
-    const float3 wo = normalize(viewPos - hit.worldPos);
+    wo = normalize(wo);
     const float3 up = abs(N.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
     const float3 T = normalize(cross(up, N));
     const float3 B = normalize(cross(N, T));
@@ -511,6 +521,16 @@ float3 shadeHitRadiance(RayHitData hit, float3 viewPos, float shadowBias) {
     return directLo + indirectLo + emission;
 }
 
+float3 shadeHitRadiance(RayHitData hit, float3 viewPos, float shadowBias) {
+    return shadeHitRadianceWithWo(hit, viewPos - hit.worldPos, shadowBias);
+}
+
+float3 shadeHitRadianceFromRayDir(RayHitData hit, float3 rayDir, float shadowBias) {
+    // For traced secondary hits, outgoing direction points toward the previous segment
+    // (opposite ray travel), not necessarily toward the camera.
+    return shadeHitRadianceWithWo(hit, -rayDir, shadowBias);
+}
+
 float3 traceTransparentPath(float3 originWs, float3 dirWs, float3 viewPos, uint maxBounces, float shadowBias) {
     float3 accum = 0.0.xxx;
     float3 throughput = 1.0.xxx;
@@ -521,7 +541,7 @@ float3 traceTransparentPath(float3 originWs, float3 dirWs, float3 viewPos, uint 
     for (uint bounce = 0u; bounce < maxBounces; ++bounce) {
         const RayHitData hit = traceClosestHit(rayOrigin, rayDir, kRayEpsilon, kInstanceMaskNonEmissive);
         if (!hit.hit) {
-            accum += throughput * sampleSpecularEnv(rayDir, 0.0, 1.0);
+            accum += throughput * sampleEnvRaw(rayDir, shadowParams.z);
             break;
         }
 
@@ -530,42 +550,68 @@ float3 traceTransparentPath(float3 originWs, float3 dirWs, float3 viewPos, uint 
         const float transmissionWeight = saturate(hitMat.transmissionColorWeight.w);
         const bool isTransparent = (opacity < 0.9999) || (transmissionWeight > 0.0);
         if (!isTransparent) {
-            accum += throughput * shadeHitRadiance(hit, viewPos, shadowBias);
+            accum += throughput * shadeHitRadianceFromRayDir(hit, rayDir, shadowBias);
             break;
         }
 
         float3 N = normalize(hit.normal);
-        const float eta = max(hitMat.specularRoughAnisoIor.z, 1.01);
-        float etaRatio = 1.0 / eta;
-        if (dot(rayDir, N) > 0.0) {
-            N = -N;
-            etaRatio = eta;
+        float Fr = 0.0;
+        float3 refrDir = rayDir;
+        if (transmissionWeight > 0.0) {
+            const float eta = max(hitMat.specularRoughAnisoIor.z, 1.01);
+            float etaRatio = 1.0 / eta;
+            if (dot(rayDir, N) > 0.0) {
+                N = -N;
+                etaRatio = eta;
+            }
+
+            const float NoV = saturate(abs(dot(-rayDir, N)));
+            Fr = fresnelDielectric(NoV, eta);
+            refrDir = refract(rayDir, N, etaRatio);
+            const float3 reflDir = normalize(reflect(rayDir, N));
+            if (dot(refrDir, refrDir) < 1e-6) {
+                refrDir = reflDir;
+            } else {
+                refrDir = normalize(refrDir);
+            }
+
+            const float rough = saturate(hitMat.specularRoughAnisoIor.x);
+            float3 reflectedEnv = sampleSpecularEnv(reflDir, rough, 1.0);
+            if (rough < 0.1) {
+                reflectedEnv = sampleEnvRaw(reflDir, shadowParams.z);
+                if (rough < 0.05) {
+                    const float reflSide = dot(reflDir, N) >= 0.0 ? 1.0 : -1.0;
+                    const float3 reflOrigin = hit.worldPos + N * (reflSide * kRayEpsilon);
+                    const RayHitData reflHit =
+                        traceClosestHit(reflOrigin, reflDir, kRayEpsilon, kInstanceMaskNonEmissive);
+                    if (reflHit.hit) {
+                        const GpuMaterial reflMat = materials[reflHit.materialIdx];
+                        const float reflOpacity = saturate(reflMat.opacityFlagsPad.x);
+                        const float reflTransWeight = saturate(reflMat.transmissionColorWeight.w);
+                        const bool reflIsTransparent = (reflOpacity < 0.9999) || (reflTransWeight > 0.0);
+                        if (!reflIsTransparent) {
+                            reflectedEnv = shadeHitRadianceFromRayDir(reflHit, reflDir, shadowBias);
+                        }
+                    }
+                }
+            }
+            accum += throughput * Fr * reflectedEnv;
         }
 
-        const float NoV = saturate(abs(dot(-rayDir, N)));
-        const float Fr = fresnelDielectric(NoV, eta);
-        float3 refrDir = refract(rayDir, N, etaRatio);
-        const float3 reflDir = normalize(reflect(rayDir, N));
-        if (dot(refrDir, refrDir) < 1e-6) {
-            refrDir = reflDir;
-        } else {
-            refrDir = normalize(refrDir);
-        }
-
-        const float rough = saturate(hitMat.specularRoughAnisoIor.x);
-        accum += throughput * Fr * sampleSpecularEnv(reflDir, rough, 1.0);
-
-        const float3 transTint = saturate3(hitMat.transmissionColorWeight.xyz);
+        const float3 transTint = computeTransmissionTint(hitMat);
         const float coverageWeight = 1.0 - opacity;
         const float transWeight = transmissionWeight * (1.0 - Fr);
-        const float continueWeight = max(coverageWeight, transWeight);
-        throughput *= continueWeight * transTint;
+        const bool continueAsTransmission = transmissionWeight > 0.0;
+        const float continueWeight = continueAsTransmission ? transWeight : coverageWeight;
+        const float3 continueTint = continueAsTransmission ? transTint : 1.0.xxx;
+        throughput *= continueWeight * continueTint;
         if (max(throughput.x, max(throughput.y, throughput.z)) < 1e-3) {
             break;
         }
 
-        rayDir = (transmissionWeight > 0.0) ? refrDir : rayDir;
-        rayOrigin = hit.worldPos + rayDir * kRayEpsilon;
+        rayDir = continueAsTransmission ? refrDir : rayDir;
+        const float side = dot(rayDir, N) >= 0.0 ? 1.0 : -1.0;
+        rayOrigin = hit.worldPos + N * (side * kRayEpsilon);
     }
 
     return accum;
@@ -657,6 +703,7 @@ FS_OUT main(FS_IN input) {
     if (presentationParams.y >= 0.5) {
         const float opacity = saturate(mat.opacityFlagsPad.x);
         const float transmissionWeight = saturate(mat.transmissionColorWeight.w);
+        const float coverageWeight = 1.0 - opacity;
         const float3 coverageRayDir = -wo;
         const float3 coverageBehindLo = traceTransparentPath(input.worldPos,
                                                              coverageRayDir,
@@ -664,16 +711,22 @@ FS_OUT main(FS_IN input) {
                                                              2u,
                                                              shadowParams.x);
 
-        // Coverage path (`opacity < 1`): keep straight-through visibility from behind-radiance.
-        // 26c intentionally skips front-layer energy-conserving BSDF composition; that arrives
-        // once hit shading/transmission compositing is tightened in the next sub-steps.
-        float3 outLo = coverageBehindLo;
+        // Coverage path (`opacity < 1`): alpha-style visibility mix between the current surface
+        // shading and the behind-radiance. This keeps geometry_opacity separate from transmission.
+        RayHitData frontHit;
+        frontHit.hit = true;
+        frontHit.materialIdx = input.materialIdx;
+        frontHit.worldPos = input.worldPos;
+        frontHit.normal = N;
+        const float3 frontSurfaceLo = shadeHitRadiance(frontHit, cameraPos.xyz, shadowParams.x);
+        float3 surfaceLo = frontSurfaceLo;
 
         // Transmission path (`transmission_weight > 0`): replace IBL-only "refracted env"
         // approximation with scene-traced behind-radiance. In 26d this ray is bent by
         // Snell/IOR (enter/exit aware) before tracing.
         if (transmissionWeight > 0.0) {
             const float eta = max(mat.specularRoughAnisoIor.z, 1.01);
+            const float rough = saturate(mat.specularRoughAnisoIor.x);
             float3 Nf = N;
             float etaRatio = 1.0 / eta; // air -> material
             if (dot(-wo, N) < 0.0) {
@@ -692,9 +745,26 @@ FS_OUT main(FS_IN input) {
                                                                      cameraPos.xyz,
                                                                      2u,
                                                                      shadowParams.x);
-            const float3 transTint = saturate3(mat.transmissionColorWeight.xyz);
-            outLo = lerp(outLo, transmissionBehindLo * transTint, transmissionWeight);
+            const float3 transTint = computeTransmissionTint(mat);
+            const float Fr = fresnelDielectric(saturate(abs(dot(-wo, Nf))), eta);
+            const float3 reflectionDir = normalize(reflect(-wo, Nf));
+            float3 reflectedLo = sampleSpecularEnv(reflectionDir, rough, 1.0);
+            if (rough < 0.05) {
+                const float3 reflectedSceneLo =
+                    traceTransparentPath(input.worldPos, reflectionDir, cameraPos.xyz, 1u, shadowParams.x);
+                const float3 reflectedRawLo = sampleEnvRaw(reflectionDir, shadowParams.z);
+                reflectedLo = min(reflectedSceneLo, reflectedRawLo * 1.5);
+            }
+            const float3 transmissionLo = Fr * reflectedLo + (1.0 - Fr) * transmissionBehindLo * transTint;
+            // Apply transmission on the covered/front surface response first.
+            // geometry_opacity then controls visibility of that surface vs behind-radiance.
+            surfaceLo = lerp(frontSurfaceLo, transmissionLo, transmissionWeight);
         }
+
+        // geometry_opacity coverage compositing: premultiplied-alpha "over" operator.
+        // evalIBL/shadeHitRadiance scale the base layer by opacity (matching Hyperion bsdf.slang:56),
+        // so surfaceLo is premultiplied; compose via standard over: A + B*(1-alphaA).
+        const float3 outLo = surfaceLo + coverageBehindLo * coverageWeight;
 
         FS_OUT outTransparent;
         outTransparent.hdrColor = float4(outLo * exposure, 0.0);

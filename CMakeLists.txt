@@ -52,6 +52,7 @@ set(THEIA_ENTRY_SHADERS
     light_cull.comp.slang
     ssr.comp.slang
     ssr_composite.comp.slang
+    depth_pyramid.comp.slang
     ssao.comp.slang
     ssao_blur.comp.slang
     ssgi.comp.slang

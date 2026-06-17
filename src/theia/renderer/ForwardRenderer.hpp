@@ -108,7 +108,7 @@ class ForwardRenderer {
         uint32_t  screenHeight         = 0;
         uint32_t  _pad                 = 0;
         glm::vec4 sunDirection; ///< xyz = world dir toward sun, w = shadow strength (0 disables)
-        glm::vec4 shadowParams; ///< x = ray tMin (scene-scale bias), y = sky ambient floor
+        glm::vec4 shadowParams; ///< x = ray tMin, y = sky ambient floor, z = env_unit_nits
         glm::vec4 presentationParams; ///< x = indirect ambient strength (scene-linear), yzw reserved
     };
     static_assert(sizeof(MeshPushConstants) == 224);

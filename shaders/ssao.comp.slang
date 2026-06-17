@@ -13,6 +13,7 @@
 //
 // Ref: Crytek SSAO (Mittring, "Finding Next Gen", SIGGRAPH 2007)
 // Ref: John Chapman — "SSAO Tutorial" (john-chapman-graphics.blogspot.com)
+// Ref: HBAO/GTAO-style horizon search (deterministic directional sectors)
 
 [[vk::push_constant]]
 cbuffer SSAOPC {
@@ -30,24 +31,13 @@ cbuffer SSAOPC {
 [[vk::binding(3, 0)]] SamplerState        s_nearest;
 [[vk::binding(4, 0)]] SamplerState        s_linear;
 
-static const int kSamples = 16;
+static const int kDirections = 8;
+static const int kStepsPerDirection = 4;
 
 // Minimum cosine between (occluder - receiver) and the surface normal for the
 // occluder to count. Rejects near-coplanar samples (flat ground), which is the
 // scale-invariant cure for false self-occlusion / banding on open floors.
 static const float kPlaneBias = 0.1;
-
-// 16 hemisphere kernel samples (z >= 0), weighted toward the origin.
-static const float3 kKernel[16] = {
-    float3( 0.0492f,  0.0288f,  0.0410f), float3(-0.0712f,  0.1063f,  0.0532f),
-    float3( 0.1284f, -0.0552f,  0.1426f), float3(-0.1632f, -0.1418f,  0.0894f),
-    float3( 0.0231f,  0.2104f,  0.1772f), float3( 0.2693f,  0.0584f,  0.0726f),
-    float3(-0.1547f,  0.1992f,  0.2531f), float3(-0.2865f, -0.1746f,  0.1183f),
-    float3( 0.1138f, -0.3214f,  0.2042f), float3( 0.3521f,  0.1428f,  0.2675f),
-    float3(-0.0826f,  0.0517f,  0.4893f), float3(-0.4012f,  0.2876f,  0.1764f),
-    float3( 0.2417f, -0.4153f,  0.3318f), float3( 0.5126f, -0.0892f,  0.1925f),
-    float3(-0.3284f, -0.4621f,  0.4057f), float3( 0.1043f,  0.6182f,  0.5231f),
-};
 
 float3 viewPosFromUVDepth(float2 uv, float depth) {
     float2 ndc  = float2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
@@ -95,8 +85,8 @@ void main(uint3 id : SV_DispatchThreadID) {
     // (sub-unit ABeautifulGame ↔ ~560-unit Cornell).
     const float r = radius * abs(viewP.z);
 
-    // Build a TBN frame around the view-space normal with a per-pixel random tangent
-    // (rotates the kernel to hide banding).
+    // Build a TBN frame around the view-space normal with a per-pixel random rotation
+    // so the directional sectors do not line up with screen-space axes.
     const float  rnd    = hash12(float2(id.xy)) * 6.2831853;
     const float3 randVec = normalize(float3(cos(rnd), sin(rnd), 0.0));
     const float3 T = normalize(randVec - viewN * dot(randVec, viewN));
@@ -105,47 +95,46 @@ void main(uint3 id : SV_DispatchThreadID) {
 
     float occlusion = 0.0;
     [unroll]
-    for (int i = 0; i < kSamples; ++i) {
-        // Sample position in view space, oriented to the surface hemisphere.
-        float3 samplePos = viewP + mul(kKernel[i], TBN) * r;
+    for (int dirIdx = 0; dirIdx < kDirections; ++dirIdx) {
+        const float angle = rnd + (6.2831853f * float(dirIdx)) / float(kDirections);
+        const float2 dir2 = float2(cos(angle), sin(angle));
+        const float3 tangentDir = normalize(mul(float3(dir2.x, dir2.y, 0.0), TBN));
 
-        float2 sampleUV = viewPosToUV(samplePos);
-        if (any(sampleUV < 0.0.xx) || any(sampleUV > 1.0.xx)) {
-            continue;
+        float dirOcclusion = 0.0;
+        [unroll]
+        for (int stepIdx = 1; stepIdx <= kStepsPerDirection; ++stepIdx) {
+            const float stepFrac = (float(stepIdx) + 0.5f) / float(kStepsPerDirection);
+            const float3 samplePos = viewP + tangentDir * (r * stepFrac);
+            const float2 sampleUV = viewPosToUV(samplePos);
+            if (any(sampleUV < 0.0.xx) || any(sampleUV > 1.0.xx)) {
+                continue;
+            }
+
+            const float sceneDepth = t_depth.SampleLevel(s_nearest, sampleUV, 0.0);
+            if (sceneDepth >= 1.0) {
+                continue; // sky behind the sample — not an occluder
+            }
+
+            const float3 occluderPos = viewPosFromUVDepth(sampleUV, sceneDepth);
+            const float3 toOcc = occluderPos - viewP;
+            const float occDist = length(toOcc);
+            if (occDist < 1e-5) {
+                continue;
+            }
+
+            const float planeCos = dot(toOcc / occDist, viewN);
+            if (planeCos <= kPlaneBias) {
+                continue; // coplanar or below the tangent plane — not an occluder
+            }
+
+            const float rangeWeight = 1.0 - saturate(occDist / r);
+            dirOcclusion = max(dirOcclusion, rangeWeight * saturate(planeCos));
         }
 
-        float sceneDepth = t_depth.SampleLevel(s_nearest, sampleUV, 0.0);
-        if (sceneDepth >= 1.0) {
-            continue; // sky behind the sample — not an occluder
-        }
-        // Reconstruct the actual scene surface point seen at this screen location.
-        float3 occluderPos = viewPosFromUVDepth(sampleUV, sceneDepth);
-        float  sceneZ      = occluderPos.z;
-
-        // Normal-aware rejection: a real occluder must lie ABOVE the receiver's
-        // tangent plane (positive component along the surface normal). On a large
-        // flat plane (e.g. the studio floor) neighbouring samples are coplanar, so
-        // (occluderPos - viewP) is perpendicular to viewN → rejected. This kills the
-        // false self-occlusion / banding that otherwise darkens open flat ground.
-        float3 toOcc    = occluderPos - viewP;
-        float  occDist  = length(toOcc);
-        if (occDist < 1e-5) {
-            continue;
-        }
-        float planeCos = dot(toOcc / occDist, viewN); // >0 → occluder rises off the surface
-        if (planeCos <= kPlaneBias) {
-            continue; // coplanar (flat ground) or below the tangent plane — not an occluder
-        }
-
-        // Occluded when the scene surface is closer to the camera (larger view-space Z)
-        // than the sample point, within the sampling radius.
-        float rangeCheck = smoothstep(0.0, 1.0, r / max(abs(viewP.z - sceneZ), 1e-4));
-        if (sceneZ >= samplePos.z + bias * abs(viewP.z)) {
-            occlusion += rangeCheck * saturate(planeCos);
-        }
+        occlusion += dirOcclusion;
     }
 
-    occlusion = occlusion / float(kSamples);
+    occlusion = occlusion / float(kDirections);
     float ao  = pow(saturate(1.0 - occlusion * intensity), power);
 
     rw_ao[id.xy] = ao;

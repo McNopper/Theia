@@ -3,6 +3,7 @@
 #include <volk/volk.h>
 
 #include <glm/glm.hpp>
+#include <vector>
 
 #include "harmonia/DeviceContext.hpp"
 #include "harmonia/core/Image.hpp"
@@ -75,6 +76,14 @@ class SSRPass {
     };
     static_assert(sizeof(SSRPushConstants) == 128);
 
+    struct DepthPyramidPushConstants {
+        uint32_t srcMip = 0;
+        uint32_t _pad0  = 0;
+        uint32_t _pad1  = 0;
+        uint32_t _pad2  = 0;
+    };
+    static_assert(sizeof(DepthPyramidPushConstants) == 16);
+
     struct CompositePushConstants {
         float ssrStrength  = 0.0f;
         float roughnessMax = 0.0f;
@@ -118,8 +127,19 @@ class SSRPass {
 
     // Owned resources
     Image m_ssrResult; ///< RGBA16F: rgb=reflected color, a=confidence
+    Image m_depthPyramid; ///< R32F min-depth pyramid for hierarchical SSR
     VkSampler m_samplerNearest = VK_NULL_HANDLE;
     VkSampler m_samplerLinear = VK_NULL_HANDLE;
+
+    // Depth pyramid generation pipeline
+    VkPipeline m_depthPyramidPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout m_depthPyramidLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_depthPyramidSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool m_depthPyramidPool = VK_NULL_HANDLE;
+    std::vector<VkDescriptorSet> m_depthPyramidSets;
+    std::vector<VkImageView> m_depthPyramidMipViews;
+    uint32_t m_depthPyramidMipCount = 1;
+    bool m_depthPyramidFirstUse = true;
 
     // SSR ray march pipeline
     VkPipeline m_ssrPipeline = VK_NULL_HANDLE;

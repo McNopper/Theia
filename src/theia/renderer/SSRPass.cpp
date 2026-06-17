@@ -1,6 +1,7 @@
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include "theia/renderer/SSRPass.hpp"
 
+#include <algorithm>
 #include <array>
 #include <harmonia/core/Logger.hpp>
 #include <harmonia/core/ShaderModule.hpp>
@@ -14,13 +15,42 @@
 
 namespace theia {
 
-static constexpr float kRoughnessMax = 0.45f; // must match ssr.comp.slang
+static constexpr float kRoughnessMax = 0.55f; // must match ssr.comp.slang
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 namespace {
+
+[[nodiscard]] VkImageView createMipView(const DeviceContext& ctx, const Image& image, uint32_t mipLevel) {
+    const VkImageViewCreateInfo viewInfo{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = image.handle(),
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = image.format(),
+        .components{
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+            VK_COMPONENT_SWIZZLE_IDENTITY,
+        },
+        .subresourceRange{
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            mipLevel,
+            1,
+            0,
+            1,
+        },
+    };
+
+    VkImageView view = VK_NULL_HANDLE;
+    if (vkCreateImageView(ctx.device, &viewInfo, nullptr, &view) != VK_SUCCESS) {
+        Logger::error("SSRPass: failed to create mip image view {}", mipLevel);
+        return VK_NULL_HANDLE;
+    }
+    return view;
+}
 
 [[nodiscard]] VkShaderModule loadSpv(VkDevice device, const char* filename) {
     auto module = harmonia::createShaderModule(device, shaderPath(filename));
@@ -82,6 +112,7 @@ bool SSRPass::initialize(const DeviceContext& ctx,
     m_ctx = &ctx;
     m_cfg = cfg;
     m_ssrResultFirstUse = true;
+    m_depthPyramidFirstUse = true;
     m_ssgiStrength = cfg.ssgiStrength;
 
     // Create SSR result image: RGBA16F, STORAGE for compute write + SAMPLED for composite read
@@ -109,6 +140,36 @@ bool SSRPass::initialize(const DeviceContext& ctx,
         return false;
     }
     m_ssaoResult = std::move(*aoRes);
+
+    uint32_t mipW = cfg.width;
+    uint32_t mipH = cfg.height;
+    m_depthPyramidMipCount = 1;
+    while (mipW > 1u || mipH > 1u) {
+        mipW = (mipW > 1u) ? (mipW >> 1) : 1u;
+        mipH = (mipH > 1u) ? (mipH >> 1) : 1u;
+        ++m_depthPyramidMipCount;
+    }
+    auto pyramid = Image::create(ctx,
+                                 {cfg.width, cfg.height},
+                                 VK_FORMAT_R32_SFLOAT,
+                                 VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT,
+                                 VK_IMAGE_ASPECT_COLOR_BIT,
+                                 "theia.depthPyramid",
+                                 m_depthPyramidMipCount);
+    if (!pyramid) {
+        Logger::error("SSRPass: failed to create depth pyramid image");
+        return false;
+    }
+    m_depthPyramid = std::move(*pyramid);
+    m_depthPyramidMipViews.clear();
+    m_depthPyramidMipViews.reserve(m_depthPyramidMipCount);
+    for (uint32_t mip = 0; mip < m_depthPyramidMipCount; ++mip) {
+        auto view = createMipView(ctx, m_depthPyramid, mip);
+        if (view == VK_NULL_HANDLE) {
+            return false;
+        }
+        m_depthPyramidMipViews.push_back(view);
+    }
 
     if (!createSamplers()) {
         return false;
@@ -138,6 +199,11 @@ void SSRPass::shutdown() {
         }
     };
 
+    destroy(m_depthPyramidPipeline, vkDestroyPipeline);
+    destroy(m_depthPyramidLayout, vkDestroyPipelineLayout);
+    destroy(m_depthPyramidSetLayout, vkDestroyDescriptorSetLayout);
+    destroy(m_depthPyramidPool, vkDestroyDescriptorPool);
+
     destroy(m_ssrPipeline, vkDestroyPipeline);
     destroy(m_ssrLayout, vkDestroyPipelineLayout);
     destroy(m_ssrSetLayout, vkDestroyDescriptorSetLayout);
@@ -166,8 +232,16 @@ void SSRPass::shutdown() {
     destroy(m_samplerNearest, vkDestroySampler);
     destroy(m_samplerLinear, vkDestroySampler);
 
+    for (VkImageView view : m_depthPyramidMipViews) {
+        if (view != VK_NULL_HANDLE) {
+            vkDestroyImageView(m_ctx->device, view, nullptr);
+        }
+    }
+    m_depthPyramidMipViews.clear();
+
     m_ssrResult = {};
     m_ssaoResult = {};
+    m_depthPyramid = {};
     m_ssgiStrength = 0.0f;
     m_ctx = nullptr;
 }
@@ -224,6 +298,39 @@ void SSRPass::dispatch(VkCommandBuffer cmd, const glm::mat4& proj, const glm::ma
         .pImageMemoryBarriers = preBarriers.data(),
     };
     vkCmdPipelineBarrier2(cmd, &preDep);
+
+    // ---- Depth pyramid generation (min depth hierarchy for SSR) ----
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_depthPyramidPipeline);
+    for (uint32_t mip = 0; mip < m_depthPyramidMipCount; ++mip) {
+        const VkImageLayout outOldLayout = m_depthPyramidFirstUse ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        m_depthPyramid.transition(cmd,
+                                   outOldLayout,
+                                   VK_IMAGE_LAYOUT_GENERAL,
+                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                   VK_ACCESS_2_SHADER_READ_BIT,
+                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                   VK_ACCESS_2_SHADER_WRITE_BIT,
+                                   mip,
+                                   1);
+
+        const DepthPyramidPushConstants dpc{mip == 0 ? 0u : (mip - 1u), 0u, 0u, 0u};
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_depthPyramidLayout, 0, 1, &m_depthPyramidSets[mip], 0, nullptr);
+        vkCmdPushConstants(cmd, m_depthPyramidLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(dpc), &dpc);
+        const uint32_t mipWidth = std::max(1u, m_cfg.width >> mip);
+        const uint32_t mipHeight = std::max(1u, m_cfg.height >> mip);
+        vkCmdDispatch(cmd, (mipWidth + 7u) / 8u, (mipHeight + 7u) / 8u, 1);
+
+        m_depthPyramid.transition(cmd,
+                                   VK_IMAGE_LAYOUT_GENERAL,
+                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                   VK_ACCESS_2_SHADER_WRITE_BIT,
+                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                   VK_ACCESS_2_SHADER_READ_BIT,
+                                   mip,
+                                   1);
+    }
+    m_depthPyramidFirstUse = false;
 
     // ---- SSR ray march dispatch ----
     const SSRPushConstants pc{proj, invProj};
@@ -355,6 +462,47 @@ bool SSRPass::createSamplers() {
 }
 
 bool SSRPass::createDescriptors() {
+    // --- Depth pyramid set: 0=source depth/sampled, 1=destination mip storage ---
+    const std::array<VkDescriptorSetLayoutBinding, 2> depthPyramidBindings{{
+        {0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+    }};
+    const VkDescriptorSetLayoutCreateInfo depthPyramidSetInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = static_cast<uint32_t>(depthPyramidBindings.size()),
+        .pBindings = depthPyramidBindings.data(),
+    };
+    if (vkCreateDescriptorSetLayout(m_ctx->device, &depthPyramidSetInfo, nullptr, &m_depthPyramidSetLayout) != VK_SUCCESS) {
+        Logger::error("SSRPass: failed to create depth pyramid descriptor set layout");
+        return false;
+    }
+    const std::array<VkDescriptorPoolSize, 2> depthPyramidPoolSizes{{
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, m_depthPyramidMipCount},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, m_depthPyramidMipCount},
+    }};
+    const VkDescriptorPoolCreateInfo depthPyramidPoolInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .maxSets = m_depthPyramidMipCount,
+        .poolSizeCount = static_cast<uint32_t>(depthPyramidPoolSizes.size()),
+        .pPoolSizes = depthPyramidPoolSizes.data(),
+    };
+    if (vkCreateDescriptorPool(m_ctx->device, &depthPyramidPoolInfo, nullptr, &m_depthPyramidPool) != VK_SUCCESS) {
+        Logger::error("SSRPass: failed to create depth pyramid descriptor pool");
+        return false;
+    }
+    std::vector<VkDescriptorSetLayout> depthLayouts(m_depthPyramidMipCount, m_depthPyramidSetLayout);
+    const VkDescriptorSetAllocateInfo depthAllocInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .descriptorPool = m_depthPyramidPool,
+        .descriptorSetCount = static_cast<uint32_t>(depthLayouts.size()),
+        .pSetLayouts = depthLayouts.data(),
+    };
+    m_depthPyramidSets.resize(m_depthPyramidMipCount, VK_NULL_HANDLE);
+    if (vkAllocateDescriptorSets(m_ctx->device, &depthAllocInfo, m_depthPyramidSets.data()) != VK_SUCCESS) {
+        Logger::error("SSRPass: failed to allocate depth pyramid descriptor sets");
+        return false;
+    }
+
     // --- SSR ray march set: binding 0=depth, 1=gbuffer, 2=hdr, 3=ssrOut, 4=nearestSampler, 5=linearSampler ---
     const std::array<VkDescriptorSetLayoutBinding, 6> ssrBindings{{
         {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // depth
@@ -625,6 +773,45 @@ bool SSRPass::createPipelines(const char* ssrSpv,
                               const char* ssaoSpv,
                               const char* ssaoBlurSpv,
                               const char* ssgiSpv) {
+    // --- Depth pyramid pipeline ---
+    const VkPushConstantRange depthPyramidPCRange{
+        .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+        .offset = 0,
+        .size = sizeof(DepthPyramidPushConstants),
+    };
+    const VkPipelineLayoutCreateInfo depthPyramidLayoutInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = &m_depthPyramidSetLayout,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &depthPyramidPCRange,
+    };
+    if (vkCreatePipelineLayout(m_ctx->device, &depthPyramidLayoutInfo, nullptr, &m_depthPyramidLayout) != VK_SUCCESS) {
+        Logger::error("SSRPass: failed to create depth pyramid pipeline layout");
+        return false;
+    }
+
+    VkShaderModule depthPyramidModule = loadSpv(m_ctx->device, "depth_pyramid.comp.spv");
+    if (!depthPyramidModule) {
+        return false;
+    }
+
+    const VkComputePipelineCreateInfo depthPyramidPipeInfo{
+        .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+        .stage = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                  .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+                  .module = depthPyramidModule,
+                  .pName = "main"},
+        .layout = m_depthPyramidLayout,
+    };
+    const VkResult depthPyramidRes = vkCreateComputePipelines(
+        m_ctx->device, VK_NULL_HANDLE, 1, &depthPyramidPipeInfo, nullptr, &m_depthPyramidPipeline);
+    vkDestroyShaderModule(m_ctx->device, depthPyramidModule, nullptr);
+    if (depthPyramidRes != VK_SUCCESS) {
+        Logger::error("SSRPass: failed to create depth pyramid compute pipeline");
+        return false;
+    }
+
     // --- SSR pipeline ---
     const VkPushConstantRange ssrPCRange{
         .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
@@ -813,11 +1000,54 @@ bool SSRPass::createPipelines(const char* ssrSpv,
 }
 
 void SSRPass::updateDescriptors() {
+    // Depth pyramid descriptor writes (source depth / previous mip, destination mip storage).
+    const VkDescriptorImageInfo depthPyramidSrcDepthInfo{
+        .sampler = VK_NULL_HANDLE,
+        .imageView = m_cfg.depthView,
+        .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+    };
+    for (uint32_t mip = 0; mip < m_depthPyramidMipCount; ++mip) {
+        const VkDescriptorImageInfo depthPyramidSrcInfo = (mip == 0)
+                                                               ? depthPyramidSrcDepthInfo
+                                                               : VkDescriptorImageInfo{
+                                                                     .sampler = VK_NULL_HANDLE,
+                                                                     .imageView = m_depthPyramidMipViews[mip - 1],
+                                                                     .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                                                 };
+        const VkDescriptorImageInfo depthPyramidDstInfo{
+            .imageView = m_depthPyramidMipViews[mip],
+            .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+        };
+        const std::array<VkWriteDescriptorSet, 2> depthPyramidWrites{{
+            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+             nullptr,
+             m_depthPyramidSets[mip],
+             0,
+             0,
+             1,
+             VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+             &depthPyramidSrcInfo,
+             nullptr,
+             nullptr},
+            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+             nullptr,
+             m_depthPyramidSets[mip],
+             1,
+             0,
+             1,
+             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+             &depthPyramidDstInfo,
+             nullptr,
+             nullptr},
+        }};
+        vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(depthPyramidWrites.size()), depthPyramidWrites.data(), 0, nullptr);
+    }
+
     // SSR pass descriptor writes
     const VkDescriptorImageInfo depthInfo{
         .sampler = m_samplerNearest,
-        .imageView = m_cfg.depthView,
-        .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+        .imageView = m_depthPyramid.view(),
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
     };
     const VkDescriptorImageInfo gbufferInfo{
         .sampler = m_samplerLinear,
