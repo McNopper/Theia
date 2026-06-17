@@ -740,22 +740,13 @@ FS_OUT main(FS_IN input) {
                 transmissionDir = normalize(transmissionDir);
             }
 
-            const float3 transmissionBehindLo = traceTransparentPath(input.worldPos,
-                                                                     transmissionDir,
-                                                                     cameraPos.xyz,
-                                                                     2u,
-                                                                     shadowParams.x);
-            const float3 transTint = computeTransmissionTint(mat);
-            const float Fr = fresnelDielectric(saturate(abs(dot(-wo, Nf))), eta);
-            const float3 reflectionDir = normalize(reflect(-wo, Nf));
-            float3 reflectedLo = sampleSpecularEnv(reflectionDir, rough, 1.0);
-            if (rough < 0.05) {
-                const float3 reflectedSceneLo =
-                    traceTransparentPath(input.worldPos, reflectionDir, cameraPos.xyz, 1u, shadowParams.x);
-                const float3 reflectedRawLo = sampleEnvRaw(reflectionDir, shadowParams.z);
-                reflectedLo = min(reflectedSceneLo, reflectedRawLo * 1.5);
-            }
-            const float3 transmissionLo = Fr * reflectedLo + (1.0 - Fr) * transmissionBehindLo * transTint;
+            // traceTransparentPath already handles Fresnel weighting internally (line 598 adds
+            // Fr*reflection, line 603/607 continues with (1-Fr)*transTint throughput), so use result directly.
+            const float3 transmissionLo = traceTransparentPath(input.worldPos,
+                                                               transmissionDir,
+                                                               cameraPos.xyz,
+                                                               2u,
+                                                               shadowParams.x);
             // Apply transmission on the covered/front surface response first.
             // geometry_opacity then controls visibility of that surface vs behind-radiance.
             surfaceLo = lerp(frontSurfaceLo, transmissionLo, transmissionWeight);
