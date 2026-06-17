@@ -20,21 +20,22 @@
 
 class SceneBuilder;
 
-/// Theia (rasterizer) per-instance GPU layout (std430, 32 bytes). The mesh-shader path
+/// Theia (rasterizer) per-instance GPU layout (std430, 36 bytes). The mesh-shader path
 /// draws meshlets, so this carries meshletOffset/meshletCount. Distinct from Hyperion's
 /// path-tracer layout, which carries indexOffset instead.
 struct GpuInstance {
     uint32_t meshIndex     = 0;
     uint32_t materialIndex = 0;
     uint32_t vertexOffset  = 0; ///< first vertex in global vertex buffer (absolute)
+    uint32_t indexOffset   = 0; ///< first index in global index buffer (absolute triangle index stream)
+    uint32_t indexCount    = 0; ///< number of indices in global index buffer for this instance
     uint32_t meshletOffset = 0; ///< first meshlet index in meshlet buffer
     uint32_t meshletCount  = 0; ///< number of meshlets for this instance
     uint32_t geometryKind  = 0; ///< 0 = triangle mesh, 1 = sphere
     float    sphereRadius  = 0.0f;
-    uint32_t _pad          = 0;
 };
 static_assert(std::is_trivially_copyable_v<GpuInstance>);
-static_assert(sizeof(GpuInstance) == 32);
+static_assert(sizeof(GpuInstance) == 36);
 
 /// Per-meshlet descriptor uploaded to GPU (std430, 32 bytes).
 struct GpuMeshlet {

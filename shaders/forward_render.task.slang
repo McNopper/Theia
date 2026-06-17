@@ -23,11 +23,12 @@ struct GpuInstance {
     uint  meshIndex;
     uint  materialIndex;
     uint  vertexOffset;
+    uint  indexOffset;
+    uint  indexCount;
     uint  meshletOffset;
     uint  meshletCount;
     uint  geometryKind;
     float sphereRadius;
-    uint  _pad;
 };
 
 struct GpuMaterial {

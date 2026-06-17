@@ -147,6 +147,7 @@ class ForwardRenderer {
     glm::vec3 m_sunDir{0.0f, 1.0f, 0.0f}; ///< world dir toward dominant IBL light
     float m_sunStrength = 0.0f;           ///< [0,1] ray-traced sun shadow strength
     float m_indirectAmbientStrength = 0.0f;
+    float m_debugRayHitMode = 0.0f;       ///< 0=off, 1=ray-hit albedo, 2=ray-hit radiance (debug only)
 
     // Set 0: geometry buffers (vertex/instance/index/meshlet data — task + mesh stages)
     VkDescriptorSetLayout m_meshSetLayout = VK_NULL_HANDLE;

@@ -54,11 +54,12 @@ uint32_t Scene::addMesh(const DeviceContext& ctx,
         .meshIndex = instanceIndex,
         .materialIndex = materialIdx,
         .vertexOffset = 0,
+        .indexOffset = 0,
+        .indexCount = 0,
         .meshletOffset = 0,
         .meshletCount = 0,
         .geometryKind = 0,
         .sphereRadius = 0.0f,
-        ._pad = 0,
     });
     return instanceIndex;
 }
@@ -119,6 +120,7 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
 
         if (const auto* mesh = dynamic_cast<const TriangleMesh*>(m_geometries[i].get())) {
             instance.vertexOffset = static_cast<uint32_t>(vertices.size());
+            instance.indexOffset = static_cast<uint32_t>(indices.size());
             instance.geometryKind = 0;
 
             vertices.insert(vertices.end(), mesh->data().vertices.begin(), mesh->data().vertices.end());
@@ -126,6 +128,7 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
             const auto& localIndices = mesh->data().indices;
             const size_t vertCount = mesh->data().vertices.size();
             const size_t indexCount = localIndices.size();
+            instance.indexCount = static_cast<uint32_t>(indexCount);
 
             for (uint32_t index : localIndices) {
                 indices.push_back(index + instance.vertexOffset);
@@ -203,6 +206,8 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
             }
         } else if (const auto* sphere = dynamic_cast<const Sphere*>(m_geometries[i].get())) {
             instance.vertexOffset = static_cast<uint32_t>(vertices.size());
+            instance.indexOffset = 0;
+            instance.indexCount = 0;
             instance.meshletOffset = 0;
             instance.meshletCount = 0;
             instance.geometryKind = 1;

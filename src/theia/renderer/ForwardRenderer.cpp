@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <harmonia/core/Logger.hpp>
 #include <harmonia/core/ShaderModule.hpp>
 #include <theia/renderer/ShaderPath.hpp>
@@ -35,6 +36,16 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
     if (!createPipeline()) {
         Logger::error("Failed to create pipeline");
         return false;
+    }
+
+    char* debugModeRaw = nullptr;
+    size_t debugModeLen = 0;
+    if (_dupenv_s(&debugModeRaw, &debugModeLen, "THEIA_DEBUG_RAY_HIT_MODE") == 0 && debugModeRaw != nullptr) {
+        m_debugRayHitMode = std::clamp(std::strtof(debugModeRaw, nullptr), 0.0f, 2.0f);
+        std::free(debugModeRaw);
+        if (m_debugRayHitMode > 0.0f) {
+            Logger::info("THEIA_DEBUG_RAY_HIT_MODE = {:.1f}", m_debugRayHitMode);
+        }
     }
 
     // Create 1-element dummy buffers for tile light slots (fallback when LightCuller hasn't run).
@@ -297,6 +308,8 @@ bool ForwardRenderer::createPipeline() {
     }
 
     constexpr VkShaderStageFlags kTaskAndMeshStages = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT;
+    constexpr VkShaderStageFlags kTaskMeshFragStages =
+        VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT;
     const VkPushConstantRange pushConstantRange{
         .stageFlags = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
         .offset = 0,
@@ -305,9 +318,9 @@ bool ForwardRenderer::createPipeline() {
 
     // Set 0: geometry buffers + material table for task-shader bucketing.
     const std::array<VkDescriptorSetLayoutBinding, 7> meshBindings{
-        VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTaskAndMeshStages, nullptr},
-        VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTaskAndMeshStages, nullptr},
-        VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
+        VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTaskMeshFragStages, nullptr},
+        VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTaskMeshFragStages, nullptr},
+        VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTaskAndMeshStages, nullptr},
         VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
         VkDescriptorSetLayoutBinding{5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
@@ -1196,7 +1209,7 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         // shadowParams: x = ray tMin (scene-scale bias from camera near plane), y = sky ambient floor.
         .sunDirection = glm::vec4(m_sunDir, m_hasEnv ? m_sunStrength : 0.0f),
         .shadowParams = glm::vec4(std::max(m_camera.nearPlane, 1e-4f), 0.35f, 0.0f, 0.0f),
-        .presentationParams = glm::vec4(m_indirectAmbientStrength, 0.0f, 0.0f, 0.0f),
+        .presentationParams = glm::vec4(m_indirectAmbientStrength, 0.0f, m_debugRayHitMode, 0.0f),
     };
 
     const uint32_t instanceCount = m_scene->instanceCount();

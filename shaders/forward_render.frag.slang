@@ -38,6 +38,11 @@ cbuffer ForwardPC {
 // Scene top-level acceleration structure for ray-traced shadows (inline ray query).
 [[vk::binding(5, 1)]] RaytracingAccelerationStructure t_tlas;
 
+// Set 0 (shared geometry buffers): used by mesh shading and ray-hit reconstruction debug.
+[[vk::binding(0, 0)]] StructuredBuffer<GpuVertex>   vertices;
+[[vk::binding(1, 0)]] StructuredBuffer<GpuInstance> instances;
+[[vk::binding(2, 0)]] StructuredBuffer<uint>        indices;
+
 // Set 2: IBL textures
 // Bindings: 0=diffuse irradiance, 1=specular prefilter (mipped), 2=sheen LUT, 3=sampler, 4=raw env, 5=GGX BRDF LUT
 [[vk::binding(0, 2)]] Texture2D<float4> t_iblDiffuse;
@@ -292,7 +297,7 @@ float traceShadow(float3 origin, float3 dir, float tMin, float tMax) {
     ray.TMax      = tMax;
 
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
-    q.TraceRayInline(t_tlas, RAY_FLAG_NONE, 0xFEu, ray);
+    q.TraceRayInline(t_tlas, RAY_FLAG_NONE, 0xFFu, ray);
     q.Proceed();
     return (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) ? 0.0 : 1.0;
 }
@@ -415,9 +420,114 @@ float3 shadeOneLight(GpuLight light, GpuMaterial mat, float3 worldPos, float3 wo
     return evalBSDF(mat, wo, wi, N, T, B, N, T, B) * Li * NdotL * vis;
 }
 
+struct RayHitData {
+    bool  hit;
+    uint  materialIdx;
+    float3 worldPos;
+    float3 normal;
+};
+
+RayHitData tracePrimaryOpaqueHit(float3 cameraPosWs, float3 targetWorldPos, float tMin) {
+    RayHitData hit;
+    hit.hit = false;
+    hit.materialIdx = 0u;
+    hit.worldPos = 0.0.xxx;
+    hit.normal = float3(0.0, 1.0, 0.0);
+
+    const float3 rayDir = normalize(targetWorldPos - cameraPosWs);
+    RayDesc ray;
+    ray.Origin = cameraPosWs + rayDir * tMin;
+    ray.Direction = rayDir;
+    ray.TMin = tMin;
+    ray.TMax = kInf;
+
+    RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
+    q.TraceRayInline(t_tlas, RAY_FLAG_NONE, 0xFEu, ray);
+    while (q.Proceed()) {}
+    if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) {
+        return hit;
+    }
+
+    const uint instId = q.CommittedInstanceID();
+    const GpuInstance inst = instances[instId];
+    const uint tri = q.CommittedPrimitiveIndex();
+    const uint base = inst.indexOffset + tri * 3u;
+    if (base + 2u >= inst.indexOffset + inst.indexCount) {
+        return hit;
+    }
+
+    const uint i0 = indices[base + 0u];
+    const uint i1 = indices[base + 1u];
+    const uint i2 = indices[base + 2u];
+    const float3 p0 = vertices[i0].position;
+    const float3 p1 = vertices[i1].position;
+    const float3 p2 = vertices[i2].position;
+
+    const float2 b = q.CommittedTriangleBarycentrics();
+    const float b0 = 1.0 - b.x - b.y;
+    const float b1 = b.x;
+    const float b2 = b.y;
+    hit.worldPos = p0 * b0 + p1 * b1 + p2 * b2;
+    float3 Ng = normalize(cross(p1 - p0, p2 - p0));
+    if (!q.CommittedTriangleFrontFace()) {
+        Ng = -Ng;
+    }
+    hit.normal = Ng;
+    hit.materialIdx = inst.materialIndex;
+    hit.hit = true;
+    return hit;
+}
+
 [shader("fragment")]
 FS_OUT main(FS_IN input) {
     GpuMaterial mat = materials[input.materialIdx];
+
+    // 26b debug modes (primary-ray hit reconstruction), gated and off by default:
+    // presentationParams.z >= 1: show ray-hit base color
+    // presentationParams.z >= 2: show ray-hit shaded radiance (no texture normal maps)
+    if (presentationParams.z >= 1.0 && presentationParams.y < 0.5) {
+        const float shadowBias = shadowParams.x;
+        const RayHitData hit = tracePrimaryOpaqueHit(cameraPos.xyz, input.worldPos, kRayEpsilon);
+        FS_OUT outDbg;
+        outDbg.gbuffer = float4(0.5, 0.5, 0.5, 1.0);
+        if (!hit.hit) {
+            outDbg.hdrColor = float4(0.0, 0.0, 0.0, 1.0);
+            return outDbg;
+        }
+
+        const GpuMaterial hitMat = materials[hit.materialIdx];
+        if (presentationParams.z < 2.0) {
+            outDbg.hdrColor = float4(saturate3(hitMat.baseColorWeight.xyz), 1.0);
+            return outDbg;
+        }
+
+        const float3 N = normalize(hit.normal);
+        const float3 wo = normalize(cameraPos.xyz - hit.worldPos);
+        const float3 up = abs(N.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
+        const float3 T = normalize(cross(up, N));
+        const float3 B = normalize(cross(N, T));
+        const float3 shadowOrigin = hit.worldPos + N * shadowBias;
+
+        float3 directLo = 0.0.xxx;
+        for (uint i = 0; i < lightCount; ++i) {
+            directLo += shadeOneLight(lights[i], hitMat, hit.worldPos, wo, N, T, B, shadowOrigin, shadowBias);
+        }
+
+        float iblShadow = 1.0;
+        const float sunStrength = sunDirection.w;
+        if (sunStrength > 0.0) {
+            const float3 sunDir = normalize(sunDirection.xyz);
+            if (dot(N, sunDir) > 0.0) {
+                const float sunVis = traceShadow(shadowOrigin, sunDir, shadowBias, 1e16);
+                const float skyFloor = shadowParams.y;
+                iblShadow = lerp(1.0, lerp(skyFloor, 1.0, sunVis), sunStrength);
+            }
+        }
+        const float3 indirectLo = evalIBL(hitMat, wo, N, T, B) * iblShadow;
+        const float3 emission = hitMat.emissionColorLum.xyz * hitMat.emissionColorLum.w;
+        outDbg.hdrColor = float4(exposure * (directLo + indirectLo + emission), 1.0);
+        return outDbg;
+    }
 
     if (presentationParams.y >= 0.5) {
         FS_OUT outDebug;
