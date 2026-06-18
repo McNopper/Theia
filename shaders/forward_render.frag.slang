@@ -548,7 +548,6 @@ float3 traceTransparentPath(float3 originWs, float3 dirWs, float3 viewPos, uint 
         const GpuMaterial hitMat = materials[hit.materialIdx];
         const float opacity = saturate(hitMat.opacityFlagsPad.x);
         const float transmissionWeight = saturate(hitMat.transmissionColorWeight.w);
-        const float effectiveTransmissionWeight = opacity * transmissionWeight;
         const bool isTransparent = (opacity < 0.9999) || (transmissionWeight > 0.0);
         if (!isTransparent) {
             accum += throughput * shadeHitRadianceFromRayDir(hit, rayDir, shadowBias);
@@ -558,7 +557,7 @@ float3 traceTransparentPath(float3 originWs, float3 dirWs, float3 viewPos, uint 
         float3 N = normalize(hit.normal);
         float Fr = 0.0;
         float3 refrDir = rayDir;
-        if (effectiveTransmissionWeight > 0.0) {
+        if (transmissionWeight > 0.0) {
             const float eta = max(hitMat.specularRoughAnisoIor.z, 1.01);
             float etaRatio = 1.0 / eta;
             if (dot(rayDir, N) > 0.0) {
@@ -596,13 +595,13 @@ float3 traceTransparentPath(float3 originWs, float3 dirWs, float3 viewPos, uint 
                     }
                 }
             }
-            accum += throughput * (opacity * Fr) * reflectedEnv;
+            accum += throughput * Fr * reflectedEnv;
         }
 
         const float3 transTint = computeTransmissionTint(hitMat);
         const float coverageWeight = 1.0 - opacity;
-        const float transWeight = effectiveTransmissionWeight * (1.0 - Fr);
-        const bool continueAsTransmission = effectiveTransmissionWeight > 0.0;
+        const float transWeight = transmissionWeight * (1.0 - Fr);
+        const bool continueAsTransmission = transmissionWeight > 0.0;
         const float continueWeight = continueAsTransmission ? transWeight : coverageWeight;
         const float3 continueTint = continueAsTransmission ? transTint : 1.0.xxx;
         throughput *= continueWeight * continueTint;
@@ -722,7 +721,6 @@ FS_OUT main(FS_IN input) {
     if (presentationParams.y >= 0.5) {
         const float opacity = saturate(mat.opacityFlagsPad.x);
         const float transmissionWeight = saturate(mat.transmissionColorWeight.w);
-        const float effectiveTransmissionWeight = opacity * transmissionWeight;
         const float coverageWeight = 1.0 - opacity;
         const float3 coverageRayDir = -wo;
         const float3 coverageBehindLo = traceTransparentPath(input.worldPos,
@@ -744,7 +742,7 @@ FS_OUT main(FS_IN input) {
         // Transmission path (`transmission_weight > 0`): replace IBL-only "refracted env"
         // approximation with scene-traced behind-radiance. In 26d this ray is bent by
         // Snell/IOR (enter/exit aware) before tracing.
-        if (effectiveTransmissionWeight > 0.0) {
+        if (transmissionWeight > 0.0) {
             const float eta = max(mat.specularRoughAnisoIor.z, 1.01);
             const float rough = saturate(mat.specularRoughAnisoIor.x);
             float3 Nf = N;
@@ -769,7 +767,7 @@ FS_OUT main(FS_IN input) {
                                                                shadowParams.x);
             // Apply transmission on the covered/front surface response first.
             // geometry_opacity then controls visibility of that surface vs behind-radiance.
-            surfaceLo = lerp(frontSurfaceLo, transmissionLo, effectiveTransmissionWeight);
+            surfaceLo = lerp(frontSurfaceLo, transmissionLo, transmissionWeight);
         }
 
         // geometry_opacity coverage compositing: premultiplied-alpha "over" operator.
