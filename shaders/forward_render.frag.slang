@@ -625,7 +625,7 @@ FS_OUT main(FS_IN input) {
     // presentationParams.z >= 1: show ray-hit base color
     // presentationParams.z >= 2: show ray-hit shaded radiance (no texture normal maps)
     // presentationParams.z >= 3: show instance index as color (debug indexing)
-    if (presentationParams.z >= 3.0 && presentationParams.y >= 0.5) {
+    if (presentationParams.z >= 3.0 && presentationParams.z < 4.0 && presentationParams.y >= 0.5) {
         const RayHitData hit = tracePrimaryOpaqueHit(cameraPos.xyz, input.worldPos, kRayEpsilon);
         FS_OUT outDbg;
         outDbg.gbuffer = float4(0.5, 0.5, 0.5, 1.0);
@@ -642,7 +642,7 @@ FS_OUT main(FS_IN input) {
         outDbg.hdrColor = float4(debugColor, 1.0);
         return outDbg;
     }
-    if (presentationParams.z >= 1.0 && presentationParams.y < 0.5) {
+    if (presentationParams.z >= 1.0 && presentationParams.z < 4.0 && presentationParams.y < 0.5) {
         const float shadowBias = shadowParams.x;
         const RayHitData hit = tracePrimaryOpaqueHit(cameraPos.xyz, input.worldPos, kRayEpsilon);
         FS_OUT outDbg;
@@ -719,6 +719,21 @@ FS_OUT main(FS_IN input) {
     // Opaque pass already filled the background color/depth; this pass resolves transparent
     // front surfaces by querying behind-radiance and writing final HDR RGB (no depth write).
     if (presentationParams.y >= 0.5) {
+        // D1 gate: make the transparent surface behave as if it didn't exist.
+        // This emits only behind-radiance along the view ray from the front hit.
+        if (presentationParams.z >= 4.0) {
+            const float3 passThroughDir = -wo;
+            const float3 passThroughLo = traceTransparentPath(input.worldPos,
+                                                              passThroughDir,
+                                                              cameraPos.xyz,
+                                                              2u,
+                                                              shadowParams.x);
+            FS_OUT outNoOp;
+            outNoOp.hdrColor = float4(passThroughLo * exposure, 0.0);
+            outNoOp.gbuffer = float4(0.5, 0.5, 0.5, 1.0);
+            return outNoOp;
+        }
+
         const float opacity = saturate(mat.opacityFlagsPad.x);
         const float transmissionWeight = saturate(mat.transmissionColorWeight.w);
         const float coverageWeight = 1.0 - opacity;

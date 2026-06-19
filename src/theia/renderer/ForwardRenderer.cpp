@@ -41,7 +41,7 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
     char* debugModeRaw = nullptr;
     size_t debugModeLen = 0;
     if (_dupenv_s(&debugModeRaw, &debugModeLen, "THEIA_DEBUG_RAY_HIT_MODE") == 0 && debugModeRaw != nullptr) {
-        m_debugRayHitMode = std::clamp(std::strtof(debugModeRaw, nullptr), 0.0f, 2.0f);
+        m_debugRayHitMode = std::clamp(std::strtof(debugModeRaw, nullptr), 0.0f, 4.0f);
         std::free(debugModeRaw);
         if (m_debugRayHitMode > 0.0f) {
             Logger::info("THEIA_DEBUG_RAY_HIT_MODE = {:.1f}", m_debugRayHitMode);
