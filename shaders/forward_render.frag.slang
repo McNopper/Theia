@@ -625,6 +625,8 @@ FS_OUT main(FS_IN input) {
     // presentationParams.z >= 1: show ray-hit base color
     // presentationParams.z >= 2: show ray-hit shaded radiance (no texture normal maps)
     // presentationParams.z >= 3: show instance index as color (debug indexing)
+    // presentationParams.z >= 5: show transparent pass surfaceLo
+    // presentationParams.z >= 6: show transparent pass behindLo
     if (presentationParams.z >= 3.0 && presentationParams.z < 4.0 && presentationParams.y >= 0.5) {
         const RayHitData hit = tracePrimaryOpaqueHit(cameraPos.xyz, input.worldPos, kRayEpsilon);
         FS_OUT outDbg;
@@ -721,7 +723,7 @@ FS_OUT main(FS_IN input) {
     if (presentationParams.y >= 0.5) {
         // D1 gate: make the transparent surface behave as if it didn't exist.
         // This emits only behind-radiance along the view ray from the front hit.
-        if (presentationParams.z >= 4.0) {
+        if (presentationParams.z >= 4.0 && presentationParams.z < 5.0) {
             const float3 passThroughDir = -wo;
             const float3 passThroughLo = traceTransparentPath(input.worldPos,
                                                               passThroughDir,
@@ -783,6 +785,19 @@ FS_OUT main(FS_IN input) {
             // Apply transmission on the covered/front surface response first.
             // geometry_opacity then controls visibility of that surface vs behind-radiance.
             surfaceLo = lerp(frontSurfaceLo, transmissionLo, transmissionWeight);
+        }
+
+        if (presentationParams.z >= 5.0 && presentationParams.z < 6.0) {
+            FS_OUT outSurface;
+            outSurface.hdrColor = float4(surfaceLo * exposure, 0.0);
+            outSurface.gbuffer = float4(0.5, 0.5, 0.5, 1.0);
+            return outSurface;
+        }
+        if (presentationParams.z >= 6.0) {
+            FS_OUT outBehind;
+            outBehind.hdrColor = float4(coverageBehindLo * exposure, 0.0);
+            outBehind.gbuffer = float4(0.5, 0.5, 0.5, 1.0);
+            return outBehind;
         }
 
         // geometry_opacity coverage compositing: premultiplied-alpha "over" operator.
