@@ -116,9 +116,20 @@ bool Application::onSceneLoaded(const SceneLoader::SceneConfig& sceneConfig) {
     const VkBuffer conditionalCdf = hasEnv ? iblProbe()->conditionalCdfBuffer().handle() : VK_NULL_HANDLE;
     const uint32_t cdfW = hasEnv ? iblProbe()->cdfWidth() : 0u;
     const uint32_t cdfH = hasEnv ? iblProbe()->cdfHeight() : 0u;
+    const uint32_t diffuseRes = std::max(1u, config().iblDiffuseResolution);
+    const VkExtent2D diffuseExtent{diffuseRes, std::max(1u, diffuseRes / 2u)};
 
     if (!m_ibl.initialize(
-            deviceContext(), commandPool(), envView, envSampler, envNits, marginalCdf, conditionalCdf, cdfW, cdfH)) {
+            deviceContext(),
+            commandPool(),
+            envView,
+            envSampler,
+            envNits,
+            diffuseExtent,
+            marginalCdf,
+            conditionalCdf,
+            cdfW,
+            cdfH)) {
         Logger::error("IBL precomputation failed");
         return false;
     }

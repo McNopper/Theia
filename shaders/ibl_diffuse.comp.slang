@@ -84,7 +84,7 @@ void main(uint3 tid : SV_DispatchThreadID)
 
     // Importance-sample the env map over the full sphere; the hemisphere
     // constraint is enforced by the max(0, dot(N, wi)) factor.
-    const uint sampleCount = 1024u;
+    const uint sampleCount = 4096u;
     float3 irradiance = 0.0.xxx;
 
     for (uint i = 0u; i < sampleCount; ++i) {

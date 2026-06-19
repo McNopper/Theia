@@ -16,7 +16,6 @@
 namespace {
 
 constexpr VkExtent2D kSheenExtent{512, 512};
-constexpr VkExtent2D kDiffuseExtent{256, 128};
 constexpr VkExtent2D kSpecularExtent{1024, 512};
 constexpr uint32_t kSpecularMipLevels = 8;
 
@@ -109,6 +108,7 @@ bool IblPrecompute::initialize(const DeviceContext& ctx,
                                VkImageView envImageView,
                                VkSampler envSampler,
                                float envUnitNits,
+                               VkExtent2D diffuseExtent,
                                VkBuffer marginalCdf,
                                VkBuffer conditionalCdf,
                                uint32_t cdfWidth,
@@ -120,6 +120,7 @@ bool IblPrecompute::initialize(const DeviceContext& ctx,
     m_envImageView = envImageView;
     m_envSampler = envSampler;
     m_envUnitNits = (envUnitNits > 0.0f) ? envUnitNits : 1.0f;
+    m_diffuseExtent = diffuseExtent;
     m_marginalCdf = marginalCdf;
     m_conditionalCdf = conditionalCdf;
     m_cdfWidth = cdfWidth;
@@ -220,7 +221,7 @@ bool IblPrecompute::createTextures() {
 
     auto diffuse =
         Image::create(*m_ctx,
-                      kDiffuseExtent,
+                      m_diffuseExtent,
                       VK_FORMAT_R16G16B16A16_SFLOAT,
                       VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                       VK_IMAGE_ASPECT_COLOR_BIT,
@@ -616,7 +617,7 @@ bool IblPrecompute::runDiffusePass(VkCommandBuffer cmd) {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
     const DiffusePC pc{m_envUnitNits, m_cdfWidth, m_cdfHeight, 0};
     vkCmdPushConstants(cmd, pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-    vkCmdDispatch(cmd, dispatchCount(kDiffuseExtent.width), dispatchCount(kDiffuseExtent.height), 1);
+    vkCmdDispatch(cmd, dispatchCount(m_diffuseExtent.width), dispatchCount(m_diffuseExtent.height), 1);
 
     m_res.diffuseIrrad.transition(cmd,
                                   VK_IMAGE_LAYOUT_GENERAL,
