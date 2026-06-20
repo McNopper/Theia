@@ -35,6 +35,13 @@ float4 main(float4 pos : SV_Position, float3 viewRay : TEXCOORD0) : SV_Target0 {
     }
     const float3 dir = normalize(viewRay);
     // max(.,0) matches Hyperion sampleEnvMap clamping against negative filtered values.
-    const float3 env = max(t_envRaw.SampleLevel(s_iblLinear, dirToLatlong(dir), 0.0).xyz, 0.0.xxx);
+    // Per-component finite guard: some HDR panoramas carry NaN/Inf texels, and max(NaN, 0)
+    // is not guaranteed to return 0 (SPIR-V FMax is undefined for NaN). Without this the
+    // sky pass writes NaN straight into the HDR image (the forward geometry path is already
+    // protected by safe3), poisoning accumulation, the denoiser and the captured EXR.
+    const float3 raw = t_envRaw.SampleLevel(s_iblLinear, dirToLatlong(dir), 0.0).xyz;
+    const float3 env = float3(isfinite(raw.x) ? max(raw.x, 0.0) : 0.0,
+                              isfinite(raw.y) ? max(raw.y, 0.0) : 0.0,
+                              isfinite(raw.z) ? max(raw.z, 0.0) : 0.0);
     return float4(env * envScale * exposure, 1.0);
 }

@@ -939,7 +939,16 @@ FS_OUT main(FS_IN input) {
         // away from the geometric one (keeps NoV positive for front faces).
         if (dot(perturbed, N) > 0.0) {
             N = perturbed;
-            T = normalize(input.tangent - dot(input.tangent, N) * N);
+            // Re-derive the tangent frame for the perturbed normal, guarding the
+            // degenerate case (tangent parallel to N) exactly like the initial frame
+            // above — an unguarded normalize() of a near-zero vector yields NaN.
+            float3 rawTn = input.tangent - dot(input.tangent, N) * N;
+            if (dot(rawTn, rawTn) < 1e-8) {
+                const float3 upN = abs(N.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
+                T = normalize(cross(upN, N));
+            } else {
+                T = normalize(rawTn);
+            }
             B = normalize(cross(N, T) * input.bitangentSign);
         }
     }

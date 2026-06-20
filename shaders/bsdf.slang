@@ -355,6 +355,11 @@ BSDFSample sampleBSDF(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B, 
     if (!haveCoatDir) {
         sample.direction = normalize(toWorld(wiLocal, Ts, Bs, Ns));
     }
+    if (!all(isfinite(sample.direction))) {
+        sample.weight = 0.0.xxx;
+        sample.pdf = 0.0;
+        return sample;
+    }
     // A coat sampled in a tilted coat frame may land in the base back hemisphere,
     // where NEE (which rejects dot(wi,N)<=0) cannot match it — reject for MIS consistency.
     if (haveCoatDir && dot(sample.direction, Ns) <= 0.0) {
@@ -362,8 +367,9 @@ BSDFSample sampleBSDF(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B, 
         return sample;
     }
     sample.pdf = pdfBSDF(mat, wo, sample.direction, N, T, B, cN, cT, cB);
-    if (sample.pdf <= 0.0) {
+    if (!isfinite(sample.pdf) || sample.pdf <= 0.0) {
         sample.weight = 0.0.xxx;
+        sample.pdf = 0.0;
         return sample;
     }
 
@@ -372,6 +378,6 @@ BSDFSample sampleBSDF(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B, 
     float3 f = evalBSDF(mat, wo, sample.direction, N, T, B, cN, cT, cB);
     float cosTheta = abs(dot(sample.direction, Ns));
     sample.weight = f * (cosTheta / sample.pdf);
-    sample.weight = max(sample.weight, 0.0.xxx);
+    sample.weight = all(isfinite(sample.weight)) ? max(sample.weight, 0.0.xxx) : 0.0.xxx;
     return sample;
 }

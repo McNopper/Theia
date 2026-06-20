@@ -91,7 +91,9 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     /// The ray-query GI compute stage runs as the indirect-lighting provider in the
     /// non-post-fx (parity) path. GI and SSR are mutually exclusive HDR writers: when
     /// post-fx is active SSR owns the composite, otherwise GI does (if initialized).
-    [[nodiscard]] bool giActive() const noexcept { return m_giPass.isInitialized() && !postFxActive(); }
+    [[nodiscard]] bool giActive() const noexcept {
+        return config().rtGi && m_giPass.isInitialized() && !postFxActive();
+    }
 
     /// True when a compute stage (SSR or GI) is the final writer of the HDR image this
     /// frame, so the host's pre-tonemap barrier names COMPUTE rather than the raster pass.

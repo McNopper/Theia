@@ -5,7 +5,7 @@ GPU-driven real-time renderer for OpenPBR materials.
 > *[Theia](https://en.wikipedia.org/wiki/Theia_(mythology)) — Titaness of heavenly light, mother of Helios, Selene and Eos.*
 
 Theia is a modern Vulkan 1.4 renderer built on GPU-driven forward rendering techniques.  
-It implements the [OpenPBR Surface v1.1](https://academysoftwarefoundation.github.io/OpenPBR/) material model in real-time and closely matches [Hyperion](https://github.com/McNopper/Hyperion)'s path-traced output on identical test scenes.
+It implements the [OpenPBR Surface v1.1](https://academysoftwarefoundation.github.io/OpenPBR/) material model in real-time and targets visual parity with [Hyperion](https://github.com/McNopper/Hyperion)'s path-traced output on identical test scenes. Parity for direct-lighting and IBL-dominated scenes is established; multi-bounce GI parity (closed rooms, indirect-light fill) is work in progress — see *RT-GI* in the roadmap below.
 
 **Interactive real-time rendering** — explore complex materials, dynamic lighting, and HDR output in real-time.  
 **Architecture driven by [GPU-Driven Rendering](https://vkguide.dev/docs/gpudriven)** — compute-based culling, indirect dispatch, and clustered lighting.
@@ -55,7 +55,10 @@ It implements the [OpenPBR Surface v1.1](https://academysoftwarefoundation.githu
 - **GPU-driven forward rendering** — compute-based culling, indirect command generation, and dispatch
 - **Direct lighting** — 1-2 directional lights + Forward+ tile-based point light culling (16×16 px tiles, up to 128 lights/tile)
 - **Image-based lighting (IBL)** — equirectangular HDR panorama; diffuse irradiance pre-convolution + per-roughness GGX prefiltered specular map; MaterialX analytic GGX directional albedo (no BRDF LUT)
+- **Ray-traced global illumination (RT-GI)** *(planned)* — inline `VK_KHR_ray_query` compute stage; shared unidirectional path-integrator core (NEE + MIS + Russian Roulette) in Harmonia; output feeds the existing accumulation → denoiser chain for convergence to Hyperion ground truth
+- **ReSTIR DI + GI** *(planned)* — spatiotemporal reservoir resampling for real-time quality at 1 spp/frame; pure ray-query compute, cross-vendor; converges to the same reference as RT-GI
 - **Real-time performance** — GPU-tier dependent: 1080p/HDR/30fps on mid-range (RTX 4050 class); 4K/HDR/60fps on high-end (RTX 4090/5090 class); development reference: RTX 4050 at 1080p HDR
+- **Sub-pixel camera jitter (Halton 2,3)** — deterministic raster AA sampling for accumulation-friendly opaque edge anti-aliasing
 - **Interactive camera control** — WASD movement, mouse look, EV100 physical exposure adjustment
 - **Screen-Space Reflections (SSR)** — linear view-space ray march (64 steps + 8-step binary refinement) with additive composite blend; roughness cutoff 0.45; IBL as fallback for off-screen misses
 - **Screen-Space Ambient Occlusion (SSAO)** — hemisphere depth sampling with bilateral blur denoiser; composited into the HDR buffer alongside SSR
@@ -189,19 +192,28 @@ build/theia.exe --scene cornell_classic --output out.exr
 |------|---------|-------------|
 | `--scene <name>` / `-s` | `cornell_classic.scene.toml` | Scene name or path; bare names resolve against the assets directory (also accepted as first positional argument) |
 | `--output <file>` / `-o` | — | Offscreen mode: render and save EXR (untonemapped) + PNG (tonemapped), then exit |
+| `--offscreen-frames <n>` | `4` | Number of frames accumulated/warmed up before offscreen capture is written |
 | `--width <n>` | 1920 | Render width in pixels |
 | `--height <n>` | 1080 | Render height in pixels |
 | `--validation` / `--no-validation` | disabled | Enable / disable Vulkan validation layers |
 | `--no-postfx` | off | Disable SSR/SSAO/bloom (required for locked parity comparison renders) |
 | `--indirect-ambient <x>` | `0.0` | Presentation-only constant indirect ambient boost (scene-linear); keep `0.0` for parity fixtures |
 | `--ssgi-strength <x>` | `0.0` | Optional screen-space GI complement; keep `0.0` for parity fixtures |
+| `--diag-transparent-env-lod` | off | **Diagnostic-only**: transparent env taps use deterministic roughness/ray-cone LOD (higher mip) instead of mip0 |
+| `--no-camera-jitter` | off | Disable sub-pixel camera jitter (debug/baseline comparison only) |
 
-### Indirect-light divergence policy
-Theia is a real-time renderer and currently uses a presentation-only approximation for
-missing bounce light (`--indirect-ambient`). This intentionally does **not** match
-Hyperion's multi-bounce path tracing. For parity measurements and fixture diffs, keep
-`--indirect-ambient 0.0`, `--ssgi-strength 0.0`, and `--no-postfx`; non-zero values are
-acceptable only for interactive presentation quality.
+### Indirect lighting and GI architecture
+
+Theia uses a **staged, replaceable pipeline** for indirect lighting:
+
+| Stage | Status | Notes |
+|-------|--------|-------|
+| Flat ambient (`--indirect-ambient`) | Deprecated | Presentation-only hack; contributes ~0 in closed scenes; will be removed |
+| Screen-space GI (`--ssgi-strength`) | Deprecated | Approximation; superseded by RT-GI |
+| **RT-GI compute stage** | In progress | `VK_KHR_ray_query` multibounce; shared integrator core with Hyperion; feeds accumulation → denoiser |
+| **ReSTIR DI + GI** | Planned | Spatiotemporal reservoir resampling for real-time convergence |
+
+For parity measurements keep `--indirect-ambient 0.0`, `--ssgi-strength 0.0`, and `--no-postfx`. These flags will be retired once RT-GI is the default path.
 
 ---
 
@@ -251,7 +263,7 @@ Where a technique is shared with [Hyperion](https://github.com/McNopper/Hyperion
 ### Rendering & GPU-Driven Rendering
 | Resource | Relevance |
 |----------|-----------|
-| [Physically Based Rendering: From Theory To Implementation, 4th ed.](https://www.pbrt.org/) (Pharr, Jakob, Humphreys) | BSDF sampling, Monte Carlo integration, MIS balance heuristic, area light PDF conversion |
+| [Physically Based Rendering: From Theory To Implementation, 4th ed.](https://www.pbrt.org/) (Pharr, Jakob, Humphreys) | BSDF sampling, Monte Carlo integration, MIS balance heuristic, area light PDF conversion, env-map importance sampling |
 | [Real-Time Rendering, 4th ed.](https://www.realtimerendering.com/) (Akenine-Möller et al.) | Real-time algorithms, shadows, BRDF models, IBL, anti-aliasing |
 | [Wihlidal — "GPU-Driven Rendering Pipelines" (SIGGRAPH 2015)](https://advances.realtimerendering.com/s2015/aaltonenhaar_siggraph2015_combined_final_footer_220dpi.pdf) | Indirect draw, GPU command generation, per-cluster culling |
 | [VK Guide — GPU-Driven Rendering](https://vkguide.dev/docs/gpudriven) | Practical Vulkan indirect dispatch, descriptor binding patterns |
@@ -263,6 +275,17 @@ Where a technique is shared with [Hyperion](https://github.com/McNopper/Hyperion
 | [Walter, Marschner, Li & Torrance — "Microfacet Models for Refraction through Rough Surfaces" (EGSR 2007)](https://www.cs.cornell.edu/~srm/publications/EGSR07-btdf.pdf) | GGX (Trowbridge-Reitz) NDF and Smith G2 — foundation of specular evaluation |
 | [Heitz — "Sampling the GGX Distribution of Visible Normals" (JCGT 2018)](https://jcgt.org/published/0007/04/01/) | VNDF importance sampling in the IBL pre-filter compute shader |
 | [Ray Tracing Gems I & II](https://www.realtimerendering.com/raytracinggems/) (Haines et al., Marrs et al.) | Hybrid rendering, ray query patterns, shadow ray precision |
+| [Shirley et al. — "Monte Carlo Techniques for Direct Lighting Calculations" (TOG 1996)](https://dl.acm.org/doi/10.1145/226550.226571) | Emissive-triangle NEE: area sampling, area-to-solid-angle PDF conversion |
+
+### Global Illumination & ReSTIR
+| Resource | Relevance |
+|----------|-----------|
+| [Bitterli, Wyman et al. — "Spatiotemporal Reservoir Resampling for Real-Time Ray Tracing with Dynamic Direct Illumination" (SIGGRAPH 2020)](https://research.nvidia.com/publication/2020-07_spatiotemporal-reservoir-resampling-real-time-ray-tracing-dynamic-direct) | ReSTIR DI: spatiotemporal reservoir resampling for direct illumination |
+| [Ouyang, Liu, Lin et al. — "ReSTIR GI: Path Resampling for Real-Time Path Tracing" (HPG 2021)](https://dl.acm.org/doi/10.1145/3451256) | ReSTIR GI: spatiotemporal path resampling for indirect illumination |
+| [Lin, Kettunen, Bitterli et al. — "Generalized Resampled Importance Sampling: Foundations of ReSTIR" (SIGGRAPH 2022)](https://research.nvidia.com/publication/2022-07_generalized-resampled-importance-sampling-foundations-restir) | GRIS: unbiased ReSTIR generalization; correctness foundation for RT parity |
+| [Wyman, Panteleev — "Rearchitecting Spatiotemporal Resampling for Production" (HPG 2021)](https://research.nvidia.com/publication/2021-07_rearchitecting-spatiotemporal-resampling-production) | ReSTIR DI production implementation and bias-correction techniques |
+| [NVIDIA RTXDI SDK](https://github.com/NVIDIAGameWorks/RTXDI) | Open-source ReSTIR DI reference implementation (Apache 2.0) |
+| [Heitz, Hill et al. — "Combining Analytic Direct Illumination and Stochastic Shadows" (I3D 2018)](https://research.nvidia.com/publication/2018-05_combining-analytic-direct-illumination-and-stochastic-shadows) | Shadow denoising and analytical/stochastic integration strategies |
 
 ### Vulkan & API
 | Resource | Relevance |

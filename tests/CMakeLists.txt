@@ -6,6 +6,11 @@ include(GoogleTest)
 set(THEIA_MODULE_TEST_SOURCES
     module/main.cpp
     module/test_scene_build.cpp
+    module/test_rng_contract.cpp
+    module/test_camera_jitter_contract.cpp
+    module/test_env_sampling_contract.cpp
+    module/test_bsdf_sampling_contract.cpp
+    module/test_transparency_path_contract.cpp
 )
 
 add_executable(theia_module_tests ${THEIA_MODULE_TEST_SOURCES})

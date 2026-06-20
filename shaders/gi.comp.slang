@@ -174,6 +174,12 @@ void main(uint3 tid : SV_DispatchThreadID) {
     const float3 worldPos = giSample.xyz;
 
     GpuMaterial mat = materials[materialIdx];
+    // Guard against a materialIdx that indexes uninitialized / garbage material data in
+    // the GI compute's descriptor set: a non-finite material would feed NaN/Inf straight
+    // into the BSDF eval, ahead of the downstream isfinite() guards.
+    if (!all(isfinite(mat.baseColorWeight.xyz)) || !all(isfinite(mat.emissionColorLum.xyz))) {
+        return;
+    }
 
     // Skip self-emissive primary surfaces: their radiance is the emitter itself, shown
     // directly by the forward pass; bounced light off an emitter is negligible.
@@ -261,6 +267,11 @@ void main(uint3 tid : SV_DispatchThreadID) {
         }
 
         SurfaceHit surf = makeSurfaceHit(h, -dir);
+        // Reject a non-finite secondary material rather than propagating NaN through
+        // integrateSurface — terminate the path and keep the radiance accumulated so far.
+        if (!all(isfinite(surf.mat.baseColorWeight.xyz)) || !all(isfinite(surf.mat.emissionColorLum.xyz))) {
+            break;
+        }
         state.depth = bounce + 1u;
         integrateSurface(tracer, surf,
             emissiveTriangleCount, emissiveTriangles,
@@ -276,10 +287,14 @@ void main(uint3 tid : SV_DispatchThreadID) {
     }
 
     float3 indirect = state.radiance * exposure;
-    if (!all(isfinite(indirect))) {
+    // Global NaN/Inf guard: discard the whole sample so the pixel keeps its currently
+    // accumulated value instead of being poisoned by a single bad bounce.
+    if (!all(isfinite(indirect)) || any(isnan(indirect))) {
         return;
     }
     indirect = max(indirect, 0.0.xxx);
+    // Hard ceiling on top of the per-sample firefly suppression below.
+    indirect = clamp(indirect, 0.0.xxx, (kFireflyClampDisplay * 3.0).xxx);
     // Per-sample firefly suppression (averaged across accumulated frames downstream).
     const float avg = (indirect.x + indirect.y + indirect.z) * (1.0 / 3.0);
     if (avg > kFireflyClampDisplay) {

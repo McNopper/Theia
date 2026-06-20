@@ -69,23 +69,28 @@ bool Application::onInitialize() {
 
     // GiPass — ray-query global illumination (multi-bounce indirect via the shared
     // Harmonia path integrator). Runs in the non-post-fx (parity) path as the indirect
-    // lighting provider, replacing the forward pass's flat-IBL approximation.
-    const GiPass::Config giCfg{
-        .width = swapchain().extent().width,
-        .height = swapchain().extent().height,
-        .hdrImage = hdrImage().handle(),
-        .hdrView = hdrImage().view(),
-        .giBufferImage = m_renderer->giBufferImage(),
-        .giBufferView = m_renderer->giBufferView(),
-        .gbufferImage = m_renderer->gbufferImage(),
-        .gbufferView = m_renderer->gbufferView(),
-    };
-    if (!m_giPass.initialize(deviceContext(), giCfg)) {
-        Logger::warn("GiPass failed to initialize — ray-query GI disabled");
+    // lighting provider, replacing the forward pass's flat-IBL approximation. Opt-in via
+    // --rt-gi; off by default so non-GI scenes keep evalIBL + direct lighting unchanged.
+    if (config().rtGi) {
+        const GiPass::Config giCfg{
+            .width = swapchain().extent().width,
+            .height = swapchain().extent().height,
+            .hdrImage = hdrImage().handle(),
+            .hdrView = hdrImage().view(),
+            .giBufferImage = m_renderer->giBufferImage(),
+            .giBufferView = m_renderer->giBufferView(),
+            .gbufferImage = m_renderer->gbufferImage(),
+            .gbufferView = m_renderer->gbufferView(),
+        };
+        if (!m_giPass.initialize(deviceContext(), giCfg)) {
+            Logger::warn("GiPass failed to initialize — ray-query GI disabled");
+        }
+        // When GI will run, the forward pass must emit direct+emission only (no IBL/ambient);
+        // the GI compute stage supplies the indirect term.
+        m_renderer->setGiEnabled(giActive());
+    } else {
+        m_renderer->setGiEnabled(false);
     }
-    // When GI will run, the forward pass must emit direct+emission only (no IBL/ambient);
-    // the GI compute stage supplies the indirect term.
-    m_renderer->setGiEnabled(giActive());
 
     return true;
 }
@@ -297,20 +302,25 @@ void Application::onResize(VkExtent2D extent) noexcept {
     }
 
     // Reinitialize GiPass with new HDR/GBuffer views from the resized ForwardRenderer.
-    const GiPass::Config giCfg{
-        .width = extent.width,
-        .height = extent.height,
-        .hdrImage = hdrImage().handle(),
-        .hdrView = hdrImage().view(),
-        .giBufferImage = m_renderer->giBufferImage(),
-        .giBufferView = m_renderer->giBufferView(),
-        .gbufferImage = m_renderer->gbufferImage(),
-        .gbufferView = m_renderer->gbufferView(),
-    };
-    if (!m_giPass.initialize(deviceContext(), giCfg)) {
-        Logger::warn("GiPass resize failed — ray-query GI disabled");
+    // Opt-in via --rt-gi; off by default.
+    if (config().rtGi) {
+        const GiPass::Config giCfg{
+            .width = extent.width,
+            .height = extent.height,
+            .hdrImage = hdrImage().handle(),
+            .hdrView = hdrImage().view(),
+            .giBufferImage = m_renderer->giBufferImage(),
+            .giBufferView = m_renderer->giBufferView(),
+            .gbufferImage = m_renderer->gbufferImage(),
+            .gbufferView = m_renderer->gbufferView(),
+        };
+        if (!m_giPass.initialize(deviceContext(), giCfg)) {
+            Logger::warn("GiPass resize failed — ray-query GI disabled");
+        }
+        m_renderer->setGiEnabled(giActive());
+    } else {
+        m_renderer->setGiEnabled(false);
     }
-    m_renderer->setGiEnabled(giActive());
 }
 
 bool Application::onEvent(const SDL_Event& event) {

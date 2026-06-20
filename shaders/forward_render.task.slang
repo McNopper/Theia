@@ -13,7 +13,14 @@ cbuffer ForwardPC {
     uint     tilesY;
     uint     screenWidth;
     uint     screenHeight;
-    uint     _pad;
+    uint     transparentMaxDepth;
+    uint     frameSampleIndex;
+    uint     rngBaseSeed;
+    uint     rngFlags;
+    uint     _padRng;
+    uint     envImportanceWidth;
+    uint     envImportanceHeight;
+    uint     _padEnv;
     float4   sunDirection;
     float4   shadowParams;
     float4   presentationParams;
