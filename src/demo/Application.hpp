@@ -41,6 +41,8 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     [[nodiscard]] VkAccessFlags2 outputAccessMask() const noexcept override {
         return postFxActive() ? VK_ACCESS_2_SHADER_WRITE_BIT : VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
     }
+    [[nodiscard]] VkImageView gNormalView() const noexcept override { return m_renderer ? m_renderer->gbufferView() : VK_NULL_HANDLE; }
+    [[nodiscard]] VkImageView gDepthView() const noexcept override { return m_renderer ? m_renderer->depthView() : VK_NULL_HANDLE; }
     [[nodiscard]] const char* name() const noexcept override { return "Theia ForwardRenderer"; }
 
   protected:
