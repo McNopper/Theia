@@ -10,6 +10,7 @@
 #include <harmonia/core/Logger.hpp>
 #include <harmonia/core/ShaderModule.hpp>
 #include <theia/renderer/ShaderPath.hpp>
+#include <theia/renderer/CameraJitter.hpp>
 #include <theia/scene/Scene.hpp>
 #include <vector>
 
@@ -125,6 +126,10 @@ void ForwardRenderer::shutdown() {
     m_brdfLutInfo = {};
     m_iblEnvSamplerInfo = {};
     m_iblEnvRawInfo = {};
+    m_envMarginalCdf = VK_NULL_HANDLE;
+    m_envConditionalCdf = VK_NULL_HANDLE;
+    m_envImportanceWidth = 0;
+    m_envImportanceHeight = 0;
 
     m_dummyTileCounts = {};
     m_dummyTileIndices = {};
@@ -136,6 +141,7 @@ void ForwardRenderer::shutdown() {
     m_texturesBoundFor = nullptr;
     m_depthTarget = {};
     m_gbufferTarget = {};
+    m_giBufferTarget = {};
     m_ctx = nullptr;
 
     m_initialized = false;
@@ -151,6 +157,7 @@ bool ForwardRenderer::resize(uint32_t width, uint32_t height, VkImage hdrImage, 
     m_config.hdrImageView = hdrImageView;
     m_depthTarget = {};
     m_gbufferTarget = {};
+    m_giBufferTarget = {};
     m_hdrFirstUse = true;
     return createDepthTarget();
 }
@@ -278,6 +285,22 @@ bool ForwardRenderer::createDepthTarget() {
         return false;
     }
     m_gbufferTarget = std::move(*gbufResult);
+
+    // GI GBuffer: RGBA32F — world-space primary hit position (xyz) + material index (w,
+    // encoded as asfloat(materialIdx + 1); 0 = background). RGBA32F keeps the integer
+    // material index bit-exact and the world position at full precision for ray seeding.
+    // SAMPLED_BIT so the GI compute stage can fetch it via texelFetch (Texture2D.Load).
+    auto giBufResult = Image::create(*m_ctx,
+                                     extent,
+                                     VK_FORMAT_R32G32B32A32_SFLOAT,
+                                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                     VK_IMAGE_ASPECT_COLOR_BIT,
+                                     "theia.gibuffer");
+    if (!giBufResult) {
+        Logger::error("Failed to create GI GBuffer target");
+        return false;
+    }
+    m_giBufferTarget = std::move(*giBufResult);
     return true;
 }
 
@@ -384,17 +407,20 @@ bool ForwardRenderer::createPipeline() {
         return false;
     }
 
-    // Set 2: IBL textures + sampler (fragment stage)
-    // binding 0: t_iblDiffuse, 1: t_iblSpecular, 2: t_sheenLut, 3: s_iblLinear, 4: t_envRaw (sky), 5: t_brdfLut
-    const std::array<VkDescriptorSetLayoutBinding, 6> iblBindings{
+    // Set 2: IBL textures + sampler + env importance CDFs (fragment stage)
+    // binding 0: t_iblDiffuse, 1: t_iblSpecular, 2: t_sheenLut, 3: s_iblLinear, 4: t_envRaw, 5: t_brdfLut
+    // binding 6: envMarginalCdf, 7: envConditionalCdf
+    const std::array<VkDescriptorSetLayoutBinding, 8> iblBindings{
         VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{5, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        VkDescriptorSetLayoutBinding{6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        VkDescriptorSetLayoutBinding{7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
     };
-    const std::array<VkDescriptorBindingFlags, 6> iblBindingFlags{kUAB, kUAB, kUAB, kUAB, kUAB, kUAB};
+    const std::array<VkDescriptorBindingFlags, 8> iblBindingFlags{kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo iblBindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = static_cast<uint32_t>(iblBindingFlags.size()),
@@ -453,7 +479,7 @@ bool ForwardRenderer::createPipeline() {
 
     // Single pool for all four sets.
     const std::array<VkDescriptorPoolSize, 5> poolSizes{
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 12},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 14},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 5},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLER, 1},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures},
@@ -596,7 +622,10 @@ bool ForwardRenderer::createPipeline() {
     };
     // GBuffer (target 1) blend state — write all, no blend
     const VkPipelineColorBlendAttachmentState gbufferAttachment = colorAttachment;
-    const std::array<VkPipelineColorBlendAttachmentState, 2> colorAttachments{colorAttachment, gbufferAttachment};
+    // GI GBuffer (target 2) blend state — write all, no blend (opaque pass only)
+    const VkPipelineColorBlendAttachmentState giBufferAttachment = colorAttachment;
+    const std::array<VkPipelineColorBlendAttachmentState, 3> colorAttachments{
+        colorAttachment, gbufferAttachment, giBufferAttachment};
     const VkPipelineColorBlendStateCreateInfo colorBlend{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
         .attachmentCount = static_cast<uint32_t>(colorAttachments.size()),
@@ -606,8 +635,10 @@ bool ForwardRenderer::createPipeline() {
         .blendEnable = VK_FALSE,
         .colorWriteMask = 0,
     };
-    const std::array<VkPipelineColorBlendAttachmentState, 2> transparentColorAttachments{
-        colorAttachment, transparentGbufferAttachment};
+    // Transparent pass must not clobber the opaque-written GI GBuffer (no GI for
+    // transparent surfaces in this MVP) — mask out target 2.
+    const std::array<VkPipelineColorBlendAttachmentState, 3> transparentColorAttachments{
+        colorAttachment, transparentGbufferAttachment, transparentGbufferAttachment};
     const VkPipelineColorBlendStateCreateInfo transparentColorBlend{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
         .attachmentCount = static_cast<uint32_t>(transparentColorAttachments.size()),
@@ -623,7 +654,8 @@ bool ForwardRenderer::createPipeline() {
         .pDynamicStates = dynamicStates.data(),
     };
     constexpr VkFormat kGbufferFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
-    const std::array<VkFormat, 2> colorFormats{m_config.outputFormat, kGbufferFormat};
+    constexpr VkFormat kGiBufferFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
+    const std::array<VkFormat, 3> colorFormats{m_config.outputFormat, kGbufferFormat, kGiBufferFormat};
     const VkPipelineRenderingCreateInfo rendering{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
         .colorAttachmentCount = static_cast<uint32_t>(colorFormats.size()),
@@ -776,7 +808,7 @@ bool ForwardRenderer::createPipeline() {
                               VK_COLOR_COMPONENT_A_BIT,
         };
         const VkPipelineColorBlendAttachmentState skyGbufBlend{.blendEnable = VK_FALSE, .colorWriteMask = 0};
-        const std::array<VkPipelineColorBlendAttachmentState, 2> skyBlends{skyHdrBlend, skyGbufBlend};
+        const std::array<VkPipelineColorBlendAttachmentState, 3> skyBlends{skyHdrBlend, skyGbufBlend, skyGbufBlend};
         const VkPipelineColorBlendStateCreateInfo skyColorBlend{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
             .attachmentCount = static_cast<uint32_t>(skyBlends.size()),
@@ -866,6 +898,20 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
             .image = m_gbufferTarget.handle(),
             .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
         },
+        // GI GBuffer: always discard (UNDEFINED) — fully written each frame by the opaque pass.
+        VkImageMemoryBarrier2{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
+            .srcAccessMask = 0,
+            .dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+            .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = m_giBufferTarget.handle(),
+            .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+        },
     };
     const VkDependencyInfo hdrDep{
         .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
@@ -922,6 +968,18 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         .offset = 0,
         .range = VK_WHOLE_SIZE,
     };
+    const VkBuffer cdfFallbackBuffer =
+        (m_dummyTileCounts.handle() != VK_NULL_HANDLE) ? m_dummyTileCounts.handle() : m_scene->materialBuffer().handle();
+    VkDescriptorBufferInfo envMarginalCdfInfo{
+        .buffer = (m_envMarginalCdf != VK_NULL_HANDLE) ? m_envMarginalCdf : cdfFallbackBuffer,
+        .offset = 0,
+        .range = VK_WHOLE_SIZE,
+    };
+    VkDescriptorBufferInfo envConditionalCdfInfo{
+        .buffer = (m_envConditionalCdf != VK_NULL_HANDLE) ? m_envConditionalCdf : cdfFallbackBuffer,
+        .offset = 0,
+        .range = VK_WHOLE_SIZE,
+    };
     // Tile light lists: use real buffers if LightCuller ran, else dummy fallback.
     const VkBuffer tileCntBuf = (m_tileLightCountsBuf != VK_NULL_HANDLE && m_dummyTileCounts.handle() != VK_NULL_HANDLE)
                                     ? m_tileLightCountsBuf
@@ -949,7 +1007,7 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         .pAccelerationStructures = &sceneTlas,
     };
 
-    std::array<VkWriteDescriptorSet, 13> writes{
+    std::array<VkWriteDescriptorSet, 15> writes{
         VkWriteDescriptorSet{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .dstSet = m_meshSet,
@@ -1056,6 +1114,23 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
         },
+        // Set 2: env importance CDF buffers for transparent-path stochastic env sampling.
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_iblSet,
+            .dstBinding = 6,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &envMarginalCdfInfo,
+        },
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_iblSet,
+            .dstBinding = 7,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &envConditionalCdfInfo,
+        },
     };
     vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 
@@ -1105,6 +1180,9 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
     VkClearColorValue clearCol{{0.0f, 0.0f, 0.0f, 1.0f}};
     // GBuffer clear: encoded normal (0.5,0.5,0.5) = view-space (0,0,0), roughness=1 → background
     VkClearColorValue clearGbuf{{0.5f, 0.5f, 0.5f, 1.0f}};
+    // GI GBuffer clears to all-zero: w=0 (asfloat) is the background sentinel the GI
+    // stage tests to skip pixels with no opaque primary surface.
+    VkClearColorValue clearGi{{0.0f, 0.0f, 0.0f, 0.0f}};
     VkClearDepthStencilValue clearDepth{1.0f, 0};
 
     VkRenderingAttachmentInfo colorAttachment{
@@ -1134,7 +1212,17 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         .clearValue{.depthStencil = clearDepth},
     };
 
-    const std::array<VkRenderingAttachmentInfo, 2> colorAttachments{colorAttachment, gbufferAttachment};
+    VkRenderingAttachmentInfo giBufferAttachment{
+        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+        .imageView = m_giBufferTarget.view(),
+        .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE, // must store for GiPass to read
+        .clearValue{.color = clearGi},
+    };
+
+    const std::array<VkRenderingAttachmentInfo, 3> colorAttachments{
+        colorAttachment, gbufferAttachment, giBufferAttachment};
     VkRenderingInfo rendering{
         .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
         .renderArea{{0, 0}, {m_config.width, m_config.height}},
@@ -1155,6 +1243,9 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
                                              m_camera.nearPlane,
                                              m_camera.farPlane);
         skyProj[1][1] *= -1.0f;
+        if (m_cameraJitterEnabled) {
+            skyProj = applyProjectionJitter(skyProj, cameraJitterNdc(m_frameSampleIndex, m_config.width, m_config.height));
+        }
         const glm::mat4 skyView = glm::lookAt(m_camera.position, m_camera.target, m_camera.up);
         const glm::mat4 skyViewProj = skyProj * skyView;
         const SkyPushConstants skyPc{
@@ -1188,6 +1279,9 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
                                       m_camera.nearPlane,
                                       m_camera.farPlane);
     proj[1][1] *= -1.0f;
+    if (m_cameraJitterEnabled) {
+        proj = applyProjectionJitter(proj, cameraJitterNdc(m_frameSampleIndex, m_config.width, m_config.height));
+    }
     const glm::mat4 view = glm::lookAt(m_camera.position, m_camera.target, m_camera.up);
     const glm::mat4 viewProj = proj * view;
     // exposure = 1 / (1.2 * 2^EV100) — matches Hyperion's PhysicalCamera calc
@@ -1205,6 +1299,15 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         .screenWidth = m_config.width,
         .screenHeight = m_config.height,
         .transparentMaxDepth = m_transparentMaxDepth,
+        .frameSampleIndex = m_frameSampleIndex,
+        .rngBaseSeed = m_rngBaseSeed,
+        .rngFlags = (m_deterministicReplay ? 0x1u : 0u) | (m_rngDebug != 0u ? 0x2u : 0u) |
+                    (m_transparentEnvLodDiagnostic != 0u ? 0x4u : 0u),
+        ._padRng = 0u,
+        .envImportanceWidth = m_envImportanceWidth,
+        .envImportanceHeight = m_envImportanceHeight,
+        ._padEnv = 0u,
+        .giEnabled = m_giEnabled,
         // Ray-traced sun shadow: direction toward the dominant IBL light + strength.
         // shadowParams: x = ray tMin (scene-scale bias from camera near plane), y = sky ambient floor,
         // z = env_unit_nits for raw-env transparent rays.

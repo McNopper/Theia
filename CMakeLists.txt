@@ -56,6 +56,7 @@ set(THEIA_ENTRY_SHADERS
     ssao.comp.slang
     ssao_blur.comp.slang
     ssgi.comp.slang
+    gi.comp.slang
 )
 
 # Theia-specific sources only. Common Vulkan code now lives in Harmonia and the
@@ -66,6 +67,7 @@ set(THEIA_LIBRARY_SOURCES
     src/theia/renderer/IblPrecompute.cpp
     src/theia/renderer/LightCuller.cpp
     src/theia/renderer/SSRPass.cpp
+    src/theia/renderer/GiPass.cpp
     # Theia GPU scene (rasterizer/meshlet layout — renderer-specific)
     src/theia/scene/Scene.cpp
 )

@@ -7,6 +7,8 @@
 import common; // GpuMaterial, GpuLight, GpuEmissiveTriangle, kLight* constants
 import bsdf;   // evalBSDF() -- imports common + math transitively
 import math;   // fresnelDielectric()
+import rng;
+import env_sample;
 
 [[vk::push_constant]]
 cbuffer ForwardPC {
@@ -21,6 +23,14 @@ cbuffer ForwardPC {
     uint     screenWidth;
     uint     screenHeight;
     uint     transparentMaxDepth;   // transparent gather depth (from scene max_depth)
+    uint     frameSampleIndex;      // per-frame sample counter for stochastic stages
+    uint     rngBaseSeed;           // base seed used by composeRngSeed()
+    uint     rngFlags;              // bit0 = deterministic replay, bit1 = RNG debug visualization
+    uint     _padRng;
+    uint     envImportanceWidth;    // CDF width; 0 = env importance sampling disabled
+    uint     envImportanceHeight;   // CDF height
+    uint     _padEnv;
+    uint     giEnabled;             // 1 when the ray-query GI compute stage supplies indirect; disables IBL/ambient here
     float4   sunDirection;          // xyz = world dir toward sun, w = shadow strength (0 disables)
     float4   shadowParams;          // x = ray tMin, y = sky ambient floor, z = env_unit_nits
     float4   presentationParams;    // x = indirect ambient strength (presentation-only), yzw reserved
@@ -51,6 +61,8 @@ cbuffer ForwardPC {
 [[vk::binding(3, 2)]] SamplerState      s_iblLinear;
 [[vk::binding(4, 2)]] Texture2D<float4> t_envRaw;
 [[vk::binding(5, 2)]] Texture2D<float2> t_brdfLut;
+[[vk::binding(6, 2)]] StructuredBuffer<float> envMarginalCdf;
+[[vk::binding(7, 2)]] StructuredBuffer<float> envConditionalCdf;
 
 // Set 3: bindless material textures (base_color, normal, ORM, emission).
 // Indexed by GpuMaterial::textureIndices; kNoTexture (~0u) means "no map, use constant".
@@ -72,7 +84,16 @@ struct FS_IN {
 struct FS_OUT {
     float4 hdrColor : SV_Target0;
     float4 gbuffer  : SV_Target1; // xyz = viewN [0,1], w = roughness
+    float4 giBuffer : SV_Target2; // xyz = world-space primary hit position, w = asfloat(materialIdx + 1) (0 = background)
 };
+
+// Keep in sync with Hyperion firefly suppression threshold (display-referred units after exposure).
+static const float kFireflyClampDisplay = 100.0;
+
+uint composePixelSeed(float4 pixelPos, uint bounceIndex) {
+    const uint2 pixel = uint2(uint(pixelPos.x), uint(pixelPos.y));
+    return composeRngSeed(pixel, frameSampleIndex, bounceIndex, rngBaseSeed);
+}
 
 float2 dirToLatlong(float3 d) {
     // Hyperion env.slang convention (shaders/env.slang): u via atan2(z,x), v via acos(y).
@@ -85,6 +106,116 @@ float2 dirToLatlong(float3 d) {
 float3 sampleEnvRaw(float3 dir, float envScale) {
     const float2 uv = dirToLatlong(dir);
     return envScale * max(t_envRaw.SampleLevel(s_iblLinear, uv, 0.0).xyz, 0.0.xxx);
+}
+
+bool envImportanceEnabled() {
+    return envImportanceWidth > 0u && envImportanceHeight > 0u;
+}
+
+float evalEnvPdf(float3 dir) {
+    if (!envImportanceEnabled()) {
+        return 0.0;
+    }
+    return evalEnvImportancePdfDir(envMarginalCdf, envConditionalCdf, envImportanceWidth, envImportanceHeight, dir);
+}
+
+float3 safe3(float3 v) {
+    return all(isfinite(v)) ? v : 0.0.xxx;
+}
+
+float3 clampFirefliesDisplay(float3 exposureWeightedLo) {
+    float3 v = max(safe3(exposureWeightedLo), 0.0.xxx);
+    const float avg = (v.x + v.y + v.z) * (1.0 / 3.0);
+    if (avg > kFireflyClampDisplay) {
+        v *= kFireflyClampDisplay / avg;
+    }
+    return v;
+}
+
+bool isFiniteDir(float3 v) {
+    return all(isfinite(v)) && dot(v, v) > 1.0e-12;
+}
+
+void buildFrameFromNormal(float3 N, out float3 T, out float3 B) {
+    const float3 up = abs(N.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
+    T = normalize(cross(up, N));
+    B = normalize(cross(N, T));
+}
+
+float powerCosinePdf(float3 axis, float3 wi, float roughness) {
+    const float cosTheta = saturate(dot(normalize(axis), normalize(wi)));
+    const float r = max(roughness, 0.01);
+    const float n = clamp(2.0 / max(r * r, 1.0e-4) - 2.0, 1.0, 8192.0);
+    return ((n + 1.0) * 0.5 * kInvPi) * pow(cosTheta, n);
+}
+
+float3 samplePowerCosineLobe(float3 axis, float roughness, float2 xi, out float pdf) {
+    const float3 nAxis = normalize(axis);
+    const float r = max(roughness, 0.01);
+    const float n = clamp(2.0 / max(r * r, 1.0e-4) - 2.0, 1.0, 8192.0);
+    const float cosTheta = pow(max(1.0 - xi.x, 0.0), 1.0 / (n + 1.0));
+    const float sinTheta = sqrt(max(1.0 - cosTheta * cosTheta, 0.0));
+    const float phi = 2.0 * kPi * xi.y;
+    const float3 up = abs(nAxis.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
+    const float3 t = normalize(cross(up, nAxis));
+    const float3 b = cross(nAxis, t);
+    const float3 wi = normalize(t * (sinTheta * cos(phi)) + b * (sinTheta * sin(phi)) + nAxis * cosTheta);
+    pdf = powerCosinePdf(nAxis, wi, roughness);
+    return wi;
+}
+
+float3 sampleEnvGlossyMIS(float3 axisDir, float roughness, inout uint seed, out float debugMisW) {
+    debugMisW = 1.0;
+    if (!envImportanceEnabled()) {
+        return sampleEnvRaw(axisDir, shadowParams.z);
+    }
+
+    float envPdf = 0.0;
+    const float3 wiEnv = sampleEnvImportanceDir(
+        envMarginalCdf, envConditionalCdf, envImportanceWidth, envImportanceHeight, rngNextFloat2(seed), envPdf);
+    envPdf = sanitizePdf(envPdf);
+    if (envPdf <= 0.0) {
+        return sampleEnvRaw(axisDir, shadowParams.z);
+    }
+
+    const float glossyPdfOnEnv = powerCosinePdf(axisDir, wiEnv, roughness);
+    const float3 LeEnv = sampleEnvRaw(wiEnv, shadowParams.z);
+    const float wEnv = balanceHeuristic(envPdf, glossyPdfOnEnv);
+    float3 estimateEnv = LeEnv * (glossyPdfOnEnv * wEnv / max(envPdf, 1.0e-6));
+
+    float glossyPdf = 0.0;
+    const float3 wiGlossy = samplePowerCosineLobe(axisDir, roughness, rngNextFloat2(seed), glossyPdf);
+    glossyPdf = sanitizePdf(glossyPdf);
+    if (glossyPdf > 0.0) {
+        const float envPdfOnGlossy = evalEnvPdf(wiGlossy);
+        const float wGlossy = balanceHeuristic(glossyPdf, envPdfOnGlossy);
+        const float3 LeGlossy = sampleEnvRaw(wiGlossy, shadowParams.z);
+        estimateEnv += LeGlossy * wGlossy;
+    }
+
+    debugMisW = wEnv;
+    return min(safe3(0.5 * estimateEnv), 50000.0.xxx);
+}
+
+float diagnosticTransparentEnvLod(float roughness, uint bounceIndex) {
+    // Diagnostic-only path (rngFlags bit2): deterministic higher-mip env sampling
+    // for transparent rays. Uses a simple roughness + bounce-based ray-cone footprint.
+    const float roughLod = roughnessToLod(saturate(roughness));
+    const float rayConeLod = log2(1.0 + 2.0 * (float(bounceIndex) + 1.0));
+    return clamp(1.0 + roughLod + rayConeLod, 1.0, 10.0);
+}
+
+float3 sampleEnvRawTransparent(float3 dir, float envScale, float roughness, uint bounceIndex, float4 pixelPos) {
+    const float2 uv = dirToLatlong(dir);
+    const bool useDiagLod = (rngFlags & 0x4u) != 0u;
+    if (useDiagLod || !envImportanceEnabled() || roughness < 0.03) {
+        const float lod = useDiagLod ? diagnosticTransparentEnvLod(roughness, bounceIndex) : 0.0;
+        return envScale * max(t_envRaw.SampleLevel(s_iblLinear, uv, lod).xyz, 0.0.xxx);
+    }
+
+    uint seed = composePixelSeed(pixelPos, bounceIndex * 4u + 1u);
+    float misW = 1.0;
+    return min(safe3(sampleEnvGlossyMIS(dir, max(roughness, 0.02), seed, misW)), 50000.0.xxx);
 }
 
 float3 computeTransmissionTint(GpuMaterial mat) {
@@ -432,6 +563,7 @@ float3 shadeOneLight(GpuLight light, GpuMaterial mat, float3 worldPos, float3 wo
 
 struct RayHitData {
     bool  hit;
+    bool  frontFace;
     uint  materialIdx;
     float3 worldPos;
     float3 normal;
@@ -440,6 +572,7 @@ struct RayHitData {
 RayHitData traceClosestHit(float3 originWs, float3 dirWs, float tMin, uint instanceMask) {
     RayHitData hit;
     hit.hit = false;
+    hit.frontFace = true;
     hit.materialIdx = 0u;
     hit.worldPos = 0.0.xxx;
     hit.normal = float3(0.0, 1.0, 0.0);
@@ -459,6 +592,7 @@ RayHitData traceClosestHit(float3 originWs, float3 dirWs, float tMin, uint insta
     }
 
     const uint instIdx = q.CommittedInstanceID();
+    const bool frontFace = q.CommittedTriangleFrontFace();
     const GpuInstance inst = instances[instIdx];
     const uint tri = q.CommittedPrimitiveIndex();
     const uint base = inst.indexOffset + tri * 3u;
@@ -479,9 +613,10 @@ RayHitData traceClosestHit(float3 originWs, float3 dirWs, float tMin, uint insta
     const float b2 = b.y;
     hit.worldPos = p0 * b0 + p1 * b1 + p2 * b2;
     float3 Ng = normalize(cross(p1 - p0, p2 - p0));
-    if (!q.CommittedTriangleFrontFace()) {
+    if (!frontFace) {
         Ng = -Ng;
     }
+    hit.frontFace = frontFace;
     hit.normal = Ng;
     hit.materialIdx = inst.materialIndex;
     hit.hit = true;
@@ -516,7 +651,7 @@ float3 shadeHitRadianceWithWo(RayHitData hit, float3 wo, float shadowBias) {
             iblShadow = lerp(1.0, lerp(skyFloor, 1.0, sunVis), sunStrength);
         }
     }
-    const float3 indirectLo = evalIBL(mat, wo, N, T, B) * iblShadow;
+    const float3 indirectLo = (giEnabled == 0u ? evalIBL(mat, wo, N, T, B) : 0.0.xxx) * iblShadow;
     const float3 emission = mat.emissionColorLum.xyz * mat.emissionColorLum.w;
     return directLo + indirectLo + emission;
 }
@@ -531,17 +666,40 @@ float3 shadeHitRadianceFromRayDir(RayHitData hit, float3 rayDir, float shadowBia
     return shadeHitRadianceWithWo(hit, -rayDir, shadowBias);
 }
 
-float3 traceTransparentPath(float3 originWs, float3 dirWs, float3 viewPos, uint maxBounces, float shadowBias, bool skipFirstWeight = false) {
+float3 traceTransparentPath(float3 originWs,
+                            float3 dirWs,
+                            float4 pixelPos,
+                            float3 viewPos,
+                            uint maxBounces,
+                            float shadowBias,
+                            bool skipFirstWeight = false) {
+    static const uint kMediumStackMax = 8u;
     float3 accum = 0.0.xxx;
     float3 throughput = 1.0.xxx;
     float3 rayOrigin = originWs;
     float3 rayDir = normalize(dirWs);
+    float rayConeRoughness = 0.0;
+    float lastBsdfPdf = 0.0;
+    bool lastBsdfDelta = true;
+    float mediumStack[kMediumStackMax];
+    uint mediumDepth = 0u;
 
     [loop]
     for (uint bounce = 0u; bounce < maxBounces; ++bounce) {
+        if (!all(isfinite(throughput)) || !isFiniteDir(rayDir)) {
+            break;
+        }
         const RayHitData hit = traceClosestHit(rayOrigin, rayDir, kRayEpsilon, kInstanceMaskNonEmissive);
         if (!hit.hit) {
-            accum += throughput * sampleEnvRaw(rayDir, shadowParams.z);
+            float3 envLo = sampleEnvRawTransparent(rayDir, shadowParams.z, rayConeRoughness, bounce, pixelPos);
+            if (!lastBsdfDelta && envImportanceEnabled()) {
+                const float pBsdf = sanitizePdf(lastBsdfPdf);
+                const float pEnv = sanitizePdf(evalEnvPdf(rayDir));
+                if (pBsdf > 0.0) {
+                    envLo *= balanceHeuristic(pBsdf, pEnv);
+                }
+            }
+            accum += safe3(throughput) * safe3(envLo);
             break;
         }
 
@@ -554,67 +712,134 @@ float3 traceTransparentPath(float3 originWs, float3 dirWs, float3 viewPos, uint 
             break;
         }
 
-        float3 N = normalize(hit.normal);
-        float Fr = 0.0;
-        float3 refrDir = rayDir;
-        if (transmissionWeight > 0.0) {
-            const float eta = max(hitMat.specularRoughAnisoIor.z, 1.01);
-            float etaRatio = 1.0 / eta;
-            if (dot(rayDir, N) > 0.0) {
-                N = -N;
-                etaRatio = eta;
+        const float transmissionRoughness = saturate(hitMat.specularRoughAnisoIor.x);
+        const bool useBsdfSampling =
+            transmissionWeight > 0.0 && transmissionRoughness >= 0.08 && !(skipFirstWeight && bounce == 0u);
+        if (useBsdfSampling) {
+            const float3 wo = -rayDir;
+            float3 N = normalize(hit.normal);
+            float3 T;
+            float3 B;
+            buildFrameFromNormal(N, T, B);
+
+            uint seed = composePixelSeed(pixelPos, bounce * 8u + 3u);
+            BSDFSample bs = sampleBSDF(hitMat, wo, N, T, B, N, T, B, seed);
+            bs.weight = safe3(bs.weight);
+            if (!isFiniteDir(bs.direction) || !all(isfinite(bs.weight))) {
+                break;
             }
 
-            const float NoV = saturate(abs(dot(-rayDir, N)));
-            Fr = fresnelDielectric(NoV, eta);
-            refrDir = refract(rayDir, N, etaRatio);
-            const float3 reflDir = normalize(reflect(rayDir, N));
-            if (dot(refrDir, refrDir) < 1e-6) {
-                refrDir = reflDir;
+            rayDir = normalize(bs.direction);
+            if (bs.isDelta) {
+                lastBsdfDelta = true;
+                lastBsdfPdf = 0.0;
             } else {
-                refrDir = normalize(refrDir);
+                const float p = sanitizePdf(bs.pdf);
+                if (p <= 0.0) {
+                    break;
+                }
+                lastBsdfDelta = false;
+                lastBsdfPdf = p;
+            }
+
+            throughput *= bs.weight;
+            throughput = safe3(throughput);
+            if (max(throughput.x, max(throughput.y, throughput.z)) < 1.0e-3) {
+                break;
             }
 
             const float rough = saturate(hitMat.specularRoughAnisoIor.x);
-            float3 reflectedEnv = sampleSpecularEnv(reflDir, rough, 1.0);
-            if (rough < 0.1) {
-                reflectedEnv = sampleEnvRaw(reflDir, shadowParams.z);
-                if (rough < 0.05) {
-                    const float reflSide = dot(reflDir, N) >= 0.0 ? 1.0 : -1.0;
-                    const float3 reflOrigin = hit.worldPos + N * (reflSide * kRayEpsilon);
-                    const RayHitData reflHit =
-                        traceClosestHit(reflOrigin, reflDir, kRayEpsilon, kInstanceMaskNonEmissive);
-                    if (reflHit.hit) {
-                        const GpuMaterial reflMat = materials[reflHit.materialIdx];
-                        const float reflOpacity = saturate(reflMat.opacityFlagsPad.x);
-                        const float reflTransWeight = saturate(reflMat.transmissionColorWeight.w);
-                        const bool reflIsTransparent = (reflOpacity < 0.9999) || (reflTransWeight > 0.0);
-                        if (!reflIsTransparent) {
-                            reflectedEnv = shadeHitRadianceFromRayDir(reflHit, reflDir, shadowBias);
-                        }
-                    }
-                }
-            }
-            accum += throughput * Fr * reflectedEnv;
+            rayConeRoughness = max(rayConeRoughness, rough);
+            const float side = dot(rayDir, N) >= 0.0 ? 1.0 : -1.0;
+            rayOrigin = hit.worldPos + N * (side * kRayEpsilon);
+            continue;
         }
 
+        float3 N = normalize(hit.normal);
         const float3 transTint = computeTransmissionTint(hitMat);
         const float coverageWeight = 1.0 - opacity;
-        const float transWeight = transmissionWeight * (1.0 - Fr);
         const bool continueAsTransmission = transmissionWeight > 0.0;
         // The caller applies current-surface geometry_opacity at composition time. When asked,
         // skip weighting only on the first transparent interaction to avoid double-applying alpha.
         const bool skipWeightHere = skipFirstWeight && (bounce == 0u);
-        const float continueWeight = skipWeightHere ? 1.0 : (continueAsTransmission ? transWeight : coverageWeight);
-        const float3 continueTint = continueAsTransmission ? transTint : 1.0.xxx;
-        throughput *= continueWeight * continueTint;
+        if (!continueAsTransmission) {
+            const float continueWeight = skipWeightHere ? 1.0 : coverageWeight;
+            throughput *= continueWeight;
+            throughput = safe3(throughput);
+            if (max(throughput.x, max(throughput.y, throughput.z)) < 1e-3) {
+                break;
+            }
+            const float side = dot(rayDir, N) >= 0.0 ? 1.0 : -1.0;
+            rayOrigin = hit.worldPos + N * (side * kRayEpsilon);
+            lastBsdfDelta = true;
+            lastBsdfPdf = 0.0;
+            continue;
+        }
+
+        const float continueWeight = skipWeightHere ? 1.0 : transmissionWeight;
+        const float etaMat = max(hitMat.specularRoughAnisoIor.z, 1.01);
+        const bool thinWalled = hitMat.opacityFlagsPad.w > 0.5;
+        const bool entering = hit.frontFace;
+        const float etaI = (mediumDepth > 0u) ? mediumStack[mediumDepth - 1u] : 1.0;
+        float etaT = etaI;
+        if (!thinWalled) {
+            if (entering) {
+                etaT = etaMat;
+            } else if (mediumDepth > 1u) {
+                etaT = mediumStack[mediumDepth - 2u];
+            } else {
+                etaT = 1.0;
+            }
+        }
+        const float etaRatio = etaI / max(etaT, 1.0e-5);
+        const float etaForFresnel = max(etaT / max(etaI, 1.0e-5), 1.0e-5);
+        const float NoV = saturate(abs(dot(-rayDir, N)));
+        const float Fr = saturate(fresnelDielectric(NoV, etaForFresnel));
+        const float3 reflDir = normalize(reflect(rayDir, N));
+        float3 refrDir = rayDir;
+        bool tir = false;
+        if (!thinWalled) {
+            refrDir = refract(rayDir, N, etaRatio);
+            tir = dot(refrDir, refrDir) < 1.0e-6;
+            refrDir = tir ? reflDir : normalize(refrDir);
+        }
+
+        // Avoid extreme MIS/branch reweighting tails from near-zero branch probabilities.
+        // This intentionally biases very rare events to improve stability for real-time accumulation.
+        const float pReflect = tir ? 1.0 : clamp(Fr, 0.02, 0.98);
+        uint seed = composePixelSeed(pixelPos, bounce * 8u + 5u);
+        const bool chooseReflect = tir || (rngNextFloat(seed) < pReflect);
+        const float branchPdf = chooseReflect ? pReflect : (1.0 - pReflect);
+        if (!isfinite(branchPdf) || branchPdf <= 0.0) {
+            break;
+        }
+
+        const float3 lobeWeight = chooseReflect
+            ? (tir ? 1.0.xxx : Fr.xxx)
+            : ((1.0 - Fr) * transTint);
+        throughput *= continueWeight * (lobeWeight / branchPdf);
+        throughput = safe3(throughput);
         if (max(throughput.x, max(throughput.y, throughput.z)) < 1e-3) {
             break;
         }
 
-        rayDir = continueAsTransmission ? refrDir : rayDir;
+        if (!chooseReflect && !thinWalled) {
+            if (entering) {
+                if (mediumDepth < kMediumStackMax) {
+                    mediumStack[mediumDepth++] = etaMat;
+                }
+            } else if (mediumDepth > 0u) {
+                mediumDepth -= 1u;
+            }
+        }
+
+        const float rough = saturate(hitMat.specularRoughAnisoIor.x);
+        rayConeRoughness = max(rayConeRoughness, rough);
+        rayDir = chooseReflect ? reflDir : refrDir;
         const float side = dot(rayDir, N) >= 0.0 ? 1.0 : -1.0;
         rayOrigin = hit.worldPos + N * (side * kRayEpsilon);
+        lastBsdfDelta = true;
+        lastBsdfPdf = 0.0;
     }
 
     return accum;
@@ -634,6 +859,7 @@ FS_OUT main(FS_IN input) {
         const RayHitData hit = tracePrimaryOpaqueHit(cameraPos.xyz, input.worldPos, kRayEpsilon);
         FS_OUT outDbg;
         outDbg.gbuffer = float4(0.5, 0.5, 0.5, 1.0);
+        outDbg.giBuffer = 0.0.xxxx;
         if (!hit.hit) {
             outDbg.hdrColor = float4(0.0, 0.0, 0.0, 1.0);
             return outDbg;
@@ -652,6 +878,7 @@ FS_OUT main(FS_IN input) {
         const RayHitData hit = tracePrimaryOpaqueHit(cameraPos.xyz, input.worldPos, kRayEpsilon);
         FS_OUT outDbg;
         outDbg.gbuffer = float4(0.5, 0.5, 0.5, 1.0);
+        outDbg.giBuffer = 0.0.xxxx;
         if (!hit.hit) {
             outDbg.hdrColor = float4(0.0, 0.0, 0.0, 1.0);
             return outDbg;
@@ -724,19 +951,30 @@ FS_OUT main(FS_IN input) {
     // Opaque pass already filled the background color/depth; this pass resolves transparent
     // front surfaces by querying behind-radiance and writing final HDR RGB (no depth write).
     if (presentationParams.y >= 0.5) {
+        if ((rngFlags & 0x2u) != 0u) {
+            uint state = composePixelSeed(input.pos, 0u);
+            const float3 debugRgb = float3(rngNextFloat(state), rngNextFloat(state), rngNextFloat(state));
+            FS_OUT outRng;
+            outRng.hdrColor = float4(debugRgb * exposure, 0.0);
+            outRng.gbuffer = float4(0.5, 0.5, 0.5, 1.0);
+            outRng.giBuffer = 0.0.xxxx;
+            return outRng;
+        }
         // D1 gate: make the transparent surface behave as if it didn't exist.
         // This emits only behind-radiance along the view ray from the front hit.
         if (presentationParams.z >= 4.0 && presentationParams.z < 5.0) {
             const float3 passThroughDir = -wo;
             const float3 passThroughLo = traceTransparentPath(input.worldPos,
                                                               passThroughDir,
+                                                              input.pos,
                                                               cameraPos.xyz,
                                                               max(1u, transparentMaxDepth),
                                                               shadowParams.x,
                                                               true);
             FS_OUT outNoOp;
-            outNoOp.hdrColor = float4(passThroughLo * exposure, 0.0);
+            outNoOp.hdrColor = float4(clampFirefliesDisplay(passThroughLo * exposure), 0.0);
             outNoOp.gbuffer = float4(0.5, 0.5, 0.5, 1.0);
+            outNoOp.giBuffer = 0.0.xxxx;
             return outNoOp;
         }
 
@@ -746,6 +984,7 @@ FS_OUT main(FS_IN input) {
         const float3 coverageRayDir = -wo;
         const float3 coverageBehindLo = traceTransparentPath(input.worldPos,
                                                              coverageRayDir,
+                                                             input.pos,
                                                              cameraPos.xyz,
                                                              max(1u, transparentMaxDepth),
                                                              shadowParams.x,
@@ -755,6 +994,7 @@ FS_OUT main(FS_IN input) {
         // shading and the behind-radiance. This keeps geometry_opacity separate from transmission.
         RayHitData frontHit;
         frontHit.hit = true;
+        frontHit.frontFace = true;
         frontHit.materialIdx = input.materialIdx;
         frontHit.worldPos = input.worldPos;
         frontHit.normal = N;
@@ -784,6 +1024,7 @@ FS_OUT main(FS_IN input) {
             // Fr*reflection, line 603/607 continues with (1-Fr)*transTint throughput), so use result directly.
             const float3 transmissionLo = traceTransparentPath(input.worldPos,
                                                                transmissionDir,
+                                                               input.pos,
                                                                cameraPos.xyz,
                                                                max(1u, transparentMaxDepth),
                                                                shadowParams.x);
@@ -794,14 +1035,16 @@ FS_OUT main(FS_IN input) {
 
         if (presentationParams.z >= 5.0 && presentationParams.z < 6.0) {
             FS_OUT outSurface;
-            outSurface.hdrColor = float4(surfaceLo * exposure, 0.0);
+            outSurface.hdrColor = float4(clampFirefliesDisplay(surfaceLo * exposure), 0.0);
             outSurface.gbuffer = float4(0.5, 0.5, 0.5, 1.0);
+            outSurface.giBuffer = 0.0.xxxx;
             return outSurface;
         }
         if (presentationParams.z >= 6.0) {
             FS_OUT outBehind;
-            outBehind.hdrColor = float4(coverageBehindLo * exposure, 0.0);
+            outBehind.hdrColor = float4(clampFirefliesDisplay(coverageBehindLo * exposure), 0.0);
             outBehind.gbuffer = float4(0.5, 0.5, 0.5, 1.0);
+            outBehind.giBuffer = 0.0.xxxx;
             return outBehind;
         }
 
@@ -811,8 +1054,9 @@ FS_OUT main(FS_IN input) {
         const float3 outLo = surfaceLo + coverageBehindLo * coverageWeight;
 
         FS_OUT outTransparent;
-        outTransparent.hdrColor = float4(outLo * exposure, 0.0);
+        outTransparent.hdrColor = float4(clampFirefliesDisplay(outLo * exposure), 0.0);
         outTransparent.gbuffer = float4(0.5, 0.5, 0.5, 1.0);
+        outTransparent.giBuffer = 0.0.xxxx;
         return outTransparent;
     }
 
@@ -867,13 +1111,15 @@ FS_OUT main(FS_IN input) {
                 iblShadow = 1.0 - sunStrength * (1.0 - skyFloor) * (1.0 - sunVis);
             }
         }
-        indirectLo += evalIBL(mat, wo, N, T, B) * iblShadow;
+        if (giEnabled == 0u) {
+            indirectLo += evalIBL(mat, wo, N, T, B) * iblShadow;
 
-        const float indirectAmbient = presentationParams.x;
-        if (indirectAmbient > 0.0) {
-            // Presentation-only fallback for scenes that would otherwise look too
-            // contrasty without bounce lighting. Keep disabled for parity runs.
-            indirectLo += mat.baseColorWeight.xyz * mat.baseColorWeight.w * indirectAmbient;
+            const float indirectAmbient = presentationParams.x;
+            if (indirectAmbient > 0.0) {
+                // Presentation-only fallback for scenes that would otherwise look too
+                // contrasty without bounce lighting. Keep disabled for parity runs.
+                indirectLo += mat.baseColorWeight.xyz * mat.baseColorWeight.w * indirectAmbient;
+            }
         }
     }
     // Emission (self-luminous surfaces, e.g. Cornell box ceiling lamp geometry).
@@ -890,7 +1136,7 @@ FS_OUT main(FS_IN input) {
 
     // Apply physical camera exposure: maps scene-linear radiance into [0,1] range
     // for the ToneMapper.  Same formula as Hyperion's PhysicalCamera.
-    Lo *= exposure;
+    Lo = clampFirefliesDisplay(Lo * exposure);
 
     // --- GBuffer (target 1): view-space normal + base roughness for SSR ---
     // Transform world-space N into view space.
@@ -903,5 +1149,8 @@ FS_OUT main(FS_IN input) {
     FS_OUT output;
     output.hdrColor = float4(Lo, indirectWeight);
     output.gbuffer  = float4(viewN * 0.5 + 0.5, roughness); // encode to [0,1]
+    // GI buffer (target 2): world-space primary hit position + material index (+1; 0 = background).
+    // Consumed by the ray-query GI compute stage to seed indirect path segments.
+    output.giBuffer = float4(input.worldPos, asfloat(input.materialIdx + 1u));
     return output;
 }

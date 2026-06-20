@@ -12,6 +12,7 @@
 #include "harmonia/core/Barrier.hpp"
 #include "harmonia/core/Logger.hpp"
 #include "harmonia/renderer/Camera.hpp"
+#include "theia/renderer/CameraJitter.hpp"
 
 namespace theia {
 
@@ -30,6 +31,15 @@ bool Application::onInitialize() {
         return false;
     }
     m_renderer->setIndirectAmbient(config().indirectAmbient);
+    m_renderer->setRngDebug(config().rngDebug);
+    m_renderer->setTransparentEnvLodDiagnostic(config().diagTransparentEnvLod);
+    m_renderer->setCameraJitterEnabled(m_cameraJitterEnabled);
+    if (!m_cameraJitterEnabled) {
+        Logger::info("Camera jitter disabled (--no-camera-jitter)");
+    }
+    if (config().diagTransparentEnvLod) {
+        Logger::warn("DIAGNOSTIC enabled: transparent env taps use deterministic roughness/ray-cone LOD");
+    }
 
     // LightCuller (Forward+ tile-based light culling)
     if (!m_lightCuller.initialize(deviceContext(), swapchain().extent().width, swapchain().extent().height)) {
@@ -56,6 +66,26 @@ bool Application::onInitialize() {
     if (!m_ssrPass.initialize(deviceContext(), ssrCfg)) {
         Logger::warn("SSRPass failed to initialize — reflections disabled");
     }
+
+    // GiPass — ray-query global illumination (multi-bounce indirect via the shared
+    // Harmonia path integrator). Runs in the non-post-fx (parity) path as the indirect
+    // lighting provider, replacing the forward pass's flat-IBL approximation.
+    const GiPass::Config giCfg{
+        .width = swapchain().extent().width,
+        .height = swapchain().extent().height,
+        .hdrImage = hdrImage().handle(),
+        .hdrView = hdrImage().view(),
+        .giBufferImage = m_renderer->giBufferImage(),
+        .giBufferView = m_renderer->giBufferView(),
+        .gbufferImage = m_renderer->gbufferImage(),
+        .gbufferView = m_renderer->gbufferView(),
+    };
+    if (!m_giPass.initialize(deviceContext(), giCfg)) {
+        Logger::warn("GiPass failed to initialize — ray-query GI disabled");
+    }
+    // When GI will run, the forward pass must emit direct+emission only (no IBL/ambient);
+    // the GI compute stage supplies the indirect term.
+    m_renderer->setGiEnabled(giActive());
 
     return true;
 }
@@ -135,7 +165,20 @@ bool Application::onSceneLoaded(const SceneLoader::SceneConfig& sceneConfig) {
         return false;
     }
     m_renderer->setIbl(m_ibl.resources(), envView, envNits);
+    m_renderer->setEnvImportanceSampling(marginalCdf, conditionalCdf, cdfW, cdfH);
     m_renderer->setHasEnvironment(hasEnv);
+
+    // Capture environment state for the per-frame GI dispatch. When no env map is bound,
+    // fall back to the (black) IBL specular texture/sampler so the GI descriptor stays
+    // valid — the shader gates all env reads on hasEnvMap.
+    m_hasEnv = hasEnv;
+    m_envNits = envNits;
+    m_envView = hasEnv ? envView : m_ibl.resources().specularMipped.view();
+    m_envSampler = hasEnv ? envSampler : m_ibl.resources().envSampler;
+    m_envMarginalCdf = marginalCdf;
+    m_envConditionalCdf = conditionalCdf;
+    m_envCdfWidth = cdfW;
+    m_envCdfHeight = cdfH;
     if (hasEnv) {
         m_renderer->setSunShadow(iblProbe()->sunDirection(), iblProbe()->sunStrength());
     } else {
@@ -145,14 +188,18 @@ bool Application::onSceneLoaded(const SceneLoader::SceneConfig& sceneConfig) {
 }
 
 void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& target) noexcept {
+    m_renderer->setRngState(frameIndex(), config().rngSeed, config().deterministicReplay);
+
     const float aspect = static_cast<float>(target.extent.width) / static_cast<float>(target.extent.height);
+    glm::mat4 proj = glm::perspective(glm::radians(m_camera.vfovDeg), aspect, m_camera.nearPlane, m_camera.farPlane);
+    proj[1][1] *= -1.0f;
+    if (m_cameraJitterEnabled) {
+        proj = applyProjectionJitter(proj, cameraJitterNdc(frameIndex(), target.extent.width, target.extent.height));
+    }
+    const glm::mat4 view = glm::lookAt(m_camera.position, m_camera.target, m_camera.up);
 
     // Forward+ light culling compute pass (runs before geometry rendering).
     if (m_scene && m_scene->lightCount() > 0 && m_lightCuller.tilesX() > 0) {
-        glm::mat4 proj =
-            glm::perspective(glm::radians(m_camera.vfovDeg), aspect, m_camera.nearPlane, m_camera.farPlane);
-        proj[1][1] *= -1.0f;
-        const glm::mat4 view = glm::lookAt(m_camera.position, m_camera.target, m_camera.up);
         m_lightCuller.dispatch(cmd,
                                m_scene->lightBuffer().handle(),
                                m_scene->lightCount(),
@@ -168,10 +215,28 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
     // Runs after the forward pass; transitions HDR to GENERAL and leaves it there.
     // Skipped under --no-postfx (parity comparison contract: SSR/SSAO/bloom off).
     if (postFxActive()) {
-        glm::mat4 proj =
-            glm::perspective(glm::radians(m_camera.vfovDeg), aspect, m_camera.nearPlane, m_camera.farPlane);
-        proj[1][1] *= -1.0f;
         m_ssrPass.dispatch(cmd, proj, glm::inverse(proj));
+    } else if (giActive()) {
+        // Ray-query GI: walks BSDF continuation paths off the forward G-buffer and
+        // additively composites indirect radiance into the HDR image, transitioning it
+        // to GENERAL (which the host tonemap pass requires) and leaving it there.
+        GiPass::FrameParams gp{};
+        gp.scene = m_scene.get();
+        gp.envMapView = m_envView;
+        gp.envSampler = m_envSampler;
+        gp.envMarginalCdf = m_envMarginalCdf;
+        gp.envConditionalCdf = m_envConditionalCdf;
+        gp.envImportanceWidth = m_envCdfWidth;
+        gp.envImportanceHeight = m_envCdfHeight;
+        gp.hasEnvMap = m_hasEnv;
+        gp.envLuminanceScale = m_envNits;
+        gp.viewTransposed = glm::transpose(view);
+        gp.cameraPos = m_camera.position;
+        gp.exposure = m_camera.physical.exposure();
+        gp.frameSampleIndex = frameIndex();
+        gp.rngBaseSeed = config().rngSeed;
+        gp.maxDepth = 3u;
+        m_giPass.record(cmd, gp);
     } else {
         // Post-fx skipped: the forward pass left the HDR image in
         // ATTACHMENT_OPTIMAL, but the host's tonemap pass requires GENERAL
@@ -192,9 +257,10 @@ void Application::onResize(VkExtent2D extent) noexcept {
         return;
     }
 
-    // Shut down SSRPass first — its descriptor sets reference the old depth/GBuffer
-    // image views that ForwardRenderer::resize() is about to destroy.
+    // Shut down SSRPass and GiPass first — their descriptor sets reference the old
+    // depth/GBuffer image views that ForwardRenderer::resize() is about to destroy.
     m_ssrPass.shutdown();
+    m_giPass.shutdown();
 
     // Resize ForwardRenderer: recreates depth/GBuffer at new extent, updates
     // the HDR image handles (App::handleResize has already recreated the HDR image).
@@ -229,6 +295,22 @@ void Application::onResize(VkExtent2D extent) noexcept {
     if (!m_ssrPass.initialize(deviceContext(), ssrCfg)) {
         Logger::warn("SSRPass resize failed — reflections disabled");
     }
+
+    // Reinitialize GiPass with new HDR/GBuffer views from the resized ForwardRenderer.
+    const GiPass::Config giCfg{
+        .width = extent.width,
+        .height = extent.height,
+        .hdrImage = hdrImage().handle(),
+        .hdrView = hdrImage().view(),
+        .giBufferImage = m_renderer->giBufferImage(),
+        .giBufferView = m_renderer->giBufferView(),
+        .gbufferImage = m_renderer->gbufferImage(),
+        .gbufferView = m_renderer->gbufferView(),
+    };
+    if (!m_giPass.initialize(deviceContext(), giCfg)) {
+        Logger::warn("GiPass resize failed — ray-query GI disabled");
+    }
+    m_renderer->setGiEnabled(giActive());
 }
 
 bool Application::onEvent(const SDL_Event& event) {

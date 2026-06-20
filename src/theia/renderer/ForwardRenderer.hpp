@@ -66,6 +66,13 @@ class ForwardRenderer {
     /// scene has no env map (binding 4 falls back to the specular view as a
     /// harmless placeholder).
     void setIbl(const IblResources& res, VkImageView rawEnvView = VK_NULL_HANDLE, float envUnitNits = 1.0f);
+    /// Bind env-importance CDF buffers used by transparent-path stochastic env sampling.
+    void setEnvImportanceSampling(VkBuffer marginalCdf, VkBuffer conditionalCdf, uint32_t width, uint32_t height) noexcept {
+        m_envMarginalCdf = marginalCdf;
+        m_envConditionalCdf = conditionalCdf;
+        m_envImportanceWidth = width;
+        m_envImportanceHeight = height;
+    }
 
     /// Whether the current scene has an environment map (draws env sky vs black).
     void setHasEnvironment(bool hasEnv) noexcept { m_hasEnv = hasEnv; }
@@ -79,8 +86,20 @@ class ForwardRenderer {
     }
     /// Presentation-only constant indirect ambient term (default off for parity).
     void setIndirectAmbient(float strength) noexcept { m_indirectAmbientStrength = std::max(0.0f, strength); }
+    /// When the ray-query GI compute stage (GiPass) is active it supplies indirect
+    /// lighting, so the forward pass must skip its flat-IBL / ambient approximation.
+    void setGiEnabled(bool enabled) noexcept { m_giEnabled = enabled ? 1U : 0U; }
     /// Max transparent gather depth for coverage/transmission rays (scene max_depth).
     void setTransparentMaxDepth(uint32_t depth) noexcept { m_transparentMaxDepth = std::max(1u, depth); }
+    /// Per-frame RNG state plumbed into shader push constants.
+    void setRngState(uint32_t frameSampleIndex, uint32_t baseSeed, bool deterministicReplay) noexcept {
+        m_frameSampleIndex = frameSampleIndex;
+        m_rngBaseSeed = baseSeed;
+        m_deterministicReplay = deterministicReplay;
+    }
+    void setCameraJitterEnabled(bool enabled) noexcept { m_cameraJitterEnabled = enabled; }
+    void setRngDebug(bool enabled) noexcept { m_rngDebug = enabled ? 1U : 0U; }
+    void setTransparentEnvLodDiagnostic(bool enabled) noexcept { m_transparentEnvLodDiagnostic = enabled ? 1U : 0U; }
 
     /// Update tile light list buffers (called by LightCuller each frame before recordFrame).
     void setTileBuffers(VkBuffer tileLightCounts, VkBuffer tileLightIndices, uint32_t tilesX, uint32_t tilesY);
@@ -93,11 +112,14 @@ class ForwardRenderer {
     // Thin GBuffer (RGBA16F: xyz=view-space normal [0,1], w=roughness) for SSR.
     [[nodiscard]] VkImageView gbufferView() const noexcept { return m_gbufferTarget.view(); }
     [[nodiscard]] VkImage gbufferImage() const noexcept { return m_gbufferTarget.handle(); }
+    // GI GBuffer (RGBA32F: xyz=world-space primary hit position, w=asfloat(materialIdx+1)) for GiPass.
+    [[nodiscard]] VkImageView giBufferView() const noexcept { return m_giBufferTarget.view(); }
+    [[nodiscard]] VkImage giBufferImage() const noexcept { return m_giBufferTarget.handle(); }
     [[nodiscard]] VkImageView depthView() const noexcept { return m_depthTarget.view(); }
     [[nodiscard]] VkImage depthImage() const noexcept { return m_depthTarget.handle(); }
 
   private:
-    struct MeshPushConstants {
+    struct alignas(16) MeshPushConstants {
         glm::mat4 viewProj; ///< transposed for Slang mul(pos, mat) convention
         glm::mat4 view;
         glm::vec4 cameraPos;               ///< xyz = world-space camera position
@@ -109,12 +131,19 @@ class ForwardRenderer {
         uint32_t  screenWidth          = 0;
         uint32_t  screenHeight         = 0;
         uint32_t  transparentMaxDepth  = 2; ///< transparent gather depth
+        uint32_t  frameSampleIndex     = 0; ///< per-frame sample counter for stochastic stages
+        uint32_t  rngBaseSeed          = 0; ///< base seed for composeRngSeed(pixel, frame, bounce, seed)
+        uint32_t  rngFlags             = 0; ///< bit0 = deterministic replay, bit1 = RNG debug view
+        uint32_t  _padRng              = 0;
+        uint32_t  envImportanceWidth   = 0; ///< CDF width; 0 disables env importance sampling
+        uint32_t  envImportanceHeight  = 0; ///< CDF height
+        uint32_t  _padEnv              = 0;
+        uint32_t  giEnabled            = 0; ///< 1 when GiPass supplies indirect; disables forward IBL/ambient
         glm::vec4 sunDirection; ///< xyz = world dir toward sun, w = shadow strength (0 disables)
         glm::vec4 shadowParams; ///< x = ray tMin, y = sky ambient floor, z = env_unit_nits
         glm::vec4 presentationParams; ///< x = indirect ambient strength (scene-linear), yzw reserved
     };
-    static_assert(sizeof(MeshPushConstants) == 224);
-
+    static_assert(sizeof(MeshPushConstants) == 256);
     bool createDepthTarget();
     bool createPipeline();
 
@@ -127,6 +156,8 @@ class ForwardRenderer {
     Image m_depthTarget;
     // Thin GBuffer target (RGBA16F: view-space normal + roughness)
     Image m_gbufferTarget;
+    // GI GBuffer target (RGBA32F: world-space primary hit position + material index)
+    Image m_giBufferTarget;
 
     // Mesh + fragment graphics pipeline
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
@@ -149,8 +180,15 @@ class ForwardRenderer {
     glm::vec3 m_sunDir{0.0f, 1.0f, 0.0f}; ///< world dir toward dominant IBL light
     float m_sunStrength = 0.0f;           ///< [0,1] ray-traced sun shadow strength
     float m_indirectAmbientStrength = 0.0f;
+    uint32_t m_giEnabled = 0; ///< 1 when GiPass is active (forward skips IBL/ambient)
     float m_debugRayHitMode = 0.0f;       ///< 0=off, 1=ray-hit albedo, 2=ray-hit radiance (debug only)
     uint32_t m_transparentMaxDepth = 2;
+    uint32_t m_frameSampleIndex = 0;
+    uint32_t m_rngBaseSeed = 0x12345678U;
+    bool m_deterministicReplay = false;
+    bool m_cameraJitterEnabled = true;
+    uint32_t m_rngDebug = 0;
+    uint32_t m_transparentEnvLodDiagnostic = 0;
 
     // Set 0: geometry buffers (vertex/instance/index/meshlet data — task + mesh stages)
     VkDescriptorSetLayout m_meshSetLayout = VK_NULL_HANDLE;
@@ -178,6 +216,10 @@ class ForwardRenderer {
     VkDescriptorImageInfo m_brdfLutInfo{};
     VkDescriptorImageInfo m_iblEnvSamplerInfo{};
     VkDescriptorImageInfo m_iblEnvRawInfo{};
+    VkBuffer m_envMarginalCdf = VK_NULL_HANDLE;
+    VkBuffer m_envConditionalCdf = VK_NULL_HANDLE;
+    uint32_t m_envImportanceWidth = 0;
+    uint32_t m_envImportanceHeight = 0;
     float m_envUnitNits = 1.0f; ///< env_unit_nits for the raw-env sky background
 
     // Tile-based light culling buffers (set by LightCuller before each recordFrame).

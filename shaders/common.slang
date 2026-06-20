@@ -86,6 +86,9 @@ static const float kHalfPi    = 1.57079632679;
 static const float kRayEpsilon = 0.001;
 static const float kInf        = 1.0e30;
 
+/// Minimum path depth before Russian roulette kicks in (shared path integrator).
+static const uint kRRMinDepth = 3u;
+
 /// Rec.2020 luminance coefficients (ITU-R BT.2020).
 static const float3 kRec2020Luma = float3(0.2627, 0.6780, 0.0593);
 
