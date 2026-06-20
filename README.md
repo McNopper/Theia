@@ -211,10 +211,14 @@ acceptable only for interactive presentation quality.
 > visual parity against Hyperion (ground truth) on the shared test scenes. The shared
 > foundation is covered by the Harmonia and Aether test suites.
 >
-> **Transparency parity note:** Group-4 transparency implementation is complete for v0.6.0. The
-> current restricted Hyperion comparison (`--spp 512 --depth 2`, post-fx off) is
-> `mean_diff 22.253` on the current tree; this residual baseline remains tracked for future
-> quality refinement work.
+> **Transparency parity note:** With refreshed Hyperion references (`--spp 512`, `--no-postfx`,
+> 320x240), the current baselines are:
+> - `fixture_transparency_plane`: `mean_diff 5.901`, `rel_mean 4.249%`, `PSNR 27.56 dB`
+> - `fixture_transparency`: `mean_diff 29.252`, `rel_mean 21.277%`, `PSNR 2.09 dB`
+>
+> Measurement ladder checks (R0-R7) now confirm the transparent composite math and ordering are
+> correct; the remaining gap is concentrated in high-energy IBL conditions and is tracked as ongoing
+> parity work (Theia bounded RT gather vs Hyperion path-traced reference).
 
 ---
 
