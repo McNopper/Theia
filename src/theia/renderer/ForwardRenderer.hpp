@@ -79,6 +79,8 @@ class ForwardRenderer {
     }
     /// Presentation-only constant indirect ambient term (default off for parity).
     void setIndirectAmbient(float strength) noexcept { m_indirectAmbientStrength = std::max(0.0f, strength); }
+    /// Max transparent gather depth for coverage/transmission rays (scene max_depth).
+    void setTransparentMaxDepth(uint32_t depth) noexcept { m_transparentMaxDepth = std::max(1u, depth); }
 
     /// Update tile light list buffers (called by LightCuller each frame before recordFrame).
     void setTileBuffers(VkBuffer tileLightCounts, VkBuffer tileLightIndices, uint32_t tilesX, uint32_t tilesY);
@@ -106,7 +108,7 @@ class ForwardRenderer {
         uint32_t  tilesY               = 0; ///< screen height / 16
         uint32_t  screenWidth          = 0;
         uint32_t  screenHeight         = 0;
-        uint32_t  _pad                 = 0;
+        uint32_t  transparentMaxDepth  = 2; ///< transparent gather depth
         glm::vec4 sunDirection; ///< xyz = world dir toward sun, w = shadow strength (0 disables)
         glm::vec4 shadowParams; ///< x = ray tMin, y = sky ambient floor, z = env_unit_nits
         glm::vec4 presentationParams; ///< x = indirect ambient strength (scene-linear), yzw reserved
@@ -148,6 +150,7 @@ class ForwardRenderer {
     float m_sunStrength = 0.0f;           ///< [0,1] ray-traced sun shadow strength
     float m_indirectAmbientStrength = 0.0f;
     float m_debugRayHitMode = 0.0f;       ///< 0=off, 1=ray-hit albedo, 2=ray-hit radiance (debug only)
+    uint32_t m_transparentMaxDepth = 2;
 
     // Set 0: geometry buffers (vertex/instance/index/meshlet data — task + mesh stages)
     VkDescriptorSetLayout m_meshSetLayout = VK_NULL_HANDLE;

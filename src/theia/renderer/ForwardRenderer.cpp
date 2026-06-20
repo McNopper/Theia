@@ -1204,7 +1204,7 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         .tilesY = m_tilesY,
         .screenWidth = m_config.width,
         .screenHeight = m_config.height,
-        ._pad = 0u,
+        .transparentMaxDepth = m_transparentMaxDepth,
         // Ray-traced sun shadow: direction toward the dominant IBL light + strength.
         // shadowParams: x = ray tMin (scene-scale bias from camera near plane), y = sky ambient floor,
         // z = env_unit_nits for raw-env transparent rays.

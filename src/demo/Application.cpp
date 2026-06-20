@@ -99,6 +99,7 @@ bool Application::onSceneLoaded(const SceneLoader::SceneConfig& sceneConfig) {
     m_camCtrl.speed = std::max(0.1f, camDist * 0.5f);
 
     m_renderer->setCamera(m_camera);
+    m_renderer->setTransparentMaxDepth(sceneConfig.maxDepth.value_or(2u));
 
     Logger::info("Loaded scene: {} instances, {} bytes vb, {} bytes ib",
                  m_scene->instanceCount(),

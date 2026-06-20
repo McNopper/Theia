@@ -20,7 +20,7 @@ cbuffer ForwardPC {
     uint     tilesY;                // tiles per screen column (screenHeight / 16)
     uint     screenWidth;
     uint     screenHeight;
-    uint     _pad;
+    uint     transparentMaxDepth;   // transparent gather depth (from scene max_depth)
     float4   sunDirection;          // xyz = world dir toward sun, w = shadow strength (0 disables)
     float4   shadowParams;          // x = ray tMin, y = sky ambient floor, z = env_unit_nits
     float4   presentationParams;    // x = indirect ambient strength (presentation-only), yzw reserved
@@ -731,7 +731,7 @@ FS_OUT main(FS_IN input) {
             const float3 passThroughLo = traceTransparentPath(input.worldPos,
                                                               passThroughDir,
                                                               cameraPos.xyz,
-                                                              2u,
+                                                              max(1u, transparentMaxDepth),
                                                               shadowParams.x,
                                                               true);
             FS_OUT outNoOp;
@@ -747,7 +747,7 @@ FS_OUT main(FS_IN input) {
         const float3 coverageBehindLo = traceTransparentPath(input.worldPos,
                                                              coverageRayDir,
                                                              cameraPos.xyz,
-                                                             2u,
+                                                             max(1u, transparentMaxDepth),
                                                              shadowParams.x,
                                                              true);
 
@@ -785,7 +785,7 @@ FS_OUT main(FS_IN input) {
             const float3 transmissionLo = traceTransparentPath(input.worldPos,
                                                                transmissionDir,
                                                                cameraPos.xyz,
-                                                               2u,
+                                                               max(1u, transparentMaxDepth),
                                                                shadowParams.x);
             // Apply transmission on the covered/front surface response first.
             // geometry_opacity then controls visibility of that surface vs behind-radiance.
