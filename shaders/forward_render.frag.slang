@@ -531,7 +531,7 @@ float3 shadeHitRadianceFromRayDir(RayHitData hit, float3 rayDir, float shadowBia
     return shadeHitRadianceWithWo(hit, -rayDir, shadowBias);
 }
 
-float3 traceTransparentPath(float3 originWs, float3 dirWs, float3 viewPos, uint maxBounces, float shadowBias) {
+float3 traceTransparentPath(float3 originWs, float3 dirWs, float3 viewPos, uint maxBounces, float shadowBias, bool skipFirstWeight = false) {
     float3 accum = 0.0.xxx;
     float3 throughput = 1.0.xxx;
     float3 rayOrigin = originWs;
@@ -602,7 +602,10 @@ float3 traceTransparentPath(float3 originWs, float3 dirWs, float3 viewPos, uint 
         const float coverageWeight = 1.0 - opacity;
         const float transWeight = transmissionWeight * (1.0 - Fr);
         const bool continueAsTransmission = transmissionWeight > 0.0;
-        const float continueWeight = continueAsTransmission ? transWeight : coverageWeight;
+        // The caller applies current-surface geometry_opacity at composition time. When asked,
+        // skip weighting only on the first transparent interaction to avoid double-applying alpha.
+        const bool skipWeightHere = skipFirstWeight && (bounce == 0u);
+        const float continueWeight = skipWeightHere ? 1.0 : (continueAsTransmission ? transWeight : coverageWeight);
         const float3 continueTint = continueAsTransmission ? transTint : 1.0.xxx;
         throughput *= continueWeight * continueTint;
         if (max(throughput.x, max(throughput.y, throughput.z)) < 1e-3) {
@@ -729,7 +732,8 @@ FS_OUT main(FS_IN input) {
                                                               passThroughDir,
                                                               cameraPos.xyz,
                                                               2u,
-                                                              shadowParams.x);
+                                                              shadowParams.x,
+                                                              true);
             FS_OUT outNoOp;
             outNoOp.hdrColor = float4(passThroughLo * exposure, 0.0);
             outNoOp.gbuffer = float4(0.5, 0.5, 0.5, 1.0);
@@ -744,7 +748,8 @@ FS_OUT main(FS_IN input) {
                                                              coverageRayDir,
                                                              cameraPos.xyz,
                                                              2u,
-                                                             shadowParams.x);
+                                                             shadowParams.x,
+                                                             true);
 
         // Coverage path (`opacity < 1`): alpha-style visibility mix between the current surface
         // shading and the behind-radiance. This keeps geometry_opacity separate from transmission.
