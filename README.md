@@ -219,6 +219,10 @@ acceptable only for interactive presentation quality.
 > Measurement ladder checks (R0-R7) now confirm the transparent composite math and ordering are
 > correct; the remaining gap is concentrated in high-energy IBL conditions and is tracked as ongoing
 > parity work (Theia bounded RT gather vs Hyperion path-traced reference).
+>
+> **Gate policy:** keep the strict absolute gate (`mean_diff <= 4.0`) for opaque/direct/SDR fixtures.
+> For HDR transmissive fixtures, use `compare_renders.py --gate scale-aware` (absolute OR relative+PSNR),
+> which avoids brightness-dependent false fails while still rejecting large structural mismatches.
 
 ---
 
