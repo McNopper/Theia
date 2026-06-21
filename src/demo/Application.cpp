@@ -358,7 +358,7 @@ void Application::onResize(VkExtent2D extent) noexcept {
     }
 
     // Reinitialize GiPass with new HDR/GBuffer views from the resized ForwardRenderer.
-    // Enabled by default; disable via --no-rt-gi.
+    // Enabled by default; disable via --no-rt-gi. GI remains the non-postfx path.
     if (config().rtGi) {
         const GiPass::Config giCfg{
             .width = extent.width,
