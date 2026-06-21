@@ -120,6 +120,13 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     ForwardRenderer::CameraParams m_camera{};
     CameraController m_camCtrl{};
     bool m_cameraJitterEnabled = true;
+
+    // Previous view signature, used to reset progressive accumulation on change.
+    glm::vec3 m_prevCamPos{0.0f};
+    glm::vec3 m_prevCamTarget{0.0f};
+    glm::vec3 m_prevCamUp{0.0f};
+    float m_prevEv100 = 0.0f;
+    bool m_viewSigValid = false;
 };
 
 } // namespace theia

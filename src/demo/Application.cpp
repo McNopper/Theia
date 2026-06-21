@@ -37,6 +37,14 @@ bool Application::onInitialize() {
     if (!m_cameraJitterEnabled) {
         Logger::info("Camera jitter disabled (--no-camera-jitter)");
     }
+
+    // Progressive accumulation in the interactive window: a stationary camera
+    // converges the per-frame stochastic samples (camera jitter, stochastic
+    // transparency/env sampling, RT-GI) into a stable image instead of showing
+    // each raw sample (which otherwise reads as a shimmering / shaking preview).
+    // onUpdate() calls resetAccumulation() whenever the view changes. The
+    // offscreen capture path accumulates regardless of this flag.
+    setInteractiveAccumulation(true);
     if (config().diagTransparentEnvLod) {
         Logger::warn("DIAGNOSTIC enabled: transparent env taps use deterministic roughness/ray-cone LOD");
     }
@@ -256,43 +264,53 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         harmonia::pipelineBarrier(cmd, hdrToGeneral);
     }
 
-    // Harmonia denoiser guide descriptors sample gNormal/gDepth as GENERAL.
-    // Ensure guide layouts are compatible on the no-postfx path where Theia
-    // otherwise leaves them in attachment/read-only layouts.
-    if (!postFxActive()) {
-        const VkImageMemoryBarrier2 depthToGeneral{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-            .srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-            .srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-            .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-            .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
-            .oldLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-            .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = m_renderer->depthImage(),
-            .subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1},
-        };
-
-        const VkImageMemoryBarrier2 gbufferToGeneral = giActive()
-                                                           ? harmonia::imageBarrier(m_renderer->gbufferImage(),
-                                                                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                                                                    VK_IMAGE_LAYOUT_GENERAL,
-                                                                                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                                                                    VK_ACCESS_2_SHADER_READ_BIT,
-                                                                                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                                                                    VK_ACCESS_2_SHADER_READ_BIT)
-                                                           : harmonia::imageBarrier(m_renderer->gbufferImage(),
-                                                                                    VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-                                                                                    VK_IMAGE_LAYOUT_GENERAL,
-                                                                                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                                                                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                                                                                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                                                                    VK_ACCESS_2_SHADER_READ_BIT);
-
-        const std::array guideToGeneral{gbufferToGeneral, depthToGeneral};
-        harmonia::pipelineBarrier(cmd, guideToGeneral);
+    // The Harmonia denoiser stage always samples the G-buffer normal and depth
+    // as edge-stopping guides in VK_IMAGE_LAYOUT_GENERAL. After the renderer's
+    // own passes these images sit in a path-dependent layout, so transition both
+    // to GENERAL here regardless of the path (post-fx, RT-GI or forward-only).
+    // The next frame re-initialises them from UNDEFINED, so leaving them in
+    // GENERAL is safe.
+    VkImageLayout gbufferOld = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL;
+    VkPipelineStageFlags2 gbufferSrcStage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    VkAccessFlags2 gbufferSrcAccess = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    VkImageLayout depthOld = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL;
+    VkPipelineStageFlags2 depthSrcStage =
+        VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+    VkAccessFlags2 depthSrcAccess = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    if (postFxActive()) {
+        // SSR sampled both guides as read-only and left them in that layout.
+        gbufferOld = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        gbufferSrcStage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        gbufferSrcAccess = VK_ACCESS_2_SHADER_READ_BIT;
+        depthOld = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        depthSrcStage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        depthSrcAccess = VK_ACCESS_2_SHADER_READ_BIT;
+    } else if (giActive()) {
+        // The GI compute pass sampled the gbuffer as read-only; depth stayed a
+        // write attachment (the GI pass does not read it).
+        gbufferOld = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        gbufferSrcStage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        gbufferSrcAccess = VK_ACCESS_2_SHADER_READ_BIT;
     }
+
+    const VkImageMemoryBarrier2 gbufferToGeneral =
+        harmonia::imageBarrier(m_renderer->gbufferImage(), gbufferOld, VK_IMAGE_LAYOUT_GENERAL, gbufferSrcStage,
+                               gbufferSrcAccess, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+    const VkImageMemoryBarrier2 depthToGeneral{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+        .srcStageMask = depthSrcStage,
+        .srcAccessMask = depthSrcAccess,
+        .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
+        .oldLayout = depthOld,
+        .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = m_renderer->depthImage(),
+        .subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1},
+    };
+    const std::array guideToGeneral{gbufferToGeneral, depthToGeneral};
+    harmonia::pipelineBarrier(cmd, guideToGeneral);
 }
 
 void Application::onResize(VkExtent2D extent) noexcept {
@@ -478,6 +496,21 @@ void Application::onUpdate(float dtSeconds) {
     m_camera.target = m_camera.position + forward;
     m_camera.up = worldUp;
     m_renderer->setCamera(m_camera);
+
+    // Restart progressive accumulation whenever the view changes so a moving
+    // camera doesn't smear across viewpoints and a stationary one converges.
+    const float ev100 = m_camera.physical.ev100();
+    const bool viewChanged = !m_viewSigValid || m_camera.position != m_prevCamPos ||
+                             m_camera.target != m_prevCamTarget || m_camera.up != m_prevCamUp ||
+                             ev100 != m_prevEv100;
+    if (viewChanged) {
+        resetAccumulation();
+        m_prevCamPos = m_camera.position;
+        m_prevCamTarget = m_camera.target;
+        m_prevCamUp = m_camera.up;
+        m_prevEv100 = ev100;
+        m_viewSigValid = true;
+    }
 
     // Update window title with FPS every second
     static uint64_t fpsLastTick = SDL_GetTicksNS();
