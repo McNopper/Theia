@@ -55,7 +55,8 @@ build/theia.exe --scene fixture_ibl                                    # interac
 
 CLI flags = the common Harmonia set: `--scene/-s`, `--output/-o` (headless EXR+PNG),
 `--width`, `--height`, `--validation`/`--no-validation`, **`--no-postfx`**,
-`--indirect-ambient <f>`, `--ssgi-strength <f>`. Theia has no `--spp` (it is not stochastic).
+`--rt-gi`/`--no-rt-gi` (default on), `--indirect-ambient <f>`, `--ssgi-strength <f>`.
+Theia has no `--spp` (it is not stochastic).
 
 ⚠️ No `--offscreen` flag — headless is triggered by `--output`.
 

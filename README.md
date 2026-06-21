@@ -197,6 +197,7 @@ build/theia.exe --scene cornell_classic --output out.exr
 | `--height <n>` | 1080 | Render height in pixels |
 | `--validation` / `--no-validation` | disabled | Enable / disable Vulkan validation layers |
 | `--no-postfx` | off | Disable SSR/SSAO/bloom (required for locked parity comparison renders) |
+| `--rt-gi` / `--no-rt-gi` | on | Enable / disable the ray-query GI compute stage (use `--no-rt-gi` for debugging baselines) |
 | `--indirect-ambient <x>` | `0.0` | Presentation-only constant indirect ambient boost (scene-linear); keep `0.0` for parity fixtures |
 | `--ssgi-strength <x>` | `0.0` | Optional screen-space GI complement; keep `0.0` for parity fixtures |
 | `--diag-transparent-env-lod` | off | **Diagnostic-only**: transparent env taps use deterministic roughness/ray-cone LOD (higher mip) instead of mip0 |

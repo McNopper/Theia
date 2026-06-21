@@ -82,17 +82,16 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     /// Compute initial yaw/pitch from a camera direction vector.
     static void directionToYawPitch(const glm::vec3& dir, float& yaw, float& pitch);
 
-    /// Single source of truth for "are screen-space post-effects running this
-    /// frame?". Both the dispatch decision in record() and the producer stage
-    /// reported via outputStageMask() must agree, or the host's pre-tonemap
-    /// barrier would name the wrong source stage.
-    [[nodiscard]] bool postFxActive() const noexcept { return config().postProcess && m_ssrPass.isInitialized(); }
-
     /// The ray-query GI compute stage runs as the indirect-lighting provider in the
-    /// non-post-fx (parity) path. GI and SSR are mutually exclusive HDR writers: when
-    /// post-fx is active SSR owns the composite, otherwise GI does (if initialized).
+    /// non-post-fx (parity) path. GI and SSR are mutually exclusive HDR writers. GI takes
+    /// precedence when enabled and initialized; otherwise SSR owns the composite.
     [[nodiscard]] bool giActive() const noexcept {
         return config().rtGi && m_giPass.isInitialized() && !postFxActive();
+    }
+
+    /// SSR only owns HDR when enabled and GI is not currently active.
+    [[nodiscard]] bool postFxActive() const noexcept {
+        return config().postProcess && m_ssrPass.isInitialized() && !(config().rtGi && m_giPass.isInitialized());
     }
 
     /// True when a compute stage (SSR or GI) is the final writer of the HDR image this
