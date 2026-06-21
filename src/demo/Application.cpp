@@ -255,6 +255,44 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
                                                              VK_ACCESS_2_SHADER_READ_BIT)};
         harmonia::pipelineBarrier(cmd, hdrToGeneral);
     }
+
+    // Harmonia denoiser guide descriptors sample gNormal/gDepth as GENERAL.
+    // Ensure guide layouts are compatible on the no-postfx path where Theia
+    // otherwise leaves them in attachment/read-only layouts.
+    if (!postFxActive()) {
+        const VkImageMemoryBarrier2 depthToGeneral{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+            .srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+            .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = m_renderer->depthImage(),
+            .subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1},
+        };
+
+        const VkImageMemoryBarrier2 gbufferToGeneral = giActive()
+                                                           ? harmonia::imageBarrier(m_renderer->gbufferImage(),
+                                                                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                                                                    VK_IMAGE_LAYOUT_GENERAL,
+                                                                                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                                                                    VK_ACCESS_2_SHADER_READ_BIT,
+                                                                                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                                                                    VK_ACCESS_2_SHADER_READ_BIT)
+                                                           : harmonia::imageBarrier(m_renderer->gbufferImage(),
+                                                                                    VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                                                                                    VK_IMAGE_LAYOUT_GENERAL,
+                                                                                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                                                                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                                                                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                                                                    VK_ACCESS_2_SHADER_READ_BIT);
+
+        const std::array guideToGeneral{gbufferToGeneral, depthToGeneral};
+        harmonia::pipelineBarrier(cmd, guideToGeneral);
+    }
 }
 
 void Application::onResize(VkExtent2D extent) noexcept {

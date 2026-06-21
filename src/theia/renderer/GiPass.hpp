@@ -94,6 +94,7 @@ class GiPass {
     [[nodiscard]] bool createDescriptors();
     [[nodiscard]] bool createPipeline(const char* giSpv);
     void updateDescriptors(const FrameParams& params);
+    [[nodiscard]] bool descriptorsDirty(const FrameParams& params) const;
 
     const DeviceContext* m_ctx = nullptr;
     Config m_cfg{};
@@ -105,6 +106,11 @@ class GiPass {
     VkPipeline m_pipeline = VK_NULL_HANDLE;
 
     bool m_hdrFirstUse = true;
+    const Scene* m_boundScene = nullptr;
+    VkImageView m_boundEnvMapView = VK_NULL_HANDLE;
+    VkSampler m_boundEnvSampler = VK_NULL_HANDLE;
+    VkBuffer m_boundEnvMarginalCdf = VK_NULL_HANDLE;
+    VkBuffer m_boundEnvConditionalCdf = VK_NULL_HANDLE;
 };
 
 } // namespace theia

@@ -48,6 +48,11 @@ bool GiPass::initialize(const DeviceContext& ctx, const Config& cfg, const char*
     m_ctx = &ctx;
     m_cfg = cfg;
     m_hdrFirstUse = true;
+    m_boundScene = nullptr;
+    m_boundEnvMapView = VK_NULL_HANDLE;
+    m_boundEnvSampler = VK_NULL_HANDLE;
+    m_boundEnvMarginalCdf = VK_NULL_HANDLE;
+    m_boundEnvConditionalCdf = VK_NULL_HANDLE;
 
     if (!createDescriptors()) {
         return false;
@@ -80,6 +85,11 @@ void GiPass::shutdown() {
         vkDestroyDescriptorSetLayout(device, m_setLayout, nullptr);
         m_setLayout = VK_NULL_HANDLE;
     }
+    m_boundScene = nullptr;
+    m_boundEnvMapView = VK_NULL_HANDLE;
+    m_boundEnvSampler = VK_NULL_HANDLE;
+    m_boundEnvMarginalCdf = VK_NULL_HANDLE;
+    m_boundEnvConditionalCdf = VK_NULL_HANDLE;
 }
 
 bool GiPass::createDescriptors() {
@@ -254,12 +264,24 @@ void GiPass::updateDescriptors(const FrameParams& params) {
     vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }
 
+bool GiPass::descriptorsDirty(const FrameParams& params) const {
+    return m_boundScene != params.scene || m_boundEnvMapView != params.envMapView || m_boundEnvSampler != params.envSampler ||
+           m_boundEnvMarginalCdf != params.envMarginalCdf || m_boundEnvConditionalCdf != params.envConditionalCdf;
+}
+
 void GiPass::record(VkCommandBuffer cmd, const FrameParams& params) {
     if (m_pipeline == VK_NULL_HANDLE || params.scene == nullptr || m_cfg.hdrImage == VK_NULL_HANDLE) {
         return;
     }
 
-    updateDescriptors(params);
+    if (descriptorsDirty(params)) {
+        updateDescriptors(params);
+        m_boundScene = params.scene;
+        m_boundEnvMapView = params.envMapView;
+        m_boundEnvSampler = params.envSampler;
+        m_boundEnvMarginalCdf = params.envMarginalCdf;
+        m_boundEnvConditionalCdf = params.envConditionalCdf;
+    }
 
     // ---- Barriers: forward attachments -> compute inputs/outputs ----
     const std::array<VkImageMemoryBarrier2, 3> preBarriers{{
