@@ -10,16 +10,16 @@
 //
 // Division of labour with the forward raster pass (giEnabled != 0):
 //   • forward pass  → direct analytic lighting + emission (no IBL/ambient)
-//   • this GI pass  → indirect (bounce) light, additively composited into the HDR target
-// The primary vertex's own NEE/emission is therefore intentionally skipped here — it is
-// already supplied by the forward pass — and only the BSDF-spawned bounce is integrated.
+//   • this GI pass  → indirect (bounce) light + primary-vertex ENV NEE only
+// Primary analytic/emissive direct remains owned by forward; the GI pass contributes
+// primary environment direct via shared env-NEE MIS plus bounce transport.
 
 import common;          // GpuMaterial, GpuVertex, GpuInstance, GpuEmissiveTriangle, kRayEpsilon, kInstanceMaskAll, kInvPi
 import math;            // buildTBN, randFloat
 import rng;             // composeRngSeed
 import bsdf;            // evalBSDF / pdfBSDF / sampleBSDF + BSDFSample (resolves to Theia's bsdf.slang)
 import env_sample;      // evalEnvImportancePdfDir
-import path_integrator; // ITracer, SurfaceHit, PathState, integrateSurface, sampleEnvMapLatLong
+import path_integrator; // ITracer, SurfaceHit, PathState, EnvNeeSample, evalEnvNEESample, integrateSurface, sampleEnvMapLatLong
 
 [[vk::push_constant]]
 cbuffer GiPC {
@@ -228,7 +228,26 @@ void main(uint3 tid : SV_DispatchThreadID) {
     state.specularBounce = false;
     state.lastBsdfPdf = 0.0;
 
-    // --- Primary BSDF continuation (indirect only; primary NEE/emission handled by forward) ---
+    const bool envEnabled = (hasEnvMap != 0u);
+    const bool envImportance = envEnabled && envImportanceWidth > 0u && envImportanceHeight > 0u;
+    TheiaTracer tracer;
+
+    // Primary-vertex environment NEE only (shared estimator conventions). Keep this in
+    // a separate accumulator so firefly suppression does not bias the sun term.
+    float3 primaryEnvNee = 0.0.xxx;
+    if (envImportance) {
+        EnvNeeSample envNee = evalEnvNEESample(
+            tracer, primary,
+            envMarginalCdf, envConditionalCdf,
+            envImportanceWidth, envImportanceHeight, envEnabled, envLuminanceScale,
+            t_envMap, s_env, state.seed);
+        primaryEnvNee = envNee.contribution;
+        if (!all(isfinite(primaryEnvNee)) || any(isnan(primaryEnvNee))) {
+            primaryEnvNee = 0.0.xxx;
+        }
+    }
+
+    // --- Primary BSDF continuation (primary env NEE above; analytic/emissive direct handled by forward) ---
     BSDFSample bs = sampleBSDF(primary.mat, primary.wo,
         primary.normal, primary.T, primary.B, primary.coatN, primary.coatT, primary.coatB, state.seed);
     if (bs.pdf <= 0.0 || maxComp(bs.weight) <= 0.0 || !all(isfinite(bs.weight))) {
@@ -241,11 +260,6 @@ void main(uint3 tid : SV_DispatchThreadID) {
     float3 origin = worldPos + primary.geoNormal * (dot(bs.direction, primary.geoNormal) >= 0.0 ? kRayEpsilon : -kRayEpsilon);
     float3 dir = normalize(bs.direction);
 
-    const bool envEnabled = (hasEnvMap != 0u);
-    const bool envImportance = envEnabled && envImportanceWidth > 0u && envImportanceHeight > 0u;
-
-    TheiaTracer tracer;
-
     const uint bounces = max(maxDepth, 1u);
     for (uint bounce = 0u; bounce < bounces; ++bounce) {
         GiHit h = traceClosestHit(origin, dir);
@@ -253,10 +267,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
             if (envEnabled) {
                 const float3 Le = sampleEnvMapLatLong(t_envMap, s_env, dir) * envLuminanceScale;
                 float misW = 1.0;
-                // Secondary vertices performed environment NEE — weight the complementary
-                // BSDF-sampling strategy via the balance heuristic. The primary bounce had no
-                // matching NEE, so it is taken at full weight.
-                if (bounce > 0u && envImportance) {
+                // Weight BSDF-to-env against the matching environment-NEE strategy.
+                if (envImportance) {
                     const float envPdf = evalEnvImportancePdfDir(
                         envMarginalCdf, envConditionalCdf, envImportanceWidth, envImportanceHeight, dir);
                     misW = state.lastBsdfPdf / max(state.lastBsdfPdf + envPdf, 1.0e-6);
@@ -270,6 +282,13 @@ void main(uint3 tid : SV_DispatchThreadID) {
         // Reject a non-finite secondary material rather than propagating NaN through
         // integrateSurface — terminate the path and keep the radiance accumulated so far.
         if (!all(isfinite(surf.mat.baseColorWeight.xyz)) || !all(isfinite(surf.mat.emissionColorLum.xyz))) {
+            break;
+        }
+        // Prevent primary direct-light double count: camera->primary->emissive (bounce 0)
+        // is forward-owned direct (RectLight/emissive proxy), so GI must not add it.
+        const float3 surfEmission = max(surf.mat.emissionColorLum.xyz, 0.0.xxx)
+                                  * max(surf.mat.emissionColorLum.w, 0.0);
+        if (bounce == 0u && maxComp(surfEmission) > 0.0 && dot(surf.wo, surf.geoNormal) > 0.0) {
             break;
         }
         state.depth = bounce + 1u;
@@ -286,6 +305,10 @@ void main(uint3 tid : SV_DispatchThreadID) {
         dir = state.nextDirection;
     }
 
+    float3 indirectPrimaryEnvNee = primaryEnvNee * exposure;
+    if (!all(isfinite(indirectPrimaryEnvNee)) || any(isnan(indirectPrimaryEnvNee))) {
+        indirectPrimaryEnvNee = 0.0.xxx;
+    }
     float3 indirect = state.radiance * exposure;
     // Global NaN/Inf guard: discard the whole sample so the pixel keeps its currently
     // accumulated value instead of being poisoned by a single bad bounce.
@@ -301,5 +324,5 @@ void main(uint3 tid : SV_DispatchThreadID) {
         indirect *= kFireflyClampDisplay / avg;
     }
 
-    hdrImage[px] += float4(indirect, 0.0);
+    hdrImage[px] += float4(indirect + indirectPrimaryEnvNee, 0.0);
 }
