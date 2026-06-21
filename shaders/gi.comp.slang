@@ -56,6 +56,7 @@ cbuffer GiPC {
 // Per-sample firefly clamp on the indirect contribution (display-referred, post-exposure),
 // matching the forward pass kFireflyClampDisplay threshold.
 static const float kFireflyClampDisplay = 100.0;
+static const uint  kPrimaryEnvNeeSamples = 4u;
 
 /// Inline-ray-query shadow tracer satisfying the shared estimator's ITracer interface.
 struct TheiaTracer : ITracer {
@@ -77,6 +78,7 @@ struct GiHit {
     bool   hit;
     uint   materialIdx;
     float3 worldPos;
+    float3 shadingNormal;
     float3 geoNormal; // geometric normal, oriented to face the incoming ray's origin
 };
 
@@ -88,6 +90,7 @@ GiHit traceClosestHit(float3 origin, float3 dir) {
     hit.hit = false;
     hit.materialIdx = 0u;
     hit.worldPos = 0.0.xxx;
+    hit.shadingNormal = float3(0.0, 1.0, 0.0);
     hit.geoNormal = float3(0.0, 1.0, 0.0);
 
     const float3 rayDir = normalize(dir);
@@ -119,6 +122,9 @@ GiHit traceClosestHit(float3 origin, float3 dir) {
     const float3 p0 = vertices[i0].position;
     const float3 p1 = vertices[i1].position;
     const float3 p2 = vertices[i2].position;
+    const float3 n0 = vertices[i0].normal;
+    const float3 n1 = vertices[i1].normal;
+    const float3 n2 = vertices[i2].normal;
 
     const float2 b = q.CommittedTriangleBarycentrics();
     const float3 bary = float3(1.0 - b.x - b.y, b.x, b.y);
@@ -128,24 +134,38 @@ GiHit traceClosestHit(float3 origin, float3 dir) {
     }
 
     hit.worldPos = p0 * bary.x + p1 * bary.y + p2 * bary.z;
+    float3 Ns = n0 * bary.x + n1 * bary.y + n2 * bary.z;
+    if (dot(Ns, Ns) > 1.0e-8) {
+        Ns = normalize(Ns);
+    } else {
+        Ns = Ng;
+    }
+    if (dot(Ns, Ng) < 0.0) {
+        Ns = -Ns;
+    }
+    hit.shadingNormal = Ns;
     hit.geoNormal = Ng;
     hit.materialIdx = inst.materialIndex;
     hit.hit = true;
     return hit;
 }
 
-/// Populate a SurfaceHit from a traced hit, applying the shared geometric-normal
-/// frame (no texture maps at secondary vertices — indirect light is low-frequency).
+/// Populate a SurfaceHit from a traced hit, using an interpolated shading normal
+/// while keeping the geometric normal for robust offsets/visibility.
 SurfaceHit makeSurfaceHit(GiHit h, float3 wo) {
     SurfaceHit surf;
-    float3 N = h.geoNormal;
+    float3 N = h.shadingNormal;
+    float3 Ng = h.geoNormal;
     if (dot(N, wo) < 0.0) {
         N = -N;
+    }
+    if (dot(Ng, wo) < 0.0) {
+        Ng = -Ng;
     }
     const float3x3 tbn = buildTBN(N);
     surf.position = h.worldPos;
     surf.normal = N;
-    surf.geoNormal = N;
+    surf.geoNormal = Ng;
     surf.T = tbn[0];
     surf.B = tbn[1];
     surf.coatN = N;
@@ -236,12 +256,17 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // a separate accumulator so firefly suppression does not bias the sun term.
     float3 primaryEnvNee = 0.0.xxx;
     if (envImportance) {
-        EnvNeeSample envNee = evalEnvNEESample(
-            tracer, primary,
-            envMarginalCdf, envConditionalCdf,
-            envImportanceWidth, envImportanceHeight, envEnabled, envLuminanceScale,
-            t_envMap, s_env, state.seed);
-        primaryEnvNee = envNee.contribution;
+        float3 sum = 0.0.xxx;
+        const uint count = max(kPrimaryEnvNeeSamples, 1u);
+        for (uint i = 0u; i < count; ++i) {
+            EnvNeeSample envNee = evalEnvNEESample(
+                tracer, primary,
+                envMarginalCdf, envConditionalCdf,
+                envImportanceWidth, envImportanceHeight, envEnabled, envLuminanceScale,
+                t_envMap, s_env, state.seed);
+            sum += envNee.contribution;
+        }
+        primaryEnvNee = sum / float(count);
         if (!all(isfinite(primaryEnvNee)) || any(isnan(primaryEnvNee))) {
             primaryEnvNee = 0.0.xxx;
         }
