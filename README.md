@@ -55,7 +55,7 @@ It implements the [OpenPBR Surface v1.1](https://academysoftwarefoundation.githu
 - **GPU-driven forward rendering** — compute-based culling, indirect command generation, and dispatch
 - **Direct lighting** — 1-2 directional lights + Forward+ tile-based point light culling (16×16 px tiles, up to 128 lights/tile)
 - **Image-based lighting (IBL)** — equirectangular HDR panorama; diffuse irradiance pre-convolution + per-roughness GGX prefiltered specular map; MaterialX analytic GGX directional albedo (no BRDF LUT)
-- **Ray-traced global illumination (RT-GI)** *(enabled by default; disable with `--no-rt-gi`)* — inline `VK_KHR_ray_query` compute stage; shared unidirectional path-integrator core (NEE + MIS + Russian Roulette) in Harmonia; output feeds the existing accumulation → denoiser chain for convergence to Hyperion ground truth. Provides indirect lighting in the parity (`--no-postfx`) path; multi-bounce parity tuning is ongoing
+- **Ray-traced global illumination (RT-GI)** *(enabled by default; disable with `--no-rt-gi`)* — inline `VK_KHR_ray_query` compute stage; shared unidirectional path-integrator core (NEE + MIS + Russian Roulette) in Harmonia; output feeds the existing accumulation → denoiser chain for convergence to Hyperion ground truth. Provides indirect lighting in both the parity (`--no-postfx`) and interactive default paths; multi-bounce parity tuning is ongoing
 - **ReSTIR DI + GI** *(planned)* — spatiotemporal reservoir resampling for real-time quality at 1 spp/frame; pure ray-query compute, cross-vendor; converges to the same reference as RT-GI
 - **Real-time performance** — GPU-tier dependent: 1080p/HDR/30fps on mid-range (RTX 4050 class); 4K/HDR/60fps on high-end (RTX 4090/5090 class); development reference: RTX 4050 at 1080p HDR
 - **Sub-pixel camera jitter (Halton 2,3)** — deterministic raster AA sampling for accumulation-friendly opaque edge anti-aliasing
@@ -211,10 +211,10 @@ Theia uses a **staged, replaceable pipeline** for indirect lighting:
 |-------|--------|-------|
 | Flat ambient (`--indirect-ambient`) | Deprecated | Presentation-only hack; contributes ~0 in closed scenes; will be removed |
 | Screen-space GI (`--ssgi-strength`) | Deprecated | Approximation; superseded by RT-GI |
-| **RT-GI compute stage** | Default-on | `VK_KHR_ray_query` multibounce; shared integrator core with Hyperion; feeds accumulation → denoiser. Enabled by default (parity `--no-postfx` path); disable with `--no-rt-gi` for debugging baselines. Multi-bounce parity tuning ongoing |
+| **RT-GI compute stage** | Default-on | `VK_KHR_ray_query` multibounce; shared integrator core with Hyperion; feeds accumulation → denoiser. Enabled by default in both parity and interactive paths; disable with `--no-rt-gi` for debugging baselines. Multi-bounce parity tuning ongoing |
 | **ReSTIR DI + GI** | Planned | Spatiotemporal reservoir resampling for real-time convergence |
 
-For parity measurements keep `--indirect-ambient 0.0`, `--ssgi-strength 0.0`, and `--no-postfx`. RT-GI is now enabled by default in the parity path; the deprecated flat-ambient and screen-space GI flags will be retired once RT-GI also drives the interactive (post-fx) path.
+For parity measurements keep `--indirect-ambient 0.0`, `--ssgi-strength 0.0`, and `--no-postfx`. RT-GI now also drives the interactive path; the deprecated flat-ambient and screen-space GI flags remain debug-only.
 
 ---
 
