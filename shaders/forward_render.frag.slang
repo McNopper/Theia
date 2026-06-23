@@ -963,137 +963,16 @@ FS_OUT main(FS_IN input) {
     // Outgoing direction: surface to camera.
     const float3 wo = normalize(cameraPos.xyz - input.worldPos);
 
-    // 26c transparent pass: straight-through transmission query against opaque-only mask.
-    // Opaque pass already filled the background color/depth; this pass resolves transparent
-    // front surfaces by querying behind-radiance and writing final HDR RGB (no depth write).
-    if (presentationParams.y >= 0.5) {
-        if ((rngFlags & 0x2u) != 0u) {
-            uint state = composePixelSeed(input.pos, 0u);
-            const float3 debugRgb = float3(rngNextFloat(state), rngNextFloat(state), rngNextFloat(state));
-            FS_OUT outRng;
-            outRng.hdrColor = float4(debugRgb * exposure, 0.0);
-            outRng.gbuffer = float4(0.5, 0.5, 0.5, 1.0);
-            outRng.giBuffer = 0.0.xxxx;
-            return outRng;
-        }
-        // D1 gate: make the transparent surface behave as if it didn't exist.
-        // This emits only behind-radiance along the view ray from the front hit.
-        if (presentationParams.z >= 4.0 && presentationParams.z < 5.0) {
-            const float3 passThroughDir = -wo;
-            const float3 passThroughLo = traceTransparentPath(input.worldPos,
-                                                              passThroughDir,
-                                                              input.pos,
-                                                              cameraPos.xyz,
-                                                              max(1u, transparentMaxDepth),
-                                                              shadowParams.x,
-                                                              true);
-            FS_OUT outNoOp;
-            outNoOp.hdrColor = float4(clampFirefliesDisplay(passThroughLo * exposure), 0.0);
-            outNoOp.gbuffer = float4(0.5, 0.5, 0.5, 1.0);
-            outNoOp.giBuffer = 0.0.xxxx;
-            return outNoOp;
-        }
-
-        const float opacity = saturate(mat.opacityFlagsPad.x);
-        const float transmissionWeight = saturate(mat.transmissionColorWeight.w);
-        const float coverageWeight = 1.0 - opacity;
-        const float3 coverageRayDir = -wo;
-        const float3 coverageBehindLo = traceTransparentPath(input.worldPos,
-                                                             coverageRayDir,
-                                                             input.pos,
-                                                             cameraPos.xyz,
-                                                             max(1u, transparentMaxDepth),
-                                                             shadowParams.x,
-                                                             true);
-
-        // Coverage path (`opacity < 1`): alpha-style visibility mix between the current surface
-        // shading and the behind-radiance. This keeps geometry_opacity separate from transmission.
-        RayHitData frontHit;
-        frontHit.hit = true;
-        frontHit.frontFace = true;
-        frontHit.materialIdx = input.materialIdx;
-        frontHit.worldPos = input.worldPos;
-        frontHit.normal = N;
-        const float3 frontSurfaceLo = shadeHitRadiance(frontHit, cameraPos.xyz, shadowParams.x);
-        float3 surfaceLo = frontSurfaceLo;
-
-        // Transmission path (`transmission_weight > 0`): split the front glass interface into
-        // a Fresnel reflection of the environment/scene and a refractive transmission, instead
-        // of pre-refracting and discarding the front reflection. The transmission ray seeds the
-        // medium stack with the glass IOR so the back-face exit refracts (Snell-bent / TIR-aware)
-        // and the Beer–Lambert tint is applied on the way out.
-        if (transmissionWeight > 0.0) {
-            const float eta = max(mat.specularRoughAnisoIor.z, 1.01);
-            float3 Nf = N;
-            float etaRel = eta;          // relative IOR (transmitted/incident) for air->glass
-            float etaRatio = 1.0 / eta;  // Snell ratio entering the glass
-            if (dot(-wo, N) < 0.0) {     // primary ray hitting a back face (rare): exiting
-                Nf = -N;
-                etaRel = 1.0 / eta;
-                etaRatio = eta;
-            }
-            const float NoVf = saturate(abs(dot(wo, Nf)));
-            const float Fr = saturate(fresnelDielectric(NoVf, etaRel));
-
-            // Front-face Fresnel reflection of the environment / scene.
-            const float3 reflDir = normalize(reflect(-wo, Nf));
-            const float3 frontReflLo = traceTransparentPath(input.worldPos,
-                                                            reflDir,
-                                                            input.pos,
-                                                            cameraPos.xyz,
-                                                            max(1u, transparentMaxDepth),
-                                                            shadowParams.x,
-                                                            true,
-                                                            0.0);
-
-            // Refraction into the glass: seed the medium stack with the glass IOR.
-            float3 transmissionDir = refract(-wo, Nf, etaRatio);
-            const bool frontTir = dot(transmissionDir, transmissionDir) < 1e-6;
-            transmissionDir = frontTir ? reflDir : normalize(transmissionDir);
-            const float startMedium = frontTir ? 0.0 : eta;
-            const float3 transmissionLo = traceTransparentPath(input.worldPos,
-                                                               transmissionDir,
-                                                               input.pos,
-                                                               cameraPos.xyz,
-                                                               max(1u, transparentMaxDepth),
-                                                               shadowParams.x,
-                                                               true,
-                                                               startMedium);
-
-            const float3 glassLo = frontTir
-                ? frontReflLo
-                : (Fr * frontReflLo + (1.0 - Fr) * transmissionLo);
-            // Apply transmission on the covered/front surface response first.
-            // geometry_opacity then controls visibility of that surface vs behind-radiance.
-            surfaceLo = lerp(frontSurfaceLo, glassLo, transmissionWeight);
-        }
-
-        if (presentationParams.z >= 5.0 && presentationParams.z < 6.0) {
-            FS_OUT outSurface;
-            outSurface.hdrColor = float4(clampFirefliesDisplay(surfaceLo * exposure), 0.0);
-            outSurface.gbuffer = float4(0.5, 0.5, 0.5, 1.0);
-            outSurface.giBuffer = 0.0.xxxx;
-            return outSurface;
-        }
-        if (presentationParams.z >= 6.0) {
-            FS_OUT outBehind;
-            outBehind.hdrColor = float4(clampFirefliesDisplay(coverageBehindLo * exposure), 0.0);
-            outBehind.gbuffer = float4(0.5, 0.5, 0.5, 1.0);
-            outBehind.giBuffer = 0.0.xxxx;
-            return outBehind;
-        }
-
-        // geometry_opacity coverage compositing: premultiplied-alpha "over" operator.
-        // evalIBL/shadeHitRadiance scale the base layer by opacity (matching Hyperion bsdf.slang:56),
-        // so surfaceLo is premultiplied; compose via standard over: A + B*(1-alphaA).
-        const float3 outLo = surfaceLo + coverageBehindLo * coverageWeight;
-
-        FS_OUT outTransparent;
-        outTransparent.hdrColor = float4(clampFirefliesDisplay(outLo * exposure), 0.0);
-        outTransparent.gbuffer = float4(0.5, 0.5, 0.5, 1.0);
-        outTransparent.giBuffer = 0.0.xxxx;
-        return outTransparent;
-    }
+    // Unified transparency: transparent fragments (presentationParams.y >= 0.5) are shaded by
+    // the SAME path below as opaque fragments — direct analytic lighting + emission, with the
+    // refraction/reflection/environment indirect supplied by the shared Harmonia path integrator
+    // in the GI compute stage (gi.comp.slang). The transparent pipeline writes the GI buffer
+    // (world position + material index) but not depth, so the GI stage path-traces every visible
+    // transparent surface (smooth-dielectric delta refraction, TIR, Beer–Lambert, stacked glass)
+    // exactly like Hyperion's ground truth, instead of the previous bespoke raster Fresnel-walk.
+    // When GI is disabled (--no-rt-gi) the fall-through evalIBL provides the split-sum glass
+    // approximation. geometry_opacity coverage is handled by the path integrator's stochastic
+    // pass-through gate at the primary vertex (gi.comp.slang).
 
     // Match Hyperion emissive-hit behavior: emissive triangles are one-sided and
     // terminate primary shading when seen from their emitting side.

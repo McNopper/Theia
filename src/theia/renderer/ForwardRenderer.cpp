@@ -635,10 +635,12 @@ bool ForwardRenderer::createPipeline() {
         .blendEnable = VK_FALSE,
         .colorWriteMask = 0,
     };
-    // Transparent pass must not clobber the opaque-written GI GBuffer (no GI for
-    // transparent surfaces in this MVP) — mask out target 2.
+    // Transparent pass keeps the opaque-written view-normal GBuffer (target 1) intact
+    // (mask it out) but DOES write the GI GBuffer (target 2: world position + material
+    // index) so the shared GI compute path integrator processes transparent surfaces
+    // (refraction/reflection/env) exactly like opaque ones — one unified quality pipeline.
     const std::array<VkPipelineColorBlendAttachmentState, 3> transparentColorAttachments{
-        colorAttachment, transparentGbufferAttachment, transparentGbufferAttachment};
+        colorAttachment, transparentGbufferAttachment, giBufferAttachment};
     const VkPipelineColorBlendStateCreateInfo transparentColorBlend{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
         .attachmentCount = static_cast<uint32_t>(transparentColorAttachments.size()),

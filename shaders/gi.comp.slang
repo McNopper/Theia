@@ -258,17 +258,10 @@ void main(uint3 tid : SV_DispatchThreadID) {
     const uint materialIdx = matIdxPlus1 - 1u;
     const float3 worldPos = giSample.xyz;
 
-    // Reconstruct the world-space shading normal from the view-space G-buffer normal.
-    // viewN = mul(N, viewRot) in the forward pass (row-vector); the inverse for an
-    // orthonormal rotation is mul(viewRot, viewN) (column-vector). See forward_render.frag.
-    const float3 viewN = t_gbuffer.Load(loadCoord).xyz * 2.0 - 1.0;
-    const float3x3 viewRot = float3x3(view[0].xyz, view[1].xyz, view[2].xyz);
-    float3 worldN = mul(viewRot, viewN);
-    if (dot(worldN, worldN) < 1.0e-8) {
-        return;
-    }
-    worldN = normalize(worldN);
-
+    // Reconstruct the primary surface by re-tracing the camera ray to the recorded world
+    // position; this works for opaque AND transparent (glass) pixels alike. The view-space
+    // G-buffer normal is only needed as a fallback when the re-trace misses (e.g. the
+    // transparent pass does not write the normal G-buffer), so it is computed lazily below.
     GiHit primaryHit = traceClosestHit(cameraPos.xyz, worldPos - cameraPos.xyz);
     const bool primaryHitValid = primaryHit.hit && primaryHit.materialIdx == materialIdx;
     const float3 primaryWorldPos = primaryHitValid ? primaryHit.worldPos : worldPos;
@@ -278,6 +271,18 @@ void main(uint3 tid : SV_DispatchThreadID) {
     if (primaryHitValid) {
         primary = makeSurfaceHit(primaryHit, wo);
     } else {
+        // Fallback: reconstruct the shading normal from the view-space G-buffer normal.
+        // viewN = mul(N, viewRot) in the forward pass (row-vector); the inverse for an
+        // orthonormal rotation is mul(viewRot, viewN) (column-vector). When the normal
+        // G-buffer is unavailable (zero, e.g. a transparent pixel against the sky), there
+        // is nothing to reconstruct here -> skip the pixel.
+        const float3 viewN = t_gbuffer.Load(loadCoord).xyz * 2.0 - 1.0;
+        const float3x3 viewRot = float3x3(view[0].xyz, view[1].xyz, view[2].xyz);
+        float3 worldN = mul(viewRot, viewN);
+        if (dot(worldN, worldN) < 1.0e-8) {
+            return;
+        }
+        worldN = normalize(worldN);
         GpuMaterial mat = materials[materialIdx];
         // Guard against a materialIdx that indexes uninitialized / garbage material data in
         // the GI compute's descriptor set: a non-finite material would feed NaN/Inf straight
