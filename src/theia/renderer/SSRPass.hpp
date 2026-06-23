@@ -62,7 +62,7 @@ class SSRPass {
     ///
     /// @param proj     GLM perspective matrix (Y-flipped, GLM_FORCE_DEPTH_ZERO_TO_ONE)
     /// @param invProj  inverse(proj)
-    void dispatch(VkCommandBuffer cmd, const glm::mat4& proj, const glm::mat4& invProj);
+    void dispatch(VkCommandBuffer cmd, const glm::mat4& proj, const glm::mat4& invProj, bool afterGi = false);
 
     void setSSRStrength(float s) { m_cfg.ssrStrength = s; }
     void setSSAOStrength(float s) { m_ssaoStrength = s; }

@@ -52,11 +52,11 @@ cbuffer GiPC {
 [[vk::binding(10, 0)]] StructuredBuffer<GpuEmissiveTriangle> emissiveTriangles;
 [[vk::binding(11, 0)]] StructuredBuffer<float>               envMarginalCdf;
 [[vk::binding(12, 0)]] StructuredBuffer<float>               envConditionalCdf;
+[[vk::binding(13, 0)]] Sampler2D                             t_bindless[];
 
 // Per-sample firefly clamp on the indirect contribution (display-referred, post-exposure),
 // matching the forward pass kFireflyClampDisplay threshold.
 static const float kFireflyClampDisplay = 100.0;
-static const uint  kPrimaryEnvNeeSamples = 4u;
 
 /// Inline-ray-query shadow tracer satisfying the shared estimator's ITracer interface.
 struct TheiaTracer : ITracer {
@@ -80,6 +80,8 @@ struct GiHit {
     float3 worldPos;
     float3 shadingNormal;
     float3 geoNormal; // geometric normal, oriented to face the incoming ray's origin
+    float2 uv;
+    float3 tangent;
 };
 
 float maxComp(float3 v) { return max(v.x, max(v.y, v.z)); }
@@ -125,6 +127,9 @@ GiHit traceClosestHit(float3 origin, float3 dir) {
     const float3 n0 = vertices[i0].normal;
     const float3 n1 = vertices[i1].normal;
     const float3 n2 = vertices[i2].normal;
+    const float2 uv0 = vertices[i0].uv;
+    const float2 uv1 = vertices[i1].uv;
+    const float2 uv2 = vertices[i2].uv;
 
     const float2 b = q.CommittedTriangleBarycentrics();
     const float3 bary = float3(1.0 - b.x - b.y, b.x, b.y);
@@ -134,6 +139,11 @@ GiHit traceClosestHit(float3 origin, float3 dir) {
     }
 
     hit.worldPos = p0 * bary.x + p1 * bary.y + p2 * bary.z;
+    hit.uv = uv0 * bary.x + uv1 * bary.y + uv2 * bary.z;
+    const float2 duv1 = uv1 - uv0;
+    const float2 duv2 = uv2 - uv0;
+    const float det = duv1.x * duv2.y - duv2.x * duv1.y;
+    hit.tangent = abs(det) > 1.0e-8 ? ((p1 - p0) * duv2.y - (p2 - p0) * duv1.y) / det : float3(1.0, 0.0, 0.0);
     float3 Ns = n0 * bary.x + n1 * bary.y + n2 * bary.z;
     if (dot(Ns, Ns) > 1.0e-8) {
         Ns = normalize(Ns);
@@ -150,10 +160,28 @@ GiHit traceClosestHit(float3 origin, float3 dir) {
     return hit;
 }
 
-/// Populate a SurfaceHit from a traced hit, using an interpolated shading normal
-/// while keeping the geometric normal for robust offsets/visibility.
+float4 sampleBindless(uint idx, float2 uv) {
+    return t_bindless[NonUniformResourceIndex(idx)].Sample(uv);
+}
+
+/// Populate a SurfaceHit from a traced hit, using the same texture-mapped material
+/// state as the path tracer while keeping the geometric normal for robust offsets.
 SurfaceHit makeSurfaceHit(GiHit h, float3 wo) {
     SurfaceHit surf;
+    GpuMaterial mat = materials[h.materialIdx];
+
+    if (mat.textureIndices.x != kNoTexture) {
+        mat.baseColorWeight.xyz = sampleBindless(mat.textureIndices.x, h.uv).rgb;
+    }
+    if (mat.textureIndices.z != kNoTexture) {
+        float3 orm = sampleBindless(mat.textureIndices.z, h.uv).rgb;
+        mat.specularRoughAnisoIor.x = orm.g;
+        mat.baseMetalnessDiffRough.x = orm.b;
+    }
+    if (mat.textureIndices.w != kNoTexture) {
+        mat.emissionColorLum.xyz *= sampleBindless(mat.textureIndices.w, h.uv).rgb;
+    }
+
     float3 N = h.shadingNormal;
     float3 Ng = h.geoNormal;
     if (dot(N, wo) < 0.0) {
@@ -161,6 +189,16 @@ SurfaceHit makeSurfaceHit(GiHit h, float3 wo) {
     }
     if (dot(Ng, wo) < 0.0) {
         Ng = -Ng;
+    }
+    if (mat.textureIndices.y != kNoTexture) {
+        float3 nTex = sampleBindless(mat.textureIndices.y, h.uv).xyz * 2.0 - 1.0;
+        float3 Tt = h.tangent - N * dot(N, h.tangent);
+        if (dot(Tt, Tt) > 1.0e-12) {
+            Tt = normalize(Tt);
+            float3 Bt = cross(N, Tt);
+            float3 Np = normalize(Tt * nTex.x + Bt * nTex.y + N * nTex.z);
+            N = dot(wo, Np) >= 0.0 ? Np : N;
+        }
     }
     const float3x3 tbn = buildTBN(N);
     surf.position = h.worldPos;
@@ -171,7 +209,34 @@ SurfaceHit makeSurfaceHit(GiHit h, float3 wo) {
     surf.coatN = N;
     surf.coatT = tbn[0];
     surf.coatB = tbn[1];
-    surf.mat = materials[h.materialIdx];
+    if (mat.textureIndices2.x != kNoTexture) {
+        float3 nTex = sampleBindless(mat.textureIndices2.x, h.uv).xyz * 2.0 - 1.0;
+        float3 Tt = h.tangent - N * dot(N, h.tangent);
+        if (dot(Tt, Tt) > 1.0e-12) {
+            Tt = normalize(Tt);
+            float3 Bt = cross(N, Tt);
+            float3 Np = normalize(Tt * nTex.x + Bt * nTex.y + N * nTex.z);
+            surf.coatN = dot(wo, Np) >= 0.0 ? Np : N;
+            const float3x3 coatTbn = buildTBN(surf.coatN);
+            surf.coatT = coatTbn[0];
+            surf.coatB = coatTbn[1];
+        }
+    }
+    if (mat.textureIndices2.z != kNoTexture) {
+        float2 tDir = sampleBindless(mat.textureIndices2.z, h.uv).xy * 2.0 - 1.0;
+        float3 Tuv = h.tangent - surf.coatN * dot(surf.coatN, h.tangent);
+        if (dot(Tuv, Tuv) > 1.0e-12 && dot(tDir, tDir) > 1.0e-12) {
+            Tuv = normalize(Tuv);
+            float3 Buv = cross(surf.coatN, Tuv);
+            float3 Tn = normalize(Tuv * tDir.x + Buv * tDir.y);
+            float3 cT = Tn - surf.coatN * dot(surf.coatN, Tn);
+            if (dot(cT, cT) > 1.0e-12) {
+                surf.coatT = normalize(cT);
+                surf.coatB = cross(surf.coatN, surf.coatT);
+            }
+        }
+    }
+    surf.mat = mat;
     surf.wo = wo;
     return surf;
 }
@@ -193,21 +258,6 @@ void main(uint3 tid : SV_DispatchThreadID) {
     const uint materialIdx = matIdxPlus1 - 1u;
     const float3 worldPos = giSample.xyz;
 
-    GpuMaterial mat = materials[materialIdx];
-    // Guard against a materialIdx that indexes uninitialized / garbage material data in
-    // the GI compute's descriptor set: a non-finite material would feed NaN/Inf straight
-    // into the BSDF eval, ahead of the downstream isfinite() guards.
-    if (!all(isfinite(mat.baseColorWeight.xyz)) || !all(isfinite(mat.emissionColorLum.xyz))) {
-        return;
-    }
-
-    // Skip self-emissive primary surfaces: their radiance is the emitter itself, shown
-    // directly by the forward pass; bounced light off an emitter is negligible.
-    const float3 emission = max(mat.emissionColorLum.xyz, 0.0.xxx) * max(mat.emissionColorLum.w, 0.0);
-    if (maxComp(emission) > 0.0) {
-        return;
-    }
-
     // Reconstruct the world-space shading normal from the view-space G-buffer normal.
     // viewN = mul(N, viewRot) in the forward pass (row-vector); the inverse for an
     // orthonormal rotation is mul(viewRot, viewN) (column-vector). See forward_render.frag.
@@ -219,23 +269,51 @@ void main(uint3 tid : SV_DispatchThreadID) {
     }
     worldN = normalize(worldN);
 
-    const float3 wo = normalize(cameraPos.xyz - worldPos);
-    if (dot(worldN, wo) < 0.0) {
-        worldN = -worldN;
-    }
-    const float3x3 tbn = buildTBN(worldN);
+    GiHit primaryHit = traceClosestHit(cameraPos.xyz, worldPos - cameraPos.xyz);
+    const bool primaryHitValid = primaryHit.hit && primaryHit.materialIdx == materialIdx;
+    const float3 primaryWorldPos = primaryHitValid ? primaryHit.worldPos : worldPos;
 
+    const float3 wo = normalize(cameraPos.xyz - primaryWorldPos);
     SurfaceHit primary;
-    primary.position = worldPos;
-    primary.normal = worldN;
-    primary.geoNormal = worldN;
-    primary.T = tbn[0];
-    primary.B = tbn[1];
-    primary.coatN = worldN;
-    primary.coatT = tbn[0];
-    primary.coatB = tbn[1];
-    primary.mat = mat;
-    primary.wo = wo;
+    if (primaryHitValid) {
+        primary = makeSurfaceHit(primaryHit, wo);
+    } else {
+        GpuMaterial mat = materials[materialIdx];
+        // Guard against a materialIdx that indexes uninitialized / garbage material data in
+        // the GI compute's descriptor set: a non-finite material would feed NaN/Inf straight
+        // into the BSDF eval, ahead of the downstream isfinite() guards.
+        if (!all(isfinite(mat.baseColorWeight.xyz)) || !all(isfinite(mat.emissionColorLum.xyz))) {
+            return;
+        }
+        // Skip self-emissive primary surfaces: their radiance is the emitter itself, shown
+        // directly by the forward pass; bounced light off an emitter is negligible.
+        const float3 emission = max(mat.emissionColorLum.xyz, 0.0.xxx) * max(mat.emissionColorLum.w, 0.0);
+        if (maxComp(emission) > 0.0) {
+            return;
+        }
+        if (dot(worldN, wo) < 0.0) {
+            worldN = -worldN;
+        }
+        const float3x3 tbn = buildTBN(worldN);
+        primary.position = primaryWorldPos;
+        primary.normal = worldN;
+        primary.geoNormal = worldN;
+        primary.T = tbn[0];
+        primary.B = tbn[1];
+        primary.coatN = worldN;
+        primary.coatT = tbn[0];
+        primary.coatB = tbn[1];
+        primary.mat = mat;
+        primary.wo = wo;
+    }
+
+    // Skip self-emissive primary surfaces: their radiance is the emitter itself, shown
+    // directly by the forward pass; bounced light off an emitter is negligible.
+    const float3 primaryEmission = max(primary.mat.emissionColorLum.xyz, 0.0.xxx) *
+                                   max(primary.mat.emissionColorLum.w, 0.0);
+    if (maxComp(primaryEmission) > 0.0) {
+        return;
+    }
 
     uint seed = composeRngSeed(px, frameSampleIndex, 0u, rngBaseSeed);
 
@@ -257,7 +335,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     float3 primaryEnvNee = 0.0.xxx;
     if (envImportance) {
         float3 sum = 0.0.xxx;
-        const uint count = max(kPrimaryEnvNeeSamples, 1u);
+        const uint count = 4u;
         for (uint i = 0u; i < count; ++i) {
             EnvNeeSample envNee = evalEnvNEESample(
                 tracer, primary,
@@ -282,7 +360,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     state.specularBounce = bs.isDelta;
     state.lastBsdfPdf = bs.isDelta ? 1.0e30 : bs.pdf;
 
-    float3 origin = worldPos + primary.geoNormal * (dot(bs.direction, primary.geoNormal) >= 0.0 ? kRayEpsilon : -kRayEpsilon);
+    float3 origin = primary.position + primary.geoNormal * (dot(bs.direction, primary.geoNormal) >= 0.0 ? kRayEpsilon : -kRayEpsilon);
     float3 dir = normalize(bs.direction);
 
     const uint bounces = max(maxDepth, 1u);
@@ -348,6 +426,5 @@ void main(uint3 tid : SV_DispatchThreadID) {
     if (avg > kFireflyClampDisplay) {
         indirect *= kFireflyClampDisplay / avg;
     }
-
     hdrImage[px] += float4(indirect + indirectPrimaryEnvNee, 0.0);
 }

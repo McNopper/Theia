@@ -23,6 +23,8 @@ namespace theia {
 /// pass emits direct + emission only (giEnabled push-constant disables IBL/ambient).
 class GiPass {
   public:
+    static constexpr uint32_t kMaxBindlessTextures = 256;
+
     struct Config {
         uint32_t width = 0;
         uint32_t height = 0;
@@ -107,6 +109,7 @@ class GiPass {
 
     bool m_hdrFirstUse = true;
     const Scene* m_boundScene = nullptr;
+    const Scene* m_texturesBoundFor = nullptr;
     VkImageView m_boundEnvMapView = VK_NULL_HANDLE;
     VkSampler m_boundEnvSampler = VK_NULL_HANDLE;
     VkBuffer m_boundEnvMarginalCdf = VK_NULL_HANDLE;

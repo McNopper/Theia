@@ -1,7 +1,9 @@
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include "theia/renderer/GiPass.hpp"
 
+#include <algorithm>
 #include <array>
+#include <vector>
 #include <harmonia/core/Logger.hpp>
 #include <harmonia/core/ShaderModule.hpp>
 #include <theia/renderer/ShaderPath.hpp>
@@ -49,6 +51,7 @@ bool GiPass::initialize(const DeviceContext& ctx, const Config& cfg, const char*
     m_cfg = cfg;
     m_hdrFirstUse = true;
     m_boundScene = nullptr;
+    m_texturesBoundFor = nullptr;
     m_boundEnvMapView = VK_NULL_HANDLE;
     m_boundEnvSampler = VK_NULL_HANDLE;
     m_boundEnvMarginalCdf = VK_NULL_HANDLE;
@@ -86,6 +89,7 @@ void GiPass::shutdown() {
         m_setLayout = VK_NULL_HANDLE;
     }
     m_boundScene = nullptr;
+    m_texturesBoundFor = nullptr;
     m_boundEnvMapView = VK_NULL_HANDLE;
     m_boundEnvSampler = VK_NULL_HANDLE;
     m_boundEnvMarginalCdf = VK_NULL_HANDLE;
@@ -93,7 +97,7 @@ void GiPass::shutdown() {
 }
 
 bool GiPass::createDescriptors() {
-    const std::array<VkDescriptorSetLayoutBinding, 13> bindings{{
+    const std::array<VkDescriptorSetLayoutBinding, 14> bindings{{
         {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // TLAS
         {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // hdr (RW)
         {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // giBuffer
@@ -107,10 +111,26 @@ bool GiPass::createDescriptors() {
         {10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},            // emissive tris
         {11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},            // marginal CDF
         {12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},            // conditional CDF
+        {13, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // textures
     }};
+
+    constexpr VkDescriptorBindingFlags kUpdateAfterBind = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+    constexpr VkDescriptorBindingFlags kTextureFlags =
+        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+    const std::array<VkDescriptorBindingFlags, 14> bindingFlags{
+        kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind,
+        kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind,
+        kUpdateAfterBind, kTextureFlags};
+    const VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
+        .bindingCount = static_cast<uint32_t>(bindingFlags.size()),
+        .pBindingFlags = bindingFlags.data(),
+    };
 
     const VkDescriptorSetLayoutCreateInfo setInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .pNext = &bindingFlagsInfo,
+        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
         .bindingCount = static_cast<uint32_t>(bindings.size()),
         .pBindings = bindings.data(),
     };
@@ -119,12 +139,13 @@ bool GiPass::createDescriptors() {
         return false;
     }
 
-    const std::array<VkDescriptorPoolSize, 5> poolSizes{{
+    const std::array<VkDescriptorPoolSize, 6> poolSizes{{
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
         {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 3},
         {VK_DESCRIPTOR_TYPE_SAMPLER, 1},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 7},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures},
     }};
     const VkDescriptorPoolCreateInfo poolInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
@@ -261,7 +282,33 @@ void GiPass::updateDescriptors(const FrameParams& params) {
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 12, 0, 1,
          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &conditionalInfo, nullptr},
     }};
-    vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+
+    std::vector<VkWriteDescriptorSet> allWrites(writes.begin(), writes.end());
+    if (m_texturesBoundFor != scene) {
+        const auto& sceneTextures = scene->textures();
+        const uint32_t texCount = std::min(static_cast<uint32_t>(sceneTextures.size()), kMaxBindlessTextures);
+        if (texCount > 0) {
+            std::vector<VkDescriptorImageInfo> imageInfos(texCount);
+            for (uint32_t i = 0; i < texCount; ++i) {
+                imageInfos[i] = VkDescriptorImageInfo{
+                    .sampler = sceneTextures[i].sampler(),
+                    .imageView = sceneTextures[i].image().view(),
+                    .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                };
+            }
+            allWrites.push_back(VkWriteDescriptorSet{
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = m_set,
+                .dstBinding = 13,
+                .dstArrayElement = 0,
+                .descriptorCount = texCount,
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .pImageInfo = imageInfos.data(),
+            });
+        }
+        m_texturesBoundFor = scene;
+    }
+    vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(allWrites.size()), allWrites.data(), 0, nullptr);
 }
 
 bool GiPass::descriptorsDirty(const FrameParams& params) const {

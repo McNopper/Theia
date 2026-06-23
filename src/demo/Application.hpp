@@ -88,11 +88,9 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     /// barrier would name the wrong source stage.
     [[nodiscard]] bool postFxActive() const noexcept { return config().postProcess && m_ssrPass.isInitialized(); }
 
-    /// The ray-query GI compute stage runs as the indirect-lighting provider in the
-    /// non-post-fx (parity) path. GI and SSR are mutually exclusive HDR writers: when
-    /// post-fx is active SSR owns the composite, otherwise GI does (if initialized).
+    /// The ray-query GI compute stage runs whenever enabled and initialized.
     [[nodiscard]] bool giActive() const noexcept {
-        return config().rtGi && m_giPass.isInitialized() && !postFxActive();
+        return config().rtGi && m_giPass.isInitialized();
     }
 
     /// True when a compute stage (SSR or GI) is the final writer of the HDR image this
@@ -120,6 +118,7 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     ForwardRenderer::CameraParams m_camera{};
     CameraController m_camCtrl{};
     bool m_cameraJitterEnabled = true;
+    uint32_t m_sceneMaxDepth = 3u;
 
     // Previous view signature, used to reset progressive accumulation on change.
     glm::vec3 m_prevCamPos{0.0f};

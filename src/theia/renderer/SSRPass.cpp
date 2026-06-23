@@ -246,14 +246,17 @@ void SSRPass::shutdown() {
     m_ctx = nullptr;
 }
 
-void SSRPass::dispatch(VkCommandBuffer cmd, const glm::mat4& proj, const glm::mat4& invProj) {
+void SSRPass::dispatch(VkCommandBuffer cmd, const glm::mat4& proj, const glm::mat4& invProj, bool afterGi) {
     const VkImageLayout ssrOldLayout = m_ssrResultFirstUse ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL;
     m_ssrResultFirstUse = false;
+    const VkImageLayout hdrOldLayout = afterGi ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL;
+    const VkImageLayout gbufferOldLayout = afterGi ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                                   : VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL;
 
     // ---- Barrier: transition all inputs and outputs for compute ----
     // depth    : ATTACHMENT_OPTIMAL → DEPTH_STENCIL_READ_ONLY (sampled by SSR)
-    // gbuffer  : ATTACHMENT_OPTIMAL → SHADER_READ_ONLY        (sampled by SSR + composite)
-    // hdr      : ATTACHMENT_OPTIMAL → GENERAL                 (sampled by SSR, written by composite)
+    // gbuffer  : ATTACHMENT_OPTIMAL/GENERAL → SHADER_READ_ONLY (sampled by SSR + composite)
+    // hdr      : ATTACHMENT_OPTIMAL/GENERAL → GENERAL          (sampled by SSR, written by composite)
     // ssrResult: UNDEFINED/GENERAL  → GENERAL                 (written by SSR)
     const VkImageMemoryBarrier2 depthBarrier{
         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
@@ -271,17 +274,17 @@ void SSRPass::dispatch(VkCommandBuffer cmd, const glm::mat4& proj, const glm::ma
     const std::array<VkImageMemoryBarrier2, 4> preBarriers{{
         depthBarrier,
         imgBarrier(m_cfg.gbufferImage,
-                   VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                   gbufferOldLayout,
                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                   VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                   VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                   afterGi ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                   afterGi ? VK_ACCESS_2_SHADER_READ_BIT : VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                    VK_ACCESS_2_SHADER_READ_BIT),
         imgBarrier(m_cfg.hdrImage,
-                   VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                   hdrOldLayout,
                    VK_IMAGE_LAYOUT_GENERAL,
-                   VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                   VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                   afterGi ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                   afterGi ? VK_ACCESS_2_SHADER_WRITE_BIT : VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                    VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT),
         imgBarrier(m_ssrResult.handle(),

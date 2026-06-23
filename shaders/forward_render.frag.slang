@@ -672,7 +672,8 @@ float3 traceTransparentPath(float3 originWs,
                             float3 viewPos,
                             uint maxBounces,
                             float shadowBias,
-                            bool skipFirstWeight = false) {
+                            bool skipFirstWeight = false,
+                            float startMediumIor = 0.0) {
     static const uint kMediumStackMax = 8u;
     float3 accum = 0.0.xxx;
     float3 throughput = 1.0.xxx;
@@ -683,6 +684,12 @@ float3 traceTransparentPath(float3 originWs,
     bool lastBsdfDelta = true;
     float mediumStack[kMediumStackMax];
     uint mediumDepth = 0u;
+    // Seed the medium stack when the ray starts INSIDE a refractive medium (e.g. the caller
+    // already refracted across the front glass interface). Without this the first interior
+    // exit hit would use etaI=1.0 (air) and never apply Snell bending / TIR on the way out.
+    if (startMediumIor > 0.0) {
+        mediumStack[mediumDepth++] = startMediumIor;
+    }
 
     [loop]
     for (uint bounce = 0u; bounce < maxBounces; ++bounce) {
@@ -1010,36 +1017,55 @@ FS_OUT main(FS_IN input) {
         const float3 frontSurfaceLo = shadeHitRadiance(frontHit, cameraPos.xyz, shadowParams.x);
         float3 surfaceLo = frontSurfaceLo;
 
-        // Transmission path (`transmission_weight > 0`): replace IBL-only "refracted env"
-        // approximation with scene-traced behind-radiance. In 26d this ray is bent by
-        // Snell/IOR (enter/exit aware) before tracing.
+        // Transmission path (`transmission_weight > 0`): split the front glass interface into
+        // a Fresnel reflection of the environment/scene and a refractive transmission, instead
+        // of pre-refracting and discarding the front reflection. The transmission ray seeds the
+        // medium stack with the glass IOR so the back-face exit refracts (Snell-bent / TIR-aware)
+        // and the Beer–Lambert tint is applied on the way out.
         if (transmissionWeight > 0.0) {
             const float eta = max(mat.specularRoughAnisoIor.z, 1.01);
-            const float rough = saturate(mat.specularRoughAnisoIor.x);
             float3 Nf = N;
-            float etaRatio = 1.0 / eta; // air -> material
-            if (dot(-wo, N) < 0.0) {
-                Nf = -N; // exiting medium
+            float etaRel = eta;          // relative IOR (transmitted/incident) for air->glass
+            float etaRatio = 1.0 / eta;  // Snell ratio entering the glass
+            if (dot(-wo, N) < 0.0) {     // primary ray hitting a back face (rare): exiting
+                Nf = -N;
+                etaRel = 1.0 / eta;
                 etaRatio = eta;
             }
-            float3 transmissionDir = refract(-wo, Nf, etaRatio);
-            if (dot(transmissionDir, transmissionDir) < 1e-6) {
-                transmissionDir = reflect(-wo, Nf); // total internal reflection fallback
-            } else {
-                transmissionDir = normalize(transmissionDir);
-            }
+            const float NoVf = saturate(abs(dot(wo, Nf)));
+            const float Fr = saturate(fresnelDielectric(NoVf, etaRel));
 
-            // traceTransparentPath already handles Fresnel weighting internally (line 598 adds
-            // Fr*reflection, line 603/607 continues with (1-Fr)*transTint throughput), so use result directly.
+            // Front-face Fresnel reflection of the environment / scene.
+            const float3 reflDir = normalize(reflect(-wo, Nf));
+            const float3 frontReflLo = traceTransparentPath(input.worldPos,
+                                                            reflDir,
+                                                            input.pos,
+                                                            cameraPos.xyz,
+                                                            max(1u, transparentMaxDepth),
+                                                            shadowParams.x,
+                                                            true,
+                                                            0.0);
+
+            // Refraction into the glass: seed the medium stack with the glass IOR.
+            float3 transmissionDir = refract(-wo, Nf, etaRatio);
+            const bool frontTir = dot(transmissionDir, transmissionDir) < 1e-6;
+            transmissionDir = frontTir ? reflDir : normalize(transmissionDir);
+            const float startMedium = frontTir ? 0.0 : eta;
             const float3 transmissionLo = traceTransparentPath(input.worldPos,
                                                                transmissionDir,
                                                                input.pos,
                                                                cameraPos.xyz,
                                                                max(1u, transparentMaxDepth),
-                                                               shadowParams.x);
+                                                               shadowParams.x,
+                                                               true,
+                                                               startMedium);
+
+            const float3 glassLo = frontTir
+                ? frontReflLo
+                : (Fr * frontReflLo + (1.0 - Fr) * transmissionLo);
             // Apply transmission on the covered/front surface response first.
             // geometry_opacity then controls visibility of that surface vs behind-radiance.
-            surfaceLo = lerp(frontSurfaceLo, transmissionLo, transmissionWeight);
+            surfaceLo = lerp(frontSurfaceLo, glassLo, transmissionWeight);
         }
 
         if (presentationParams.z >= 5.0 && presentationParams.z < 6.0) {

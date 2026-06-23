@@ -14,7 +14,6 @@ float3 evalBSDF(GpuMaterial mat, float3 wo, float3 wi, float3 N, float3 T, float
         return 0.0.xxx;
     }
 
-    float opacity = saturate(mat.opacityFlagsPad.x);
     float3 baseColor = saturate3(mat.baseColorWeight.xyz);
     float3 specColor = saturate3(mat.specularColorWeight.xyz);
     float3 transColor = effectiveTransColor(mat);
@@ -53,7 +52,7 @@ float3 evalBSDF(GpuMaterial mat, float3 wo, float3 wi, float3 N, float3 T, float
     computeLobeWeights(mat, diffuseWeight, subsurfaceWeight, specularWeight, metalWeight, transmissionWeight, coatWeight, fuzzWeight, diffuseTransWeight, mirrorMode, glassMode);
 
     float ssAniso = clamp(mat.opacityFlagsPad.z, -1.0, 1.0);
-    float baseLayerScale = opacity * rcp(lerp(1.0, coatEta * coatEta, coatWeight * coatDark));
+    float baseLayerScale = rcp(lerp(1.0, coatEta * coatEta, coatWeight * coatDark));
     baseLayerScale *= 1.0 - 0.35 * fuzzWeight;
 
     float3 result = 0.0.xxx;
@@ -98,7 +97,9 @@ float3 evalBSDF(GpuMaterial mat, float3 wo, float3 wi, float3 N, float3 T, float
     }
 
     if (transmissionWeight > 0.0) {
-        result += transmissionWeight * evalTransmissionApprox(transColor, mat.transmissionParams.x, eta, woL, wiL);
+        float transAlphaX = alphaX; // Use base layer roughness for transmission
+        float transAlphaY = alphaY;
+        result += transmissionWeight * evalTransmissionMicrofacet(transColor, mat.transmissionParams.x, eta, transAlphaX, transAlphaY, woL, wiL);
     }
 
     // Thin-walled diffuse transmission (subsurface sheet): Lambertian-ish lobe into the
@@ -162,7 +163,15 @@ float pdfBSDF(GpuMaterial mat, float3 wo, float3 wi, float3 N, float3 T, float3 
         pdf += (diffuseWeight + subsurfaceWeight + fuzzWeight) * cosinePdf;
         pdf += (specularWeight + metalWeight) * reflectionPdf(woL, wiL, alphaX, alphaY);
     } else {
-        pdf += transmissionWeight * abs(wiL.z) * kInvPi;
+        if (transmissionWeight > 0.0) {
+            float eta = mat.specularRoughAnisoIor.z;
+            float eta_ratio = woL.z > 0.0 ? (1.0 / eta) : eta;
+            float3 h = normalize(-woL * eta_ratio + wiL);
+            if (h.z < 0.0) h = -h;
+            float transAlphaX = alphaX;
+            float transAlphaY = alphaY;
+            pdf += transmissionWeight * transmissionPdf(eta, transAlphaX, transAlphaY, woL, wiL, h);
+        }
         pdf += diffuseTransWeight * abs(wiL.z) * kInvPi;
     }
 
@@ -340,6 +349,27 @@ BSDFSample sampleBSDF(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B, 
             return sample;
         }
 
+        // Smooth dielectric: perfect specular refraction is a delta BTDF. computeAlpha
+        // floors roughness to alpha>=0.001, so routing roughness~0 glass through the
+        // microfacet path spreads a sharp refraction into visible frost. Per OpenPBR/PBRT,
+        // handle effectively-smooth roughness as an exact Snell-refraction delta lobe.
+        const float kSmoothDielectricRough = 0.05;
+        if (baseRough < kSmoothDielectricRough) {
+            float etaRatioD = woL.z > 0.0 ? (1.0 / eta) : eta;
+            float3 mD = float3(0.0, 0.0, woL.z > 0.0 ? 1.0 : -1.0);
+            float3 wiRefract = refract(-woL, mD, etaRatioD);
+            if (all(abs(wiRefract) < 1.0e-6.xxx)) {
+                // Total internal reflection -> specular reflect (still a delta event).
+                wiRefract = reflect(-woL, mD);
+            }
+            sample.direction = normalize(toWorld(wiRefract, Ts, Bs, Ns));
+            float3 absorptionD = exp(-max(mat.transmissionParams.x, 0.001) * (1.0.xxx - effectiveTransColor(mat)));
+            sample.weight = effectiveTransColor(mat) * absorptionD * invPLobe;
+            sample.pdf = 1.0;
+            sample.isDelta = true;
+            return sample;
+        }
+
         float etaRatio = woL.z > 0.0 ? (1.0 / eta) : eta;
         float3 m = sampleGGX_VNDF(float3(woL.x, woL.y, abs(woL.z)), alphaX, alphaY, randFloat2(seed));
         if (dot(woL, m) < 0.0) {
@@ -373,7 +403,7 @@ BSDFSample sampleBSDF(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B, 
         return sample;
     }
 
-    // Transmission absorption is already folded into evalTransmissionApprox(), so it
+    // Transmission absorption is already folded into evalTransmissionMicrofacet(), so it
     // must NOT be re-applied here for the generic (non-delta) refraction path.
     float3 f = evalBSDF(mat, wo, sample.direction, N, T, B, cN, cT, cB);
     float cosTheta = abs(dot(sample.direction, Ns));

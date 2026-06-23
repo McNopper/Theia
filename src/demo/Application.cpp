@@ -142,6 +142,7 @@ bool Application::onSceneLoaded(const SceneLoader::SceneConfig& sceneConfig) {
     m_camCtrl.speed = std::max(0.1f, camDist * 0.5f);
 
     m_renderer->setCamera(m_camera);
+    m_sceneMaxDepth = sceneConfig.maxDepth.value_or(3u);
     m_renderer->setTransparentMaxDepth(sceneConfig.maxDepth.value_or(2u));
 
     Logger::info("Loaded scene: {} instances, {} bytes vb, {} bytes ib",
@@ -224,15 +225,12 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
 
     m_renderer->recordFrame(cmd);
 
-    // SSR pass: linear ray march + composite into the HDR buffer.
-    // Runs after the forward pass; transitions HDR to GENERAL and leaves it there.
-    // Skipped under --no-postfx (parity comparison contract: SSR/SSAO/bloom off).
-    if (postFxActive()) {
-        m_ssrPass.dispatch(cmd, proj, glm::inverse(proj));
-    } else if (giActive()) {
+    const bool giEnabled = giActive();
+    const bool postFxEnabled = postFxActive();
+
+    if (giEnabled) {
         // Ray-query GI: walks BSDF continuation paths off the forward G-buffer and
-        // additively composites indirect radiance into the HDR image, transitioning it
-        // to GENERAL (which the host tonemap pass requires) and leaving it there.
+        // additively composites indirect radiance into the HDR image.
         GiPass::FrameParams gp{};
         gp.scene = m_scene.get();
         gp.envMapView = m_envView;
@@ -248,12 +246,17 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         gp.exposure = m_camera.physical.exposure();
         gp.frameSampleIndex = frameIndex();
         gp.rngBaseSeed = config().rngSeed;
-        gp.maxDepth = 3u;
+        gp.maxDepth = m_sceneMaxDepth;
         m_giPass.record(cmd, gp);
-    } else {
-        // Post-fx skipped: the forward pass left the HDR image in
-        // ATTACHMENT_OPTIMAL, but the host's tonemap pass requires GENERAL
-        // (IRenderer contract). Issue the transition the SSR pass would have.
+    }
+
+    // SSR pass: linear ray march + composite into the HDR buffer.
+    // Runs after the forward pass; transitions HDR to GENERAL and leaves it there.
+    // Skipped under --no-postfx (parity comparison contract: SSR/SSAO/bloom off).
+    if (postFxEnabled) {
+        m_ssrPass.dispatch(cmd, proj, glm::inverse(proj), giEnabled);
+    } else if (!giEnabled) {
+        // No compute post-effects: leave HDR in GENERAL for the host tonemap pass.
         const std::array hdrToGeneral{harmonia::imageBarrier(target.image,
                                                              VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
                                                              VK_IMAGE_LAYOUT_GENERAL,
@@ -277,7 +280,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
     VkPipelineStageFlags2 depthSrcStage =
         VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
     VkAccessFlags2 depthSrcAccess = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    if (postFxActive()) {
+    if (postFxEnabled) {
         // SSR sampled both guides as read-only and left them in that layout.
         gbufferOld = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         gbufferSrcStage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
@@ -285,7 +288,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         depthOld = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
         depthSrcStage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
         depthSrcAccess = VK_ACCESS_2_SHADER_READ_BIT;
-    } else if (giActive()) {
+    } else if (giEnabled) {
         // The GI compute pass sampled the gbuffer as read-only; depth stayed a
         // write attachment (the GI pass does not read it).
         gbufferOld = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
