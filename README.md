@@ -5,7 +5,7 @@ GPU-driven real-time renderer for OpenPBR materials.
 > *[Theia](https://en.wikipedia.org/wiki/Theia_(mythology)) — Titaness of heavenly light, mother of Helios, Selene and Eos.*
 
 Theia is a modern Vulkan 1.4 renderer built on GPU-driven forward rendering techniques.  
-It implements the [OpenPBR Surface v1.1](https://academysoftwarefoundation.github.io/OpenPBR/) material model in real-time and targets visual parity with [Hyperion](https://github.com/McNopper/Hyperion)'s path-traced output on identical test scenes. Parity for direct-lighting and IBL-dominated scenes is established; multi-bounce GI parity (closed rooms, indirect-light fill) is work in progress — see *RT-GI* in the roadmap below.
+It implements the [OpenPBR Surface v1.1](https://academysoftwarefoundation.github.io/OpenPBR/) material model in real-time and targets visual parity with [Hyperion](https://github.com/McNopper/Hyperion)'s path-traced output on identical test scenes. Direct-lighting and IBL parity are established, and a **unified HW ray-traced GI pass** (sharing Hyperion's `path_integrator`) now provides multi-bounce indirect light *and* transmission/refraction — closing most of the previous closed-room GI gap. Screen-space post effects (SSR/SSAO) are **legacy/redundant** now that RT-GI supplies physically-correct reflections and occlusion. See *RT-GI* in the roadmap below.
 
 **Interactive real-time rendering** — explore complex materials, dynamic lighting, and HDR output in real-time.  
 **Architecture driven by [GPU-Driven Rendering](https://vkguide.dev/docs/gpudriven)** — compute-based culling, indirect dispatch, and clustered lighting.
@@ -60,8 +60,8 @@ It implements the [OpenPBR Surface v1.1](https://academysoftwarefoundation.githu
 - **Real-time performance** — GPU-tier dependent: 1080p/HDR/30fps on mid-range (RTX 4050 class); 4K/HDR/60fps on high-end (RTX 4090/5090 class); development reference: RTX 4050 at 1080p HDR
 - **Sub-pixel camera jitter (Halton 2,3)** — deterministic raster AA sampling for accumulation-friendly opaque edge anti-aliasing
 - **Interactive camera control** — WASD movement, mouse look, EV100 physical exposure adjustment
-- **Screen-Space Reflections (SSR)** — linear view-space ray march (64 steps + 8-step binary refinement) with additive composite blend; roughness cutoff 0.45; IBL as fallback for off-screen misses
-- **Screen-Space Ambient Occlusion (SSAO)** — hemisphere depth sampling with bilateral blur denoiser; composited into the HDR buffer alongside SSR
+- **Screen-Space Reflections (SSR)** *(legacy / debug fallback)* — linear view-space ray march (64 steps + 8-step binary refinement) with additive composite blend; roughness cutoff 0.45. Superseded by RT-GI, which provides physically-correct multi-bounce reflections; retained only as a `--no-rt-gi` debug path
+- **Screen-Space Ambient Occlusion (SSAO)** *(legacy / debug fallback)* — hemisphere depth sampling with bilateral blur denoiser. Superseded by RT-GI ray-cast occlusion; showcase renders use `--no-postfx`
 
 ### Material model — OpenPBR Surface v1.1
 All parameters follow the [OpenPBR spec](https://academysoftwarefoundation.github.io/OpenPBR/) naming. All 8 material layers are fully supported:
@@ -196,7 +196,7 @@ build/theia.exe --scene cornell_classic --output out.exr
 | `--width <n>` | 1920 | Render width in pixels |
 | `--height <n>` | 1080 | Render height in pixels |
 | `--validation` / `--no-validation` | disabled | Enable / disable Vulkan validation layers |
-| `--no-postfx` | off | Disable SSR/SSAO/bloom (required for locked parity comparison renders) |
+| `--no-postfx` | off | Disable SSR/SSAO/bloom (legacy postfx). Used for parity comparisons **and** showcase screenshots — RT-GI makes postfx redundant |
 | `--rt-gi` / `--no-rt-gi` | on | Enable / disable the ray-query GI compute stage (use `--no-rt-gi` for debugging baselines) |
 | `--indirect-ambient <x>` | `0.0` | Presentation-only constant indirect ambient boost (scene-linear); keep `0.0` for parity fixtures |
 | `--ssgi-strength <x>` | `0.0` | Optional screen-space GI complement; keep `0.0` for parity fixtures |
@@ -211,10 +211,11 @@ Theia uses a **staged, replaceable pipeline** for indirect lighting:
 |-------|--------|-------|
 | Flat ambient (`--indirect-ambient`) | Deprecated | Presentation-only hack; contributes ~0 in closed scenes; will be removed |
 | Screen-space GI (`--ssgi-strength`) | Deprecated | Approximation; superseded by RT-GI |
-| **RT-GI compute stage** | Default-on | `VK_KHR_ray_query` multibounce; shared integrator core with Hyperion; feeds accumulation → denoiser. Enabled by default in both parity and interactive paths; disable with `--no-rt-gi` for debugging baselines. Multi-bounce parity tuning ongoing |
+| Screen-space reflections / AO (SSR/SSAO, `--no-postfx` to disable) | Legacy | Redundant — RT-GI provides physically-correct reflections + occlusion; retained as a `--no-rt-gi` debug fallback only |
+| **RT-GI compute stage** | Default-on | `VK_KHR_ray_query` multibounce; shared integrator core with Hyperion; also drives transmission/refraction; feeds accumulation → denoiser. Enabled by default in both parity and interactive paths; disable with `--no-rt-gi` for debugging baselines |
 | **ReSTIR DI + GI** | Planned | Spatiotemporal reservoir resampling for real-time convergence |
 
-For parity measurements keep `--indirect-ambient 0.0`, `--ssgi-strength 0.0`, and `--no-postfx`. RT-GI now also drives the interactive path; the deprecated flat-ambient and screen-space GI flags remain debug-only.
+For parity measurements and showcase screenshots keep `--indirect-ambient 0.0`, `--ssgi-strength 0.0`, and `--no-postfx`. RT-GI is the single unified indirect + transmission provider and drives the interactive path; the deprecated flat-ambient / screen-space GI flags and the legacy SSR/SSAO postfx remain debug-only.
 
 ---
 
@@ -224,14 +225,13 @@ For parity measurements keep `--indirect-ambient 0.0`, `--ssgi-strength 0.0`, an
 > visual parity against Hyperion (ground truth) on the shared test scenes. The shared
 > foundation is covered by the Harmonia and Aether test suites.
 >
-> **Transparency parity note:** With refreshed Hyperion references (`--spp 512`, `--no-postfx`,
-> 320x240), the current baselines are:
-> - `fixture_transparency_plane`: `mean_diff 5.901`, `rel_mean 4.249%`, `PSNR 27.56 dB`
-> - `fixture_transparency`: `mean_diff 29.252`, `rel_mean 21.277%`, `PSNR 2.09 dB`
->
-> Measurement ladder checks (R0-R7) now confirm the transparent composite math and ordering are
-> correct; the remaining gap is concentrated in high-energy IBL conditions and is tracked as ongoing
-> parity work (Theia bounded RT gather vs Hyperion path-traced reference).
+> **Transparency parity note:** Transparent surfaces now route through the **shared Harmonia
+> `path_integrator`** (smooth-dielectric delta refraction lobe + Beer-Lambert + env-NEE), the same
+> estimator Hyperion uses — retiring Theia's earlier bespoke stochastic Fresnel-walk. This unification
+> closed the large glass gap: `dragon_teapot` improved from **PSNR ~19 dB to ~29.9 dB** vs Hyperion
+> (1024x768, `--no-postfx`), and the black "missing material" holes on glass (openpbr_advanced /
+> dielectrics) are resolved. Remaining residuals are localized high-energy-IBL-through-glass variance
+> and a minor TIR notch, tracked as ongoing parity work.
 >
 > **Gate policy:** keep the strict absolute gate (`mean_diff <= 4.0`) for opaque/direct/SDR fixtures.
 > For HDR transmissive fixtures, use `compare_renders.py --gate scale-aware` (absolute OR relative+PSNR),

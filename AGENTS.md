@@ -5,8 +5,11 @@ Quick-start context for AI agents so basic facts don't have to be rediscovered e
 ## What this repo is
 
 **Theia** is the **real-time** renderer: a Vulkan mesh-shader rasterizer (meshlets) being
-aligned to match **Hyperion** (the path-traced ground truth). It uses split-sum IBL,
-clustered/forward shading, and screen-space post effects (SSR/SSAO/bloom/SSGI).
+aligned to match **Hyperion** (the path-traced ground truth). Indirect light (diffuse +
+specular + env-NEE) and transmission/refraction are provided by a **HW ray-traced GI pass**
+that drives Harmonia's shared `path_integrator` — the single best-quality real-time approach.
+Screen-space post effects (SSR/SSAO/bloom/SSGI) are **legacy/redundant** now that RT-GI
+supplies physically-correct reflections and occlusion; they are a debug fallback only.
 
 Pipeline (dependency direction):
 
@@ -60,12 +63,14 @@ Theia has no `--spp` (it is not stochastic).
 
 ⚠️ No `--offscreen` flag — headless is triggered by `--output`.
 
-## Parity: ALWAYS use `--no-postfx`
+## Parity & screenshots: use `--no-postfx`
 
-Parity vs Hyperion is measured with **`--no-postfx`**. Screen-space effects (SSR/SSAO/bloom/
-SSGI) introduce approximations that diverge from a path tracer. Measured on `alignment_suzanne`
-(full IBL): no-postfx mean_diff **9.82** vs postfx-ON **24.18** — postfx nearly triples the
-error and darkens the image (signed +4.8 -> +22.1).
+Both parity vs Hyperion **and** showcase screenshots are rendered with **`--no-postfx`** (the
+unified RT pipeline = best-quality realtime). Screen-space effects (SSR/SSAO/bloom/SSGI) are
+legacy: they introduce approximations that diverge from a path tracer. Historically measured on
+`alignment_suzanne` (full IBL): no-postfx mean_diff **9.82** vs postfx-ON **24.18** — postfx
+nearly triples the error and darkens the image (signed +4.8 -> +22.1). With RT-GI now providing
+reflections + AO, postfx adds nothing (equal-or-better PSNR with `--no-postfx`).
 
 Why postfx darkens IBL-only scenes: with no analytic lights the item-30 "indirect weight"
 mask is ~1.0 everywhere, so SSAO attenuates almost the whole image, while the path tracer
@@ -83,11 +88,11 @@ pre-tonemap EXR, same color space).
 - **IBL parity reference must be high-spp:** scenes using `alignment_16spp_8bounce.render.toml`
   give a 16-spp (noisy) Hyperion reference — render it with `hyperion --spp 512` first, or the
   diff measures noise. (On `alignment_suzanne` this alone inflated mean_diff 9.82 -> 13.56.)
-- **Real-time GI gap is expected, not a bug:** Theia does single-bounce IBL + flat ambient,
-  no path-traced multi-bounce GI. On scenes with inter-reflection (floor + objects) Theia is
-  darker than Hyperion; the error concentrates on lit/occluded surfaces while directly-viewed
-  environment matches. The isolated-diffuse `fixture_ibl` passes at 1.76 — the irradiance map
-  itself is correct. Tracked with the RT-GI / SSR roadmap.
+- **Real-time multi-bounce GI now exists (RT-GI):** Theia runs a HW ray-traced GI pass
+  (`gi.comp.slang` → shared `path_integrator`) providing path-traced multi-bounce indirect
+  (diffuse + specular + env-NEE) and transmission/refraction, default-on (`--no-rt-gi` to
+  disable). The old "single-bounce IBL + flat ambient, darker than Hyperion" gap is closed for
+  the unified pipeline. The isolated-diffuse `fixture_ibl` passes at 1.76.
 - **IBL specular is split-sum (band-limited):** sharp HDR sun-disc reflections cannot be
   represented by the 1024x512 / 8-mip prefiltered map. Accepted approximation (see plan item 22).
 - **New compute shader entry points** MUST be added to `THEIA_ENTRY_SHADERS` in `CMakeLists.txt`
