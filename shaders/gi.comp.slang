@@ -334,39 +334,53 @@ void main(uint3 tid : SV_DispatchThreadID) {
     const bool envEnabled = (hasEnvMap != 0u);
     const bool envImportance = envEnabled && envImportanceWidth > 0u && envImportanceHeight > 0u;
     TheiaTracer tracer;
+    float3 origin = 0.0.xxx;
+    float3 dir = 0.0.xxx;
 
-    // Primary-vertex environment NEE only (shared estimator conventions). Keep this in
-    // a separate accumulator so firefly suppression does not bias the sun term.
+    // Primary-vertex stochastic geometry_opacity pass-through gate (shared-integrator contract):
+    // with probability (1-opacity), continue the camera ray unchanged with delta semantics.
+    const float primaryOpacity = saturate(primary.mat.opacityFlagsPad.x);
+    const bool primaryPassThrough = randFloat(state.seed) < (1.0 - primaryOpacity);
+
+    // Primary-vertex environment NEE only (shared estimator conventions). Keep this in a
+    // separate accumulator so firefly suppression does not bias the sun term.
     float3 primaryEnvNee = 0.0.xxx;
-    if (envImportance) {
-        float3 sum = 0.0.xxx;
-        const uint count = 4u;
-        for (uint i = 0u; i < count; ++i) {
-            EnvNeeSample envNee = evalEnvNEESample(
-                tracer, primary,
-                envMarginalCdf, envConditionalCdf,
-                envImportanceWidth, envImportanceHeight, envEnabled, envLuminanceScale,
-                t_envMap, s_env, state.seed);
-            sum += envNee.contribution;
+    if (!primaryPassThrough) {
+        if (envImportance) {
+            float3 sum = 0.0.xxx;
+            const uint count = 4u;
+            for (uint i = 0u; i < count; ++i) {
+                EnvNeeSample envNee = evalEnvNEESample(
+                    tracer, primary,
+                    envMarginalCdf, envConditionalCdf,
+                    envImportanceWidth, envImportanceHeight, envEnabled, envLuminanceScale,
+                    t_envMap, s_env, state.seed);
+                sum += envNee.contribution;
+            }
+            primaryEnvNee = sum / float(count);
+            if (!all(isfinite(primaryEnvNee)) || any(isnan(primaryEnvNee))) {
+                primaryEnvNee = 0.0.xxx;
+            }
         }
-        primaryEnvNee = sum / float(count);
-        if (!all(isfinite(primaryEnvNee)) || any(isnan(primaryEnvNee))) {
-            primaryEnvNee = 0.0.xxx;
+
+        // --- Primary BSDF continuation (primary env NEE above; analytic/emissive direct handled by forward) ---
+        BSDFSample bs = sampleBSDF(primary.mat, primary.wo,
+            primary.normal, primary.T, primary.B, primary.coatN, primary.coatT, primary.coatB, state.seed);
+        if (bs.pdf <= 0.0 || maxComp(bs.weight) <= 0.0 || !all(isfinite(bs.weight))) {
+            return;
         }
+        state.throughput = bs.weight;
+        state.specularBounce = bs.isDelta;
+        state.lastBsdfPdf = bs.isDelta ? 1.0e30 : bs.pdf;
+        origin = primary.position + primary.geoNormal * (dot(bs.direction, primary.geoNormal) >= 0.0 ? kRayEpsilon : -kRayEpsilon);
+        dir = normalize(bs.direction);
+    } else {
+        const float3 fwd = -primary.wo;
+        state.specularBounce = true;
+        state.lastBsdfPdf = 1.0e30; // delta pass-through for downstream MIS weighting
+        origin = primary.position + primary.geoNormal * (dot(fwd, primary.geoNormal) >= 0.0 ? kRayEpsilon : -kRayEpsilon);
+        dir = normalize(fwd);
     }
-
-    // --- Primary BSDF continuation (primary env NEE above; analytic/emissive direct handled by forward) ---
-    BSDFSample bs = sampleBSDF(primary.mat, primary.wo,
-        primary.normal, primary.T, primary.B, primary.coatN, primary.coatT, primary.coatB, state.seed);
-    if (bs.pdf <= 0.0 || maxComp(bs.weight) <= 0.0 || !all(isfinite(bs.weight))) {
-        return;
-    }
-    state.throughput = bs.weight;
-    state.specularBounce = bs.isDelta;
-    state.lastBsdfPdf = bs.isDelta ? 1.0e30 : bs.pdf;
-
-    float3 origin = primary.position + primary.geoNormal * (dot(bs.direction, primary.geoNormal) >= 0.0 ? kRayEpsilon : -kRayEpsilon);
-    float3 dir = normalize(bs.direction);
 
     const uint bounces = max(maxDepth, 1u);
     for (uint bounce = 0u; bounce < bounces; ++bounce) {
