@@ -263,7 +263,14 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // G-buffer normal is only needed as a fallback when the re-trace misses (e.g. the
     // transparent pass does not write the normal G-buffer), so it is computed lazily below.
     GiHit primaryHit = traceClosestHit(cameraPos.xyz, worldPos - cameraPos.xyz);
-    const bool primaryHitValid = primaryHit.hit && primaryHit.materialIdx == materialIdx;
+    // Trust the re-traced closest hit as the authoritative nearest surface. The rasterized
+    // G-buffer materialIdx is draw-order dependent for transparent geometry (depth-write
+    // disabled), so overlapping transparent surfaces can record the farther one; the inline
+    // ray query is order-independent and always returns the geometrically nearest surface.
+    // Matches industry practice (Q2RTX reflect_refract, PowerVR HybridTransparency, SEED
+    // "Hybrid Rendering for Real-Time Ray Tracing" RTG ch.25). The matIdxPlus1==0 sentinel
+    // check above already handles background pixels; for non-background, the re-trace wins.
+    const bool primaryHitValid = primaryHit.hit;
     const float3 primaryWorldPos = primaryHitValid ? primaryHit.worldPos : worldPos;
 
     const float3 wo = normalize(cameraPos.xyz - primaryWorldPos);
