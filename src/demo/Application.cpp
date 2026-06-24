@@ -32,7 +32,6 @@ bool Application::onInitialize() {
     }
     m_renderer->setIndirectAmbient(config().indirectAmbient);
     m_renderer->setRngDebug(config().rngDebug);
-    m_renderer->setTransparentEnvLodDiagnostic(config().diagTransparentEnvLod);
     m_renderer->setCameraJitterEnabled(m_cameraJitterEnabled);
     if (!m_cameraJitterEnabled) {
         Logger::info("Camera jitter disabled (--no-camera-jitter)");
@@ -45,9 +44,6 @@ bool Application::onInitialize() {
     // onUpdate() calls resetAccumulation() whenever the view changes. The
     // offscreen capture path accumulates regardless of this flag.
     setInteractiveAccumulation(true);
-    if (config().diagTransparentEnvLod) {
-        Logger::warn("DIAGNOSTIC enabled: transparent env taps use deterministic roughness/ray-cone LOD");
-    }
 
     // LightCuller (Forward+ tile-based light culling)
     if (!m_lightCuller.initialize(deviceContext(), swapchain().extent().width, swapchain().extent().height)) {

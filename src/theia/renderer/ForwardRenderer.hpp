@@ -99,7 +99,6 @@ class ForwardRenderer {
     }
     void setCameraJitterEnabled(bool enabled) noexcept { m_cameraJitterEnabled = enabled; }
     void setRngDebug(bool enabled) noexcept { m_rngDebug = enabled ? 1U : 0U; }
-    void setTransparentEnvLodDiagnostic(bool enabled) noexcept { m_transparentEnvLodDiagnostic = enabled ? 1U : 0U; }
 
     /// Update tile light list buffers (called by LightCuller each frame before recordFrame).
     void setTileBuffers(VkBuffer tileLightCounts, VkBuffer tileLightIndices, uint32_t tilesX, uint32_t tilesY);
@@ -188,7 +187,6 @@ class ForwardRenderer {
     bool m_deterministicReplay = false;
     bool m_cameraJitterEnabled = true;
     uint32_t m_rngDebug = 0;
-    uint32_t m_transparentEnvLodDiagnostic = 0;
 
     // Set 0: geometry buffers (vertex/instance/index/meshlet data — task + mesh stages)
     VkDescriptorSetLayout m_meshSetLayout = VK_NULL_HANDLE;

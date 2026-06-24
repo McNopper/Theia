@@ -1303,8 +1303,7 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         .transparentMaxDepth = m_transparentMaxDepth,
         .frameSampleIndex = m_frameSampleIndex,
         .rngBaseSeed = m_rngBaseSeed,
-        .rngFlags = (m_deterministicReplay ? 0x1u : 0u) | (m_rngDebug != 0u ? 0x2u : 0u) |
-                    (m_transparentEnvLodDiagnostic != 0u ? 0x4u : 0u),
+        .rngFlags = (m_deterministicReplay ? 0x1u : 0u) | (m_rngDebug != 0u ? 0x2u : 0u),
         ._padRng = 0u,
         .envImportanceWidth = m_envImportanceWidth,
         .envImportanceHeight = m_envImportanceHeight,
