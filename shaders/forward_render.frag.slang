@@ -95,14 +95,6 @@ uint composePixelSeed(float4 pixelPos, uint bounceIndex) {
     return composeRngSeed(pixel, frameSampleIndex, bounceIndex, rngBaseSeed);
 }
 
-float2 dirToLatlong(float3 d) {
-    // Hyperion env.slang convention (shaders/env.slang): u via atan2(z,x), v via acos(y).
-    d = normalize(d);
-    float longitude = atan2(d.z, d.x) * (1.0 / (2.0 * 3.14159265)) + 0.5;
-    float latitude  = acos(clamp(d.y, -1.0, 1.0)) / 3.14159265; // v=0 at top (y=+1)
-    return float2(longitude, latitude);
-}
-
 float3 sampleEnvRaw(float3 dir, float envScale) {
     const float2 uv = dirToLatlong(dir);
     return envScale * max(t_envRaw.SampleLevel(s_iblLinear, uv, 0.0).xyz, 0.0.xxx);
@@ -137,12 +129,8 @@ bool isFiniteDir(float3 v) {
 }
 
 float3 computeTransmissionTint(GpuMaterial mat) {
-    // OpenPBR transmission tint used consistently across IBL and RT transparent paths.
-    float3 transColor = saturate3(mat.transmissionColorWeight.xyz);
-    float3 scatter = saturate3(mat.transmissionScatter.xyz);
-    float scatterG = clamp(mat.transmissionScatter.w, -1.0, 1.0);
-    float scatterAmt = saturate(dot(scatter, kRec2020Luma)) * saturate(0.5 * (1.0 - scatterG));
-    float3 effTransColor = transColor * lerp(1.0.xxx, scatter, scatterAmt);
+    // Reuse the shared OpenPBR transmission-color model (Harmonia bsdf_shared.slang).
+    float3 effTransColor = effectiveTransColor(mat);
     float transDepth = max(mat.transmissionParams.x, 0.001);
     float3 absorption = exp(-transDepth * (1.0.xxx - effTransColor));
     return effTransColor * absorption;

@@ -1,5 +1,7 @@
 static const float kPi = 3.14159265359;
 
+import env_sample;
+
 [[vk::binding(0, 0)]] Texture2D<float4> envMap;
 [[vk::binding(1, 0)]] SamplerState envSampler;
 [[vk::binding(2, 0)]] RWTexture2D<float4> outPrefilter;
@@ -41,13 +43,6 @@ float3 tangentSpaceToWorld(float3 v, float3 N)
     float3 T = normalize(cross(up, N));
     float3 B = cross(N, T);
     return normalize(T * v.x + B * v.y + N * v.z);
-}
-
-float2 dirToLatlong(float3 d)
-{
-    // Hyperion env.slang convention.
-    return float2(atan2(d.z, d.x) * (1.0 / (2.0 * kPi)) + 0.5,
-                  acos(clamp(d.y, -1.0, 1.0)) / kPi);
 }
 
 float3 latlongToDir(float2 uv)

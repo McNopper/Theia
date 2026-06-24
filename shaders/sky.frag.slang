@@ -7,6 +7,8 @@
 // Output is scaled by env_unit_nits and camera exposure so the background matches
 // lit geometry.
 
+import env_sample;
+
 [[vk::push_constant]]
 cbuffer SkyPC {
     float4x4 invViewProj;
@@ -20,13 +22,6 @@ cbuffer SkyPC {
 // Set 0 == forward IBL set (binding 3 = sampler, binding 4 = raw env panorama).
 [[vk::binding(3, 0)]] SamplerState      s_iblLinear;
 [[vk::binding(4, 0)]] Texture2D<float4> t_envRaw;
-
-float2 dirToLatlong(float3 d) {
-    // Hyperion env.slang convention (shaders/env.slang): u via atan2(z,x), v via acos(y).
-    float longitude = atan2(d.z, d.x) * (1.0 / (2.0 * 3.14159265)) + 0.5;
-    float latitude  = acos(clamp(d.y, -1.0, 1.0)) / 3.14159265; // v=0 at top (y=+1)
-    return float2(longitude, latitude);
-}
 
 [shader("fragment")]
 float4 main(float4 pos : SV_Position, float3 viewRay : TEXCOORD0) : SV_Target0 {

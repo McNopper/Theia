@@ -59,13 +59,6 @@ float2 hammersley2d(uint i, uint N)
     return float2(float(i) / float(N), radicalInverse_VdC(i));
 }
 
-// ── Lat-long ↔ direction (matches env_sample convention) ─────────────────────
-float2 dirToLatlong(float3 d)
-{
-    return float2(atan2(d.z, d.x) * (kEnvSampleInvPi * 0.5) + 0.5,
-                  acos(clamp(d.y, -1.0, 1.0)) * kEnvSampleInvPi);
-}
-
 // ── Main ───────────────────────────────────────────────────────────────────────
 [numthreads(8, 8, 1)]
 [shader("compute")]
