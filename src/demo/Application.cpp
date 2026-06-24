@@ -55,26 +55,9 @@ bool Application::onInitialize() {
                                    m_lightCuller.tilesY());
     }
 
-    // SSRPass — screen-space reflections (linear ray march + composite)
-    const SSRPass::Config ssrCfg{
-        .width = swapchain().extent().width,
-        .height = swapchain().extent().height,
-        .depthImage = m_renderer->depthImage(),
-        .depthView = m_renderer->depthView(),
-        .gbufferImage = m_renderer->gbufferImage(),
-        .gbufferView = m_renderer->gbufferView(),
-        .hdrImage = hdrImage().handle(),
-        .hdrView = hdrImage().view(),
-        .ssgiStrength = config().ssgiStrength,
-    };
-    if (!m_ssrPass.initialize(deviceContext(), ssrCfg)) {
-        Logger::warn("SSRPass failed to initialize — reflections disabled");
-    }
-
     // GiPass — ray-query global illumination (multi-bounce indirect via the shared
-    // Harmonia path integrator). Runs in the non-post-fx (parity) path as the indirect
-    // lighting provider, replacing the forward pass's flat-IBL approximation. Opt-in via
-    // --rt-gi; off by default so non-GI scenes keep evalIBL + direct lighting unchanged.
+    // Harmonia path integrator). This is the single indirect provider for the
+    // unified path; opt out only for debugging via --no-rt-gi.
     if (config().rtGi) {
         const GiPass::Config giCfg{
             .width = swapchain().extent().width,
@@ -222,7 +205,6 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
     m_renderer->recordFrame(cmd);
 
     const bool giEnabled = giActive();
-    const bool postFxEnabled = postFxActive();
 
     if (giEnabled) {
         // Ray-query GI: walks BSDF continuation paths off the forward G-buffer and
@@ -246,12 +228,8 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         m_giPass.record(cmd, gp);
     }
 
-    // SSR pass: linear ray march + composite into the HDR buffer.
-    // Runs after the forward pass; transitions HDR to GENERAL and leaves it there.
-    // Skipped under --no-postfx (parity comparison contract: SSR/SSAO/bloom off).
-    if (postFxEnabled) {
-        m_ssrPass.dispatch(cmd, proj, glm::inverse(proj), giEnabled);
-    } else if (!giEnabled) {
+    // No compute pass wrote HDR this frame: leave HDR in GENERAL for host tonemap.
+    if (!giEnabled) {
         // No compute post-effects: leave HDR in GENERAL for the host tonemap pass.
         const std::array hdrToGeneral{harmonia::imageBarrier(target.image,
                                                              VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
@@ -276,15 +254,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
     VkPipelineStageFlags2 depthSrcStage =
         VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
     VkAccessFlags2 depthSrcAccess = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    if (postFxEnabled) {
-        // SSR sampled both guides as read-only and left them in that layout.
-        gbufferOld = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        gbufferSrcStage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        gbufferSrcAccess = VK_ACCESS_2_SHADER_READ_BIT;
-        depthOld = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-        depthSrcStage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        depthSrcAccess = VK_ACCESS_2_SHADER_READ_BIT;
-    } else if (giEnabled) {
+    if (giEnabled) {
         // The GI compute pass sampled the gbuffer as read-only; depth stayed a
         // write attachment (the GI pass does not read it).
         gbufferOld = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -317,9 +287,8 @@ void Application::onResize(VkExtent2D extent) noexcept {
         return;
     }
 
-    // Shut down SSRPass and GiPass first — their descriptor sets reference the old
-    // depth/GBuffer image views that ForwardRenderer::resize() is about to destroy.
-    m_ssrPass.shutdown();
+    // Shut down GiPass first — its descriptor sets reference the old GBuffer image
+    // views that ForwardRenderer::resize() is about to destroy.
     m_giPass.shutdown();
 
     // Resize ForwardRenderer: recreates depth/GBuffer at new extent, updates
@@ -340,24 +309,8 @@ void Application::onResize(VkExtent2D extent) noexcept {
                                    m_lightCuller.tilesY());
     }
 
-    // Reinitialize SSRPass with new depth/GBuffer views from the resized ForwardRenderer.
-    const SSRPass::Config ssrCfg{
-        .width = extent.width,
-        .height = extent.height,
-        .depthImage = m_renderer->depthImage(),
-        .depthView = m_renderer->depthView(),
-        .gbufferImage = m_renderer->gbufferImage(),
-        .gbufferView = m_renderer->gbufferView(),
-        .hdrImage = hdrImage().handle(),
-        .hdrView = hdrImage().view(),
-        .ssgiStrength = config().ssgiStrength,
-    };
-    if (!m_ssrPass.initialize(deviceContext(), ssrCfg)) {
-        Logger::warn("SSRPass resize failed — reflections disabled");
-    }
-
     // Reinitialize GiPass with new HDR/GBuffer views from the resized ForwardRenderer.
-    // Enabled by default; disable via --no-rt-gi. GI remains the non-postfx path.
+    // Enabled by default; disable via --no-rt-gi.
     if (config().rtGi) {
         const GiPass::Config giCfg{
             .width = extent.width,

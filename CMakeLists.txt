@@ -50,12 +50,6 @@ set(THEIA_ENTRY_SHADERS
     ibl_diffuse.comp.slang
     ibl_specular.comp.slang
     light_cull.comp.slang
-    ssr.comp.slang
-    ssr_composite.comp.slang
-    depth_pyramid.comp.slang
-    ssao.comp.slang
-    ssao_blur.comp.slang
-    ssgi.comp.slang
     gi.comp.slang
 )
 
@@ -66,7 +60,6 @@ set(THEIA_LIBRARY_SOURCES
     src/theia/renderer/ForwardRenderer.cpp
     src/theia/renderer/IblPrecompute.cpp
     src/theia/renderer/LightCuller.cpp
-    src/theia/renderer/SSRPass.cpp
     src/theia/renderer/GiPass.cpp
     # Theia GPU scene (rasterizer/meshlet layout — renderer-specific)
     src/theia/scene/Scene.cpp

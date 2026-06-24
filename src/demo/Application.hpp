@@ -13,7 +13,6 @@
 #include "theia/renderer/GiPass.hpp"
 #include "theia/renderer/IblPrecompute.hpp"
 #include "theia/renderer/LightCuller.hpp"
-#include "theia/renderer/SSRPass.hpp"
 #include "theia/scene/Scene.hpp"
 
 namespace theia {
@@ -23,11 +22,10 @@ namespace theia {
 ///
 /// The host owns window/context/swapchain/HDR image/tonemap/present; this
 /// class owns only what is rasterizer specific — ForwardRenderer, Forward+
-/// light culling, SSR, IBL precompute, the Scene and the interactive camera
+/// light culling, IBL precompute, the Scene and the interactive camera
 /// controller.  Per the host contract, record() produces a linear image in
 /// the scene-referred working color space and leaves it in
-/// VK_IMAGE_LAYOUT_GENERAL (SSR does this when post-fx is active; record()
-/// issues the transition explicitly otherwise).
+/// VK_IMAGE_LAYOUT_GENERAL.
 class Application final : public harmonia::App, public harmonia::IRenderer {
   public:
     void setCameraJitterEnabled(bool enabled) noexcept { m_cameraJitterEnabled = enabled; }
@@ -36,13 +34,12 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     void onResize(VkExtent2D extent) noexcept override;
     [[nodiscard]] VkPipelineStageFlags2 outputStageMask() const noexcept override {
         // Must name the *actual* final producer of the HDR write this frame.
-        // SSR/SSAO compute writes the final pixels only when post-fx runs; the GI
-        // compute stage writes them when active; otherwise the forward graphics pass.
-        return computeWritesHdr() ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-                                  : VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        // GI compute writes final pixels when active; otherwise the forward graphics pass.
+        return giActive() ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                          : VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
     }
     [[nodiscard]] VkAccessFlags2 outputAccessMask() const noexcept override {
-        return computeWritesHdr() ? VK_ACCESS_2_SHADER_WRITE_BIT : VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        return giActive() ? VK_ACCESS_2_SHADER_WRITE_BIT : VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
     }
     [[nodiscard]] VkImageView gNormalView() const noexcept override { return m_renderer ? m_renderer->gbufferView() : VK_NULL_HANDLE; }
     [[nodiscard]] VkImageView gDepthView() const noexcept override { return m_renderer ? m_renderer->depthView() : VK_NULL_HANDLE; }
@@ -82,24 +79,13 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     /// Compute initial yaw/pitch from a camera direction vector.
     static void directionToYawPitch(const glm::vec3& dir, float& yaw, float& pitch);
 
-    /// Single source of truth for "are screen-space post-effects running this
-    /// frame?". Both the dispatch decision in record() and the producer stage
-    /// reported via outputStageMask() must agree, or the host's pre-tonemap
-    /// barrier would name the wrong source stage.
-    [[nodiscard]] bool postFxActive() const noexcept { return config().postProcess && m_ssrPass.isInitialized(); }
-
     /// The ray-query GI compute stage runs whenever enabled and initialized.
     [[nodiscard]] bool giActive() const noexcept {
         return config().rtGi && m_giPass.isInitialized();
     }
 
-    /// True when a compute stage (SSR or GI) is the final writer of the HDR image this
-    /// frame, so the host's pre-tonemap barrier names COMPUTE rather than the raster pass.
-    [[nodiscard]] bool computeWritesHdr() const noexcept { return postFxActive() || giActive(); }
-
     std::unique_ptr<ForwardRenderer> m_renderer;
     LightCuller m_lightCuller;
-    SSRPass m_ssrPass;
     GiPass m_giPass;
     IblPrecompute m_ibl;
     std::unique_ptr<Scene> m_scene = std::make_unique<Scene>();

@@ -55,13 +55,11 @@ It implements the [OpenPBR Surface v1.1](https://academysoftwarefoundation.githu
 - **GPU-driven forward rendering** — compute-based culling, indirect command generation, and dispatch
 - **Direct lighting** — 1-2 directional lights + Forward+ tile-based point light culling (16×16 px tiles, up to 128 lights/tile)
 - **Image-based lighting (IBL)** — equirectangular HDR panorama; diffuse irradiance pre-convolution + per-roughness GGX prefiltered specular map; MaterialX analytic GGX directional albedo (no BRDF LUT)
-- **Ray-traced global illumination (RT-GI)** *(enabled by default; disable with `--no-rt-gi`)* — inline `VK_KHR_ray_query` compute stage; shared unidirectional path-integrator core (NEE + MIS + Russian Roulette) in Harmonia; output feeds the existing accumulation → denoiser chain for convergence to Hyperion ground truth. Provides indirect lighting in both the parity (`--no-postfx`) and interactive default paths; multi-bounce parity tuning is ongoing
+- **Ray-traced global illumination (RT-GI)** *(enabled by default; disable with `--no-rt-gi`)* — inline `VK_KHR_ray_query` compute stage; shared unidirectional path-integrator core (NEE + MIS + Russian Roulette) in Harmonia; output feeds the existing accumulation → denoiser chain for convergence to Hyperion ground truth. This is now the single shipped indirect/reflection/occlusion path
 - **ReSTIR DI + GI** *(planned)* — spatiotemporal reservoir resampling for real-time quality at 1 spp/frame; pure ray-query compute, cross-vendor; converges to the same reference as RT-GI
 - **Real-time performance** — GPU-tier dependent: 1080p/HDR/30fps on mid-range (RTX 4050 class); 4K/HDR/60fps on high-end (RTX 4090/5090 class); development reference: RTX 4050 at 1080p HDR
 - **Sub-pixel camera jitter (Halton 2,3)** — deterministic raster AA sampling for accumulation-friendly opaque edge anti-aliasing
 - **Interactive camera control** — WASD movement, mouse look, EV100 physical exposure adjustment
-- **Screen-Space Reflections (SSR)** *(legacy / debug fallback)* — linear view-space ray march (64 steps + 8-step binary refinement) with additive composite blend; roughness cutoff 0.45. Superseded by RT-GI, which provides physically-correct multi-bounce reflections; retained only as a `--no-rt-gi` debug path
-- **Screen-Space Ambient Occlusion (SSAO)** *(legacy / debug fallback)* — hemisphere depth sampling with bilateral blur denoiser. Superseded by RT-GI ray-cast occlusion; showcase renders use `--no-postfx`
 
 ### Material model — OpenPBR Surface v1.1
 All parameters follow the [OpenPBR spec](https://academysoftwarefoundation.github.io/OpenPBR/) naming. All 8 material layers are fully supported:
@@ -196,7 +194,7 @@ build/theia.exe --scene cornell_classic --output out.exr
 | `--width <n>` | 1920 | Render width in pixels |
 | `--height <n>` | 1080 | Render height in pixels |
 | `--validation` / `--no-validation` | disabled | Enable / disable Vulkan validation layers |
-| `--no-postfx` | off | Disable SSR/SSAO/bloom (legacy postfx). Used for parity comparisons **and** showcase screenshots — RT-GI makes postfx redundant |
+| `--no-postfx` | off | Deprecated compatibility flag (legacy postfx path removed from runtime) |
 | `--rt-gi` / `--no-rt-gi` | on | Enable / disable the ray-query GI compute stage (use `--no-rt-gi` for debugging baselines) |
 | `--indirect-ambient <x>` | `0.0` | Presentation-only constant indirect ambient boost (scene-linear); keep `0.0` for parity fixtures |
 | `--ssgi-strength <x>` | `0.0` | Optional screen-space GI complement; keep `0.0` for parity fixtures |
@@ -210,11 +208,11 @@ Theia uses a **staged, replaceable pipeline** for indirect lighting:
 |-------|--------|-------|
 | Flat ambient (`--indirect-ambient`) | Deprecated | Presentation-only hack; contributes ~0 in closed scenes; will be removed |
 | Screen-space GI (`--ssgi-strength`) | Deprecated | Approximation; superseded by RT-GI |
-| Screen-space reflections / AO (SSR/SSAO, `--no-postfx` to disable) | Legacy | Redundant — RT-GI provides physically-correct reflections + occlusion; retained as a `--no-rt-gi` debug fallback only |
+| Screen-space reflections / AO (SSR/SSAO) | Removed | Legacy postfx path removed from runtime; RT-GI is the only shipped indirect/reflection/occlusion path |
 | **RT-GI compute stage** | Default-on | `VK_KHR_ray_query` multibounce; shared integrator core with Hyperion; also drives transmission/refraction; feeds accumulation → denoiser. Enabled by default in both parity and interactive paths; disable with `--no-rt-gi` for debugging baselines |
 | **ReSTIR DI + GI** | Planned | Spatiotemporal reservoir resampling for real-time convergence |
 
-For parity measurements and showcase screenshots keep `--indirect-ambient 0.0`, `--ssgi-strength 0.0`, and `--no-postfx`. RT-GI is the single unified indirect + transmission provider and drives the interactive path; the deprecated flat-ambient / screen-space GI flags and the legacy SSR/SSAO postfx remain debug-only.
+For parity measurements and showcase screenshots keep `--indirect-ambient 0.0` and `--ssgi-strength 0.0`. RT-GI is the single unified indirect + transmission provider and drives the interactive path.
 
 ---
 

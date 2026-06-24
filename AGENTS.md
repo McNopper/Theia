@@ -8,8 +8,8 @@ Quick-start context for AI agents so basic facts don't have to be rediscovered e
 aligned to match **Hyperion** (the path-traced ground truth). Indirect light (diffuse +
 specular + env-NEE) and transmission/refraction are provided by a **HW ray-traced GI pass**
 that drives Harmonia's shared `path_integrator` — the single best-quality real-time approach.
-Screen-space post effects (SSR/SSAO/bloom/SSGI) are **legacy/redundant** now that RT-GI
-supplies physically-correct reflections and occlusion; they are a debug fallback only.
+Legacy screen-space post effects (SSR/SSAO/bloom/SSGI) were removed from the runtime path;
+RT-GI is the only indirect/reflection/occlusion path now.
 
 Pipeline (dependency direction):
 
@@ -63,18 +63,10 @@ Theia has no `--spp` (it is not stochastic).
 
 ⚠️ No `--offscreen` flag — headless is triggered by `--output`.
 
-## Parity & screenshots: use `--no-postfx`
+## Parity & screenshots: unified RT path
 
-Both parity vs Hyperion **and** showcase screenshots are rendered with **`--no-postfx`** (the
-unified RT pipeline = best-quality realtime). Screen-space effects (SSR/SSAO/bloom/SSGI) are
-legacy: they introduce approximations that diverge from a path tracer. Historically measured on
-`alignment_suzanne` (full IBL): no-postfx mean_diff **9.82** vs postfx-ON **24.18** — postfx
-nearly triples the error and darkens the image (signed +4.8 -> +22.1). With RT-GI now providing
-reflections + AO, postfx adds nothing (equal-or-better PSNR with `--no-postfx`).
-
-Why postfx darkens IBL-only scenes: with no analytic lights the item-30 "indirect weight"
-mask is ~1.0 everywhere, so SSAO attenuates almost the whole image, while the path tracer
-computes true ray-cast occlusion and does not over-darken.
+Parity vs Hyperion and showcase screenshots use the same unified RT path. `--no-postfx`
+is retained for CLI compatibility and should be treated as a no-op in current Theia builds.
 
 Compare with `Harmonia/tools/compare_renders.py ref.exr cand.exr` (pass = mean_diff <= 4.0,
 pre-tonemap EXR, same color space).
