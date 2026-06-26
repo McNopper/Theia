@@ -37,10 +37,10 @@ Theia-specific (not in Harmonia).
   HW ray tracing is first-class and memory is abundant → favor ray-traced techniques;
   low-memory approximations (e.g. WBOIT) have no advantage here. It must also run on **other
   hardware**, so keep the technique single and scale it by resolution (below), not by branching.
-- **Transparency/refraction (Group 4, v0.6.0):** committed to **HW ray-traced transmission &
-  refraction** via the existing scene TLAS (`t_tlas`, inline `TraceRayInline` already used for
-  shadows). Same mechanism as Hyperion's BSDF → best parity, order-independent, refraction
-  native, and leaves the HDR alpha (indirect-weight) channel untouched. WBOIT is superseded.
+- **Transparency/refraction (shipped v0.4.0+):** transmission/refraction is **HW ray-traced**
+  via the scene TLAS and runs through Harmonia's shared `path_integrator` — the same estimator
+  and OpenPBR BSDF Hyperion uses. Order-independent, refraction-native, best parity. WBOIT and
+  the old bespoke `traceTransparentPath` are superseded/removed.
 
 - **GPU-driven, latest standard Vulkan, no vendor extensions.** Prefer GPU-driven rendering
   (indirect/mesh-shader draws, GPU-side culling, bindless) using the latest Vulkan features
@@ -52,14 +52,15 @@ Theia-specific (not in Harmonia).
 ## Running
 
 ```powershell
-build/theia.exe --scene cornell_classic --output out.exr --no-postfx   # headless, parity baseline
+build/theia.exe --scene cornell_classic --output out.exr               # headless EXR+PNG
 build/theia.exe --scene fixture_ibl                                    # interactive window
 ```
 
 CLI flags = the common Harmonia set: `--scene/-s`, `--output/-o` (headless EXR+PNG),
-`--width`, `--height`, `--validation`/`--no-validation`, **`--no-postfx`**,
-`--rt-gi`/`--no-rt-gi` (default on), `--indirect-ambient <f>`, `--ssgi-strength <f>`.
-Theia has no `--spp` (it is not stochastic).
+`--width`, `--height`, `--validation`/`--no-validation`, `--rt-gi`/`--no-rt-gi` (default on).
+**Deprecated/no-op** (legacy postfx removed, kept only for CLI compatibility): `--no-postfx`,
+`--indirect-ambient <f>`, `--ssgi-strength <f>`. Theia has no `--spp` (it is not stochastic;
+it accumulates frames — see `--offscreen-frames`).
 
 ⚠️ No `--offscreen` flag — headless is triggered by `--output`.
 
@@ -85,12 +86,15 @@ pre-tonemap EXR, same color space).
   (diffuse + specular + env-NEE) and transmission/refraction, default-on (`--no-rt-gi` to
   disable). The old "single-bounce IBL + flat ambient, darker than Hyperion" gap is closed for
   the unified pipeline. The isolated-diffuse `fixture_ibl` passes at 1.76.
-- **IBL specular is split-sum (band-limited):** sharp HDR sun-disc reflections cannot be
-  represented by the 1024x512 / 8-mip prefiltered map. Accepted approximation (see plan item 22).
+- **IBL specular split-sum is the GI-OFF fallback only:** the prefiltered split-sum map
+  (1024x512 / 8-mip, band-limited, can't resolve a sharp HDR sun-disc) is used only on the
+  `--no-rt-gi` debug path. The default unified path gets specular reflections from RT-GI.
 - **New compute shader entry points** MUST be added to `THEIA_ENTRY_SHADERS` in `CMakeLists.txt`
   or the `.spv` is never compiled and the shader fails to load at runtime ("file not found").
-- **HDR alpha channel carries an indirect-weight mask** (forward pass) consumed by SSAO blur so
-  AO modulates only indirect light. Don't repurpose the alpha channel.
+- **GI primary surface = the re-traced closest hit, NOT the rasterized giBuffer materialIdx.**
+  The giBuffer is draw-order dependent for overlapping transparent surfaces (depth-write off);
+  `gi.comp.slang` trusts the order-independent inline ray query for primary visibility. Do not
+  re-add a `materialIdx ==` guard (it caused black holes on overlapping glass; commit 4a04e6e).
 
 ## Test scenes
 
@@ -115,5 +119,8 @@ SDL3, slangc and volk come from the Vulkan SDK (not vcpkg). vcpkg provides opene
 
 - Commit, but do **not** push unless asked.
 - Working color space is scene-referred (e.g. `lin_rec2020_scene`).
-- Material model tagged `model = "openpbr"`; parameters are identical to Hyperion — the goal is
-  the best real-time approximation of the same OpenPBR inputs, not different parameters.
+- **Material model = OpenPBR Surface** (Academy Software Foundation), tagged `model = "openpbr"`.
+  OpenPBR's canonical/reference implementation is **MaterialX** (`mx_*` genGLSL nodes); follow
+  OpenPBR parameter naming and use MaterialX as the cross-check. Parameters are identical to
+  Hyperion — the goal is the best real-time approximation of the same OpenPBR inputs, not
+  different parameters. The shared OpenPBR BSDF lives in Harmonia (`bsdf_shared.slang`).
