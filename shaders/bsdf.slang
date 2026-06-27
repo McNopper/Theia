@@ -73,7 +73,7 @@ float3 evalBSDF(GpuMaterial mat, float3 wo, float3 wi, float3 N, float3 T, float
             result += baseLayerScale * subsurfaceWeight * ssReflScale * evalDiffuse(ssTint, saturate(0.25 + 0.5 * diffuseRough), woL, wiL);
         }
         if (specularWeight > 0.0 || metalWeight > 0.0) {
-            result += baseLayerScale * (specularWeight + metalWeight) * evalReflectionMicrofacetThinFilm(glossyF0, glossyF82, woL, wiL, alphaX, alphaY, mat.thinFilmParams.x, max(mat.thinFilmParams.y, 1.0), mat.thinFilmParams.z);
+            result += baseLayerScale * (specularWeight + metalWeight) * evalReflectionMicrofacetThinFilm(dielectricF0 * specColor, baseColor, glossyF82, mat.baseMetalnessDiffRough.x, woL, wiL, alphaX, alphaY, mat.thinFilmParams.x, max(mat.thinFilmParams.y, 1.0), mat.thinFilmParams.z);
         }
         if (fuzzWeight > 0.0) {
             result += fuzzWeight * evalSheen(fuzzColor, saturate(mat.fuzzRoughPad.x), woL, wiL);
@@ -91,7 +91,7 @@ float3 evalBSDF(GpuMaterial mat, float3 wo, float3 wi, float3 N, float3 T, float
         float3 wiC = toLocal(wi, cTs, cBs, cNs);
         if (woC.z > 0.0 && wiC.z > 0.0) {
             float3 coatF0 = iorToF0(coatEta) * max(coatColor, 0.04.xxx);
-            result += coatWeight * evalReflectionMicrofacetThinFilm(coatF0, coatColor, woC, wiC, coatAlphaX, coatAlphaY, mat.thinFilmParams.x, max(mat.thinFilmParams.y, 1.0), mat.thinFilmParams.z);
+            result += coatWeight * evalReflectionMicrofacetThinFilm(coatF0, coatF0, coatColor, 0.0, woC, wiC, coatAlphaX, coatAlphaY, mat.thinFilmParams.x, max(mat.thinFilmParams.y, 1.0), mat.thinFilmParams.z);
         }
     }
 
