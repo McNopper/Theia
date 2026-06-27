@@ -161,7 +161,10 @@ GiHit traceClosestHit(float3 origin, float3 dir) {
 }
 
 float4 sampleBindless(uint idx, float2 uv) {
-    return t_bindless[NonUniformResourceIndex(idx)].Sample(uv);
+    // Compute shaders have no screen-space quad, so implicit-LOD .Sample() (which needs
+    // SPV_KHR_compute_shader_derivatives) is both unsupported here and meaningless for a
+    // secondary ray hit. Sample mip 0 explicitly — GI hits carry no pixel footprint.
+    return t_bindless[NonUniformResourceIndex(idx)].SampleLevel(uv, 0.0);
 }
 
 /// Populate a SurfaceHit from a traced hit, using the same texture-mapped material

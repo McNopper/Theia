@@ -149,6 +149,7 @@ bool GiPass::createDescriptors() {
     }};
     const VkDescriptorPoolCreateInfo poolInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
         .maxSets = 1,
         .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
         .pPoolSizes = poolSizes.data(),
