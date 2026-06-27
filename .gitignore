@@ -74,3 +74,6 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Local scratch: thin-film / parity render comparisons (never commit)
+parity_check/
