@@ -61,7 +61,7 @@ It implements the [OpenPBR Surface v1.1](https://academysoftwarefoundation.githu
 - **Sub-pixel camera jitter (Halton 2,3)** — deterministic raster AA sampling for accumulation-friendly opaque edge anti-aliasing
 - **Interactive camera control** — WASD movement, mouse look, EV100 physical exposure adjustment
 
-### Material model — OpenPBR Surface v1.1
+### Material model — OpenPBR Surface v1.1.1
 All parameters follow the [OpenPBR spec](https://academysoftwarefoundation.github.io/OpenPBR/) naming. All 8 material layers are fully supported:
 
 | Layer | Parameters | Status |
@@ -76,7 +76,9 @@ All parameters follow the [OpenPBR spec](https://academysoftwarefoundation.githu
 | Subsurface | `subsurface_weight`, `subsurface_color`, `subsurface_radius`, `subsurface_scale` | ⚠️ screen-space approximation |
 | Geometry | `geometry_opacity` | ⚠️ BRDF weight reduction (not alpha-blended transparency) |
 
-Conductor reflectance uses the OpenPBR generalized-Schlick **F82-tint** model (`base_color` = F0, `specular_color` = 82° tint). Specular and coat microfacets use GGX with the spec's anisotropy remapping.
+Conductor reflectance uses the OpenPBR generalized-Schlick **F82-tint** model (`base_color` = F0, `specular_color` = 82° tint). Specular and coat microfacets use GGX with the spec's anisotropy remapping plus Turquin/Kulla-Conty multiple-scattering compensation.
+
+**Thin-film iridescence** uses the spec model — a faithful port of MaterialX `mx_fresnel_airy` (Belcour & Barla 2017): a full s/p-polarized Airy summation with the spectral Gaussian sensitivity. Metals use the true **complex-IOR conductor phase** (`(n,k)` recovered from `base_color` + `specular_color` via Gulbrandsen 2014), so anodized metals show vivid, physically-correct interference colour, blended with the dielectric Schlick interface by `base_metalness`. The shared BSDF lives in Harmonia, so this renders **identically to Hyperion**.
 
 ### Color pipeline
 - Scene-referred rendering in a selectable **working color space**: linear **Rec.2020**
@@ -87,7 +89,7 @@ Conductor reflectance uses the OpenPBR generalized-Schlick **F82-tint** model (`
 - Physical environment scale via **`env_unit_nits`** (cd/m² per EXR unit)
 - Tone mapping (shared Harmonia stage): **AgX** (Troy Sobotka), **ACES** RRT+ODT, **Reinhard** luminance, **Hable** / Uncharted-2 filmic
 - Display output: **SDR** (sRGB), **HDR10** (PQ/ST2084), **scRGB** — runtime negotiated with swapchain
-- Offscreen output: **EXR** is the scene-referred, untonemapped frame; **PNG** is the tonemapped version
+- Offscreen output: **EXR** is the scene-referred, untonemapped frame; **PNG** is tone-mapped through the **same GPU ToneMapper stage the interactive window uses** (the scene's configured operator — AgX/ACES/Reinhard/Hable — into an 8-bit sRGB target), so screenshots match the live view
 
 **Identical color pipeline to Hyperion** — same algorithms, same visual output (given identical lighting conditions).
 
