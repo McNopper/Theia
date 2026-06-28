@@ -5,7 +5,7 @@ GPU-driven real-time renderer for OpenPBR materials.
 > *[Theia](https://en.wikipedia.org/wiki/Theia_(mythology)) — Titaness of heavenly light, mother of Helios, Selene and Eos.*
 
 Theia is a modern Vulkan 1.4 renderer built on GPU-driven forward rendering techniques.  
-It implements the [OpenPBR Surface v1.1](https://academysoftwarefoundation.github.io/OpenPBR/) material model in real-time and targets visual parity with [Hyperion](https://github.com/McNopper/Hyperion)'s path-traced output on identical test scenes. Direct-lighting and IBL parity are established, and a **unified HW ray-traced GI pass** (sharing Hyperion's `path_integrator`) now provides multi-bounce indirect light *and* transmission/refraction — closing most of the previous closed-room GI gap. Screen-space post effects (SSR/SSAO) are **legacy/redundant** now that RT-GI supplies physically-correct reflections and occlusion. See *RT-GI* in the roadmap below.
+It implements the [OpenPBR Surface v1.1.1](https://academysoftwarefoundation.github.io/OpenPBR/) material model in real-time and targets visual parity with [Hyperion](https://github.com/McNopper/Hyperion)'s path-traced output on identical test scenes. A **unified HW ray-traced GI pass** (sharing Hyperion's `path_integrator`) provides multi-bounce indirect light *and* transmission/refraction, and is the single indirect/reflection/occlusion path. See *RT-GI* in the roadmap below.
 
 **Interactive real-time rendering** — explore complex materials, dynamic lighting, and HDR output in real-time.  
 **Architecture driven by [GPU-Driven Rendering](https://vkguide.dev/docs/gpudriven)** — compute-based culling, indirect dispatch, and clustered lighting.
@@ -55,7 +55,7 @@ It implements the [OpenPBR Surface v1.1](https://academysoftwarefoundation.githu
 - **GPU-driven forward rendering** — compute-based culling, indirect command generation, and dispatch
 - **Direct lighting** — 1-2 directional lights + Forward+ tile-based point light culling (16×16 px tiles, up to 128 lights/tile)
 - **Image-based lighting (IBL)** — equirectangular HDR panorama; diffuse irradiance pre-convolution + per-roughness GGX prefiltered specular map; MaterialX analytic GGX directional albedo (no BRDF LUT)
-- **Ray-traced global illumination (RT-GI)** *(enabled by default; disable with `--no-rt-gi`)* — inline `VK_KHR_ray_query` compute stage; shared unidirectional path-integrator core (NEE + MIS + Russian Roulette) in Harmonia; output feeds the existing accumulation → denoiser chain for convergence to Hyperion ground truth. This is now the single shipped indirect/reflection/occlusion path
+- **Ray-traced global illumination (RT-GI)** *(enabled by default; disable with `--no-rt-gi`)* — inline `VK_KHR_ray_query` compute stage; shared unidirectional path-integrator core (NEE + MIS + Russian Roulette) in Harmonia; output feeds the accumulation → denoiser chain for convergence to Hyperion ground truth. This is the single indirect/reflection/occlusion path
 - **ReSTIR DI + GI** *(planned)* — spatiotemporal reservoir resampling for real-time quality at 1 spp/frame; pure ray-query compute, cross-vendor; converges to the same reference as RT-GI
 - **Real-time performance** — GPU-tier dependent: 1080p/HDR/30fps on mid-range (RTX 4050 class); 4K/HDR/60fps on high-end (RTX 4090/5090 class); development reference: RTX 4050 at 1080p HDR
 - **Sub-pixel camera jitter (Halton 2,3)** — deterministic raster AA sampling for accumulation-friendly opaque edge anti-aliasing
@@ -198,10 +198,10 @@ build/theia.exe --scene cornell_classic --output out.exr
 | `--width <n>` | 1920 | Render width in pixels |
 | `--height <n>` | 1080 | Render height in pixels |
 | `--validation` / `--no-validation` | disabled | Enable / disable Vulkan validation layers |
-| `--no-postfx` | off | Deprecated compatibility flag (legacy postfx path removed from runtime) |
+| `--no-postfx` | off | No-op, accepted for CLI compatibility |
 | `--rt-gi` / `--no-rt-gi` | on | Enable / disable the ray-query GI compute stage (use `--no-rt-gi` for debugging baselines) |
-| `--indirect-ambient <x>` | `0.0` | Presentation-only constant indirect ambient boost (scene-linear); keep `0.0` for parity fixtures |
-| `--ssgi-strength <x>` | `0.0` | Optional screen-space GI complement; keep `0.0` for parity fixtures |
+| `--indirect-ambient <x>` | `0.0` | No-op, accepted for CLI compatibility |
+| `--ssgi-strength <x>` | `0.0` | No-op, accepted for CLI compatibility |
 | `--no-camera-jitter` | off | Disable sub-pixel camera jitter (debug/baseline comparison only) |
 
 ### Indirect lighting and GI architecture
@@ -210,28 +210,24 @@ Theia uses a **staged, replaceable pipeline** for indirect lighting:
 
 | Stage | Status | Notes |
 |-------|--------|-------|
-| Flat ambient (`--indirect-ambient`) | Deprecated | Presentation-only hack; contributes ~0 in closed scenes; will be removed |
-| Screen-space GI (`--ssgi-strength`) | Deprecated | Approximation; superseded by RT-GI |
-| Screen-space reflections / AO (SSR/SSAO) | Removed | Legacy postfx path removed from runtime; RT-GI is the only shipped indirect/reflection/occlusion path |
-| **RT-GI compute stage** | Default-on | `VK_KHR_ray_query` multibounce; shared integrator core with Hyperion; also drives transmission/refraction; feeds accumulation → denoiser. Enabled by default in both parity and interactive paths; disable with `--no-rt-gi` for debugging baselines |
+| **RT-GI compute stage** | Default-on | `VK_KHR_ray_query` multibounce; shared integrator core with Hyperion; also drives transmission/refraction; feeds accumulation → denoiser. The single indirect/reflection/occlusion path. Disable with `--no-rt-gi` for debugging baselines |
+| Split-sum `evalIBL` | Fallback | First-hit IBL used only on the `--no-rt-gi` debug path |
 | **ReSTIR DI + GI** | Planned | Spatiotemporal reservoir resampling for real-time convergence |
 
-For parity measurements and showcase screenshots keep `--indirect-ambient 0.0` and `--ssgi-strength 0.0`. RT-GI is the single unified indirect + transmission provider and drives the interactive path.
+RT-GI is the single unified indirect + transmission provider and drives both the parity and interactive paths.
 
 ---
 
 ## Tests
 
-> ⚠️ Theia does not have its own test suite yet; correctness is currently validated by
-> visual parity against Hyperion (ground truth) on the shared test scenes. The shared
-> foundation is covered by the Harmonia and Aether test suites.
+> Theia has a module test suite (`ctest`) covering its renderer-specific logic; the shared
+> BSDF/estimator/pipeline foundation is covered by the Harmonia and Aether test suites. End-to-end
+> material correctness is validated by visual parity against Hyperion (ground truth) on the shared
+> test scenes.
 >
-> **Transparency parity note:** Transparent surfaces now route through the **shared Harmonia
-> `path_integrator`** (smooth-dielectric delta refraction lobe + Beer-Lambert + env-NEE), the same
-> estimator Hyperion uses — retiring Theia's earlier bespoke stochastic Fresnel-walk. This unification
-> closed the large glass gap: `dragon_teapot` improved from **PSNR ~19 dB to ~29.9 dB** vs Hyperion
-> (1024x768, `--no-postfx`), and the black "missing material" holes on glass (openpbr_advanced /
-> dielectrics) are resolved. Remaining residuals are localized high-energy-IBL-through-glass variance
+> **Transparency parity note:** Transparent surfaces route through the **shared Harmonia
+> `path_integrator`** (smooth-dielectric delta refraction lobe + Beer-Lambert + env-NEE) — the same
+> estimator Hyperion uses. Remaining residuals are localized high-energy-IBL-through-glass variance
 > and a minor TIR notch, tracked as ongoing parity work.
 >
 > **Gate policy:** keep the strict absolute gate (`mean_diff <= 4.0`) for opaque/direct/SDR fixtures.
