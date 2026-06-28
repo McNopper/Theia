@@ -77,3 +77,7 @@ Testing/
 
 # Local scratch: thin-film / parity render comparisons (never commit)
 parity_check/
+sheen_check/
+
+# Showcase screenshots are tracked as PNG only; EXRs are local scratch.
+screenshots/*.exr

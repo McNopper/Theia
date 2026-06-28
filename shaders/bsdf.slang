@@ -53,7 +53,9 @@ float3 evalBSDF(GpuMaterial mat, float3 wo, float3 wi, float3 N, float3 T, float
 
     float ssAniso = clamp(mat.opacityFlagsPad.z, -1.0, 1.0);
     float baseLayerScale = rcp(lerp(1.0, coatEta * coatEta, coatWeight * coatDark));
-    baseLayerScale *= 1.0 - 0.35 * fuzzWeight;
+    // OpenPBR/Zeltner sheen attenuates the layers beneath it by its (view-dependent)
+    // directional albedo, not a fixed constant.
+    baseLayerScale *= 1.0 - sheenDirAlbedo(woL.z, saturate(mat.fuzzRoughPad.x)) * fuzzWeight;
 
     float3 result = 0.0.xxx;
     if (wiL.z > 0.0 && woL.z > 0.0) {
