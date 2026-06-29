@@ -52,9 +52,12 @@ float3 evalBSDF(GpuMaterial mat, float3 wo, float3 wi, float3 N, float3 T, float
     computeLobeWeights(mat, diffuseWeight, subsurfaceWeight, specularWeight, metalWeight, transmissionWeight, coatWeight, fuzzWeight, diffuseTransWeight, mirrorMode, glassMode);
 
     float ssAniso = clamp(mat.opacityFlagsPad.z, -1.0, 1.0);
-    float baseLayerScale = rcp(lerp(1.0, coatEta * coatEta, coatWeight * coatDark));
-    // OpenPBR/Zeltner sheen attenuates the layers beneath it by its (view-dependent)
-    // directional albedo, not a fixed constant.
+    // OpenPBR layer stacking: substrate transmittance through coat = (1 - coat·E_coat); applied
+    // symmetrically on entry (NoV) and exit (NoL) so the coupling stays reciprocal. Sheen
+    // attenuates beneath it by its own directional albedo.
+    float coatAlphaAvg = safeSqrt(coatAlphaX * coatAlphaY);
+    float baseLayerScale = safeSqrt(coatBaseTransmittance(woL.z, coatWeight * coatDark, coatEta, coatAlphaAvg) *
+                                    coatBaseTransmittance(wiL.z, coatWeight * coatDark, coatEta, coatAlphaAvg));
     baseLayerScale *= 1.0 - mx_zeltner_sheen_dir_albedo(woL.z, saturate(mat.fuzzRoughPad.x)) * fuzzWeight;
 
     float3 result = 0.0.xxx;
@@ -62,9 +65,15 @@ float3 evalBSDF(GpuMaterial mat, float3 wo, float3 wi, float3 N, float3 T, float
         float3 dielectricF0 = iorToF0(eta);
         float3 glossyF0 = lerp(dielectricF0 * specColor, baseColor, saturate(mat.baseMetalnessDiffRough.x));
         float3 glossyF82 = specColor;
+        // Dielectric base diffuse/subsurface sit UNDER the specular layer: attenuate by the
+        // specular layer's directional albedo, symmetric in NoV/NoL so it stays reciprocal.
+        float specF0 = luminance(dielectricF0 * specColor);
+        float specAlphaAvg = safeSqrt(alphaX * alphaY);
+        float diffuseUnderSpec = saturate(1.0 - fresnelGgxDirAlbedo(woL.z, specF0, specAlphaAvg)) *
+                                 saturate(1.0 - fresnelGgxDirAlbedo(wiL.z, specF0, specAlphaAvg));
 
         if (diffuseWeight > 0.0) {
-            result += baseLayerScale * diffuseWeight * evalDiffuse(baseColor, diffuseRough, woL, wiL);
+            result += baseLayerScale * diffuseUnderSpec * diffuseWeight * evalDiffuse(baseColor, diffuseRough, woL, wiL);
         }
         if (subsurfaceWeight > 0.0) {
             float ssScale = max(mat.subsurfaceRadiusScale.w, 0.001);
@@ -72,7 +81,7 @@ float3 evalBSDF(GpuMaterial mat, float3 wo, float3 wi, float3 N, float3 T, float
             // Bulk subsurface: forward scattering (g>0) reduces back-reflected energy.
             // (In thin-walled mode the split is already baked into the lobe weights.)
             float ssReflScale = (mat.opacityFlagsPad.w > 0.5) ? 1.0 : saturate(1.0 - ssAniso);
-            result += baseLayerScale * subsurfaceWeight * ssReflScale * evalDiffuse(ssTint, saturate(0.25 + 0.5 * diffuseRough), woL, wiL);
+            result += baseLayerScale * diffuseUnderSpec * subsurfaceWeight * ssReflScale * evalDiffuse(ssTint, saturate(0.25 + 0.5 * diffuseRough), woL, wiL);
         }
         if (specularWeight > 0.0 || metalWeight > 0.0) {
             result += baseLayerScale * (specularWeight + metalWeight) * evalReflectionMicrofacetThinFilm(dielectricF0 * specColor, baseColor, glossyF82, mat.baseMetalnessDiffRough.x, woL, wiL, alphaX, alphaY, mat.thinFilmParams.x, max(mat.thinFilmParams.y, 1.0), mat.thinFilmParams.z);
