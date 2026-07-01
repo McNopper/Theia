@@ -73,7 +73,7 @@ All parameters follow the [OpenPBR spec](https://academysoftwarefoundation.githu
 | Emission | `emission_luminance`, `emission_color` | ✅ |
 | Thin-film | `thin_film_weight`, `thin_film_thickness`, `thin_film_ior` | ✅ |
 | Transmission | `transmission_weight`, `transmission_color`, `transmission_depth` | ✅ |
-| Subsurface | `subsurface_weight`, `subsurface_color`, `subsurface_radius`, `subsurface_scale` | ⚠️ screen-space approximation |
+| Subsurface | `subsurface_weight`, `subsurface_color`, `subsurface_radius`, `subsurface_radius_scale`, `subsurface_scatter_anisotropy` | ⚠️ diffuse approximation (Hyperion uses a real volumetric random walk) |
 | Geometry | `geometry_opacity` | ⚠️ BRDF weight reduction (not alpha-blended transparency) |
 
 Conductor reflectance uses the OpenPBR generalized-Schlick **F82-tint** model (`base_color` = F0, `specular_color` = 82° tint). Specular and coat microfacets use GGX with the spec's anisotropy remapping plus Turquin/Kulla-Conty multiple-scattering compensation.
@@ -81,6 +81,8 @@ Conductor reflectance uses the OpenPBR generalized-Schlick **F82-tint** model (`
 **Thin-film iridescence** uses the spec model — a faithful port of MaterialX `mx_fresnel_airy` (Belcour & Barla 2017): a full s/p-polarized Airy summation with the spectral Gaussian sensitivity. Metals use the true **complex-IOR conductor phase** (`(n,k)` recovered from `base_color` + `specular_color` via Gulbrandsen 2014), so anodized metals show vivid, physically-correct interference colour, blended with the dielectric Schlick interface by `base_metalness`. The shared BSDF lives in Harmonia, so this renders **identically to Hyperion**.
 
 **Fuzz/sheen** is the OpenPBR spec model — a faithful port of MaterialX's Zeltner et al. 2022 "Practical Multiple-Scattering Sheen Using Linearly Transformed Cosines" (analytic LTC + directional-albedo fits, no lookup table). The sheen directional albedo also drives the physically-correct, view-dependent darkening of the layers beneath the fuzz. Shared Harmonia BSDF → **identical to Hyperion**.
+
+**Subsurface** currently uses the shared diffuse approximation (a color/radius-tinted diffuse response), so bulk-subsurface materials diverge from Hyperion, which runs a real volumetric random walk. Closing this in real time is the planned RT-path work (see roadmap); the parameters are identical, only the transport model differs.
 
 ### Color pipeline
 - Scene-referred rendering in a selectable **working color space**: linear **Rec.2020**
