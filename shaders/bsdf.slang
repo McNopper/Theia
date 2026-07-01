@@ -51,12 +51,13 @@ float3 evalBSDF(GpuMaterial mat, float3 wo, float3 wi, float3 N, float3 T, float
     computeLobeWeights(mat, diffuseWeight, subsurfaceWeight, specularWeight, metalWeight, transmissionWeight, coatWeight, fuzzWeight, diffuseTransWeight, mirrorMode, glassMode);
 
     float ssAniso = clamp(mat.opacityFlagsPad.z, -1.0, 1.0);
-    // OpenPBR layer stacking: substrate transmittance through coat = (1 - coat·E_coat); applied
-    // symmetrically on entry (NoV) and exit (NoL) so the coupling stays reciprocal. Sheen
-    // attenuates beneath it by its own directional albedo.
-    float coatAlphaAvg = safeSqrt(coatAlphaX * coatAlphaY);
-    float baseLayerScale = safeSqrt(coatBaseTransmittance(woL.z, coatWeight * coatDark, coatEta, coatAlphaAvg) *
-                                    coatBaseTransmittance(wiL.z, coatWeight * coatDark, coatEta, coatAlphaAvg));
+    // OpenPBR coat darkening (G1) + coat_color absorption (G2) — per-channel view-independent
+    // multiply, matching Hyperion/bsdf_shared. Fuzz (topmost) then attenuates the base.
+    float3 Emetal = baseColor * saturate(mat.specularColorWeight.w);
+    float3 Edielectric = lerp(baseColor, subsurfaceColor, saturate(mat.subsurfaceColorWeight.w));
+    float3 Ebase = lerp(Edielectric, Emetal, saturate(mat.baseMetalnessDiffRough.x));
+    float3 baseLayerScale = openpbrCoatDarkening(Ebase, coatEta, coatWeight, coatDark)
+                          * openpbrCoatColorAttenuation(coatColor, coatWeight);
     baseLayerScale *= 1.0 - mx_zeltner_sheen_dir_albedo(woL.z, saturate(mat.fuzzRoughPad.x)) * fuzzWeight;
 
     float3 result = 0.0.xxx;
