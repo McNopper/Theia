@@ -26,7 +26,7 @@ float3 evalBSDF(GpuMaterial mat, float3 wo, float3 wi, float3 N, float3 T, float
     float coatRough = mat.coatRoughAnisoIorDark.x;
     float coatAniso = mat.coatRoughAnisoIorDark.y;
     float coatEta = max(mat.coatRoughAnisoIorDark.z, 1.01);
-    float eta = openpbrModulatedEta(max(mat.specularRoughAnisoIor.z, 1.01), 1.0, coatEta, saturate(mat.coatColorWeight.w));
+    float eta = openpbrModulatedEta(max(mat.specularRoughAnisoIor.z, 1.01), saturate(mat.specularColorWeight.w), coatEta, saturate(mat.coatColorWeight.w));
     float diffuseRough = saturate(mat.baseMetalnessDiffRough.y);
     float coatDark = saturate(mat.coatRoughAnisoIorDark.w);
 
@@ -177,7 +177,7 @@ float pdfBSDF(GpuMaterial mat, float3 wo, float3 wi, float3 N, float3 T, float3 
         pdf += (specularWeight + metalWeight) * reflectionPdf(woL, wiL, alphaX, alphaY);
     } else {
         if (transmissionWeight > 0.0) {
-            float eta = openpbrModulatedEta(max(mat.specularRoughAnisoIor.z, 1.01), 1.0, max(mat.coatRoughAnisoIorDark.z, 1.01), saturate(mat.coatColorWeight.w));
+            float eta = openpbrModulatedEta(max(mat.specularRoughAnisoIor.z, 1.01), saturate(mat.specularColorWeight.w), max(mat.coatRoughAnisoIorDark.z, 1.01), saturate(mat.coatColorWeight.w));
             float eta_ratio = woL.z > 0.0 ? (1.0 / eta) : eta;
             float3 h = normalize(-woL * eta_ratio + wiL);
             if (h.z < 0.0) h = -h;
@@ -241,7 +241,7 @@ BSDFSample sampleBSDF(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B, 
     bool glassMode;
     computeLobeWeights(mat, diffuseWeight, subsurfaceWeight, specularWeight, metalWeight, transmissionWeight, coatWeight, fuzzWeight, diffuseTransWeight, mirrorMode, glassMode);
 
-    float eta = openpbrModulatedEta(max(mat.specularRoughAnisoIor.z, 1.01), 1.0, max(mat.coatRoughAnisoIorDark.z, 1.01), saturate(mat.coatColorWeight.w));
+    float eta = openpbrModulatedEta(max(mat.specularRoughAnisoIor.z, 1.01), saturate(mat.specularColorWeight.w), max(mat.coatRoughAnisoIorDark.z, 1.01), saturate(mat.coatColorWeight.w));
     float baseRough = mat.specularRoughAnisoIor.x;
     float baseAniso = mat.specularRoughAnisoIor.y;
     float coatRough = mat.coatRoughAnisoIorDark.x;
