@@ -13,6 +13,7 @@
 #include "theia/renderer/GiPass.hpp"
 #include "theia/renderer/IblPrecompute.hpp"
 #include "theia/renderer/LightCuller.hpp"
+#include "theia/renderer/MotionVectorPass.hpp"
 #include "theia/scene/Scene.hpp"
 
 namespace theia {
@@ -43,6 +44,9 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     }
     [[nodiscard]] VkImageView gNormalView() const noexcept override { return m_renderer ? m_renderer->gbufferView() : VK_NULL_HANDLE; }
     [[nodiscard]] VkImageView gDepthView() const noexcept override { return m_renderer ? m_renderer->depthView() : VK_NULL_HANDLE; }
+    [[nodiscard]] VkImageView motionVectorView() const noexcept override {
+        return m_motionVectorPass.isInitialized() ? m_motionVectorPass.motionVectorImageView() : VK_NULL_HANDLE;
+    }
     [[nodiscard]] const char* name() const noexcept override { return "Theia ForwardRenderer"; }
 
   protected:
@@ -87,6 +91,7 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     std::unique_ptr<ForwardRenderer> m_renderer;
     LightCuller m_lightCuller;
     GiPass m_giPass;
+    MotionVectorPass m_motionVectorPass;
     IblPrecompute m_ibl;
     std::unique_ptr<Scene> m_scene = std::make_unique<Scene>();
 
@@ -105,6 +110,10 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     CameraController m_camCtrl{};
     bool m_cameraJitterEnabled = true;
     uint32_t m_sceneMaxDepth = 3u;
+
+    /// Previous frame's transposed view-projection matrix for motion vector computation.
+    glm::mat4 m_prevViewProj{1.0f};
+    bool m_prevViewProjValid = false;
 
     // Previous view signature, used to reset progressive accumulation on change.
     glm::vec3 m_prevCamPos{0.0f};

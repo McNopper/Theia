@@ -75,6 +75,20 @@ bool Application::onInitialize() {
         // When GI will run, the forward pass must emit direct+emission only (no IBL/ambient);
         // the GI compute stage supplies the indirect term.
         m_renderer->setGiEnabled(giActive());
+
+        // MotionVectorPass: compute per-pixel motion vectors after GiPass
+        // (giBuffer will be in SHADER_READ_ONLY_OPTIMAL at that point).
+        if (m_giPass.isInitialized()) {
+            const MotionVectorPass::Config mvCfg{
+                .width = swapchain().extent().width,
+                .height = swapchain().extent().height,
+                .giBufferImage = m_renderer->giBufferImage(),
+                .giBufferView = m_renderer->giBufferView(),
+            };
+            if (!m_motionVectorPass.initialize(deviceContext(), mvCfg)) {
+                Logger::warn("MotionVectorPass failed to initialize — static history fallback active");
+            }
+        }
     } else {
         m_renderer->setGiEnabled(false);
     }
@@ -190,6 +204,8 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         proj = applyProjectionJitter(proj, cameraJitterNdc(frameIndex(), target.extent.width, target.extent.height));
     }
     const glm::mat4 view = glm::lookAt(m_camera.position, m_camera.target, m_camera.up);
+    // Transposed VP for Slang mul(M, v) convention (used by motion vector shader).
+    const glm::mat4 curViewProjT = glm::transpose(proj * view);
 
     // Forward+ light culling compute pass (runs before geometry rendering).
     if (m_scene && m_scene->lightCount() > 0 && m_lightCuller.tilesX() > 0) {
@@ -226,7 +242,20 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         gp.rngBaseSeed = config().rngSeed;
         gp.maxDepth = m_sceneMaxDepth;
         m_giPass.record(cmd, gp);
+
+        // After GiPass, the GI G-buffer is in SHADER_READ_ONLY_OPTIMAL.
+        // Compute motion vectors for temporal reprojection in the denoiser.
+        if (m_motionVectorPass.isInitialized()) {
+            MotionVectorPass::FrameParams mvp{};
+            mvp.curViewProj  = curViewProjT;
+            mvp.prevViewProj = m_prevViewProjValid ? m_prevViewProj : curViewProjT;
+            m_motionVectorPass.record(cmd, mvp);
+        }
     }
+
+    // Store current VP for use as prevViewProj next frame.
+    m_prevViewProj      = curViewProjT;
+    m_prevViewProjValid = true;
 
     // No compute pass wrote HDR this frame: leave HDR in GENERAL for host tonemap.
     if (!giEnabled) {
@@ -267,6 +296,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
                                gbufferSrcAccess, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
     const VkImageMemoryBarrier2 depthToGeneral{
         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+        .pNext = nullptr,
         .srcStageMask = depthSrcStage,
         .srcAccessMask = depthSrcAccess,
         .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -287,9 +317,10 @@ void Application::onResize(VkExtent2D extent) noexcept {
         return;
     }
 
-    // Shut down GiPass first — its descriptor sets reference the old GBuffer image
-    // views that ForwardRenderer::resize() is about to destroy.
+    // Shut down GiPass and MotionVectorPass first — their descriptor sets reference the old
+    // GBuffer image views that ForwardRenderer::resize() is about to destroy.
     m_giPass.shutdown();
+    m_motionVectorPass.shutdown();
 
     // Resize ForwardRenderer: recreates depth/GBuffer at new extent, updates
     // the HDR image handles (App::handleResize has already recreated the HDR image).
@@ -310,7 +341,6 @@ void Application::onResize(VkExtent2D extent) noexcept {
     }
 
     // Reinitialize GiPass with new HDR/GBuffer views from the resized ForwardRenderer.
-    // Enabled by default; disable via --no-rt-gi.
     if (config().rtGi) {
         const GiPass::Config giCfg{
             .width = extent.width,
@@ -326,9 +356,26 @@ void Application::onResize(VkExtent2D extent) noexcept {
             Logger::warn("GiPass resize failed — ray-query GI disabled");
         }
         m_renderer->setGiEnabled(giActive());
+
+        // Reinitialize MotionVectorPass with the new GBuffer view and extent.
+        if (m_giPass.isInitialized()) {
+            const MotionVectorPass::Config mvCfg{
+                .width = extent.width,
+                .height = extent.height,
+                .giBufferImage = m_renderer->giBufferImage(),
+                .giBufferView = m_renderer->giBufferView(),
+            };
+            if (!m_motionVectorPass.initialize(deviceContext(), mvCfg)) {
+                Logger::warn("MotionVectorPass resize failed — static history fallback active");
+            }
+        }
     } else {
         m_renderer->setGiEnabled(false);
     }
+
+    // Invalidate the previous VP on resize so the first post-resize frame uses
+    // curVP == prevVP (zero motion vectors), preventing a one-frame disocclusion spike.
+    m_prevViewProjValid = false;
 }
 
 bool Application::onEvent(const SDL_Event& event) {

@@ -51,6 +51,7 @@ set(THEIA_ENTRY_SHADERS
     ibl_specular.comp.slang
     light_cull.comp.slang
     gi.comp.slang
+    motion_vector.comp.slang
 )
 
 # Theia-specific sources only. Common Vulkan code now lives in Harmonia and the
@@ -61,6 +62,7 @@ set(THEIA_LIBRARY_SOURCES
     src/theia/renderer/IblPrecompute.cpp
     src/theia/renderer/LightCuller.cpp
     src/theia/renderer/GiPass.cpp
+    src/theia/renderer/MotionVectorPass.cpp
     # Theia GPU scene (rasterizer/meshlet layout — renderer-specific)
     src/theia/scene/Scene.cpp
 )
@@ -99,6 +101,14 @@ if(BUILD_TESTING)
             GIT_SHALLOW TRUE
         )
         FetchContent_MakeAvailable(googletest)
+        # gtest v1.15.2 has an implicit char8_t→char32_t conversion in C++23; suppress.
+        foreach(_gt_tgt IN ITEMS gtest gtest_main gmock gmock_main)
+            if(TARGET ${_gt_tgt})
+                target_compile_options(${_gt_tgt} PRIVATE
+                    $<$<CXX_COMPILER_ID:Clang,MSVC>:-Wno-character-conversion>
+                )
+            endif()
+        endforeach()
     endif()
 
     if(TARGET gtest)
