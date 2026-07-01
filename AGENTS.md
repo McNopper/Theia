@@ -86,6 +86,11 @@ pre-tonemap EXR, same color space).
   (diffuse + specular + env-NEE) and transmission/refraction, default-on (`--no-rt-gi` to
   disable). The old "single-bounce IBL + flat ambient, darker than Hyperion" gap is closed for
   the unified pipeline. The isolated-diffuse `fixture_ibl` passes at 1.76.
+- **Bulk subsurface + transmission-scatter run the shared volumetric walk in `gi.comp`:** the
+  compute loop executes the same chromatic hero-wavelength free-flight/scatter/boundary
+  estimator as Hyperion (`runMediumWalk`), on both primary and secondary vertices. `sampleBSDF`
+  sets `entersMedium` with per-channel σ_t exactly like Hyperion; it is NOT a diffuse-tint
+  approximation anymore. Thin-walled subsurface keeps the diffuse sheet.
 - **IBL specular split-sum is the GI-OFF fallback only:** the prefiltered split-sum map
   (1024x512 / 8-mip, band-limited, can't resolve a sharp HDR sun-disc) is used only on the
   `--no-rt-gi` debug path. The default unified path gets specular reflections from RT-GI.
