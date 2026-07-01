@@ -73,7 +73,7 @@ All parameters follow the [OpenPBR spec](https://academysoftwarefoundation.githu
 | Emission | `emission_luminance`, `emission_color` | ✅ |
 | Thin-film | `thin_film_weight`, `thin_film_thickness`, `thin_film_ior` | ✅ |
 | Transmission | `transmission_weight`, `transmission_color`, `transmission_depth` | ✅ |
-| Subsurface | `subsurface_weight`, `subsurface_color`, `subsurface_radius`, `subsurface_radius_scale`, `subsurface_scatter_anisotropy` | ⚠️ diffuse approximation (Hyperion uses a real volumetric random walk) |
+| Subsurface | `subsurface_weight`, `subsurface_color`, `subsurface_radius`, `subsurface_radius_scale`, `subsurface_scatter_anisotropy` | ✅ real volumetric random walk (shared with Hyperion, run in the RT-GI compute stage) |
 | Geometry | `geometry_opacity` | ⚠️ BRDF weight reduction (not alpha-blended transparency) |
 
 Conductor reflectance uses the OpenPBR generalized-Schlick **F82-tint** model (`base_color` = F0, `specular_color` = 82° tint). Specular and coat microfacets use GGX with the spec's anisotropy remapping plus Turquin/Kulla-Conty multiple-scattering compensation.
@@ -82,7 +82,7 @@ Conductor reflectance uses the OpenPBR generalized-Schlick **F82-tint** model (`
 
 **Fuzz/sheen** is the OpenPBR spec model — a faithful port of MaterialX's Zeltner et al. 2022 "Practical Multiple-Scattering Sheen Using Linearly Transformed Cosines" (analytic LTC + directional-albedo fits, no lookup table). The sheen directional albedo also drives the physically-correct, view-dependent darkening of the layers beneath the fuzz. Shared Harmonia BSDF → **identical to Hyperion**.
 
-**Subsurface** currently uses the shared diffuse approximation (a color/radius-tinted diffuse response), so bulk-subsurface materials diverge from Hyperion, which runs a real volumetric random walk. Closing this in real time is the planned RT-path work (see roadmap); the parameters are identical, only the transport model differs.
+**Subsurface** (bulk, non-thin-walled) runs the **same chromatic volumetric random walk as Hyperion** — routed through the unified RT-GI compute stage (`gi.comp` executes the shared hero-wavelength free-flight/scatter/boundary estimator on both primary and secondary vertices). Light refracts through the dielectric interface (Fresnel-gated), takes Henyey-Greenstein scattering steps with per-channel extinction derived from `subsurface_radius` × `subsurface_radius_scale` (single-scatter albedo = `subsurface_color`), and exits through the interface. Thin-walled subsurface keeps the diffuse-sheet approximation. **Transmission scattering** (`transmission_scatter`) reuses the same walk, so both match Hyperion's transport model, not just its parameters.
 
 ### Color pipeline
 - Scene-referred rendering in a selectable **working color space**: linear **Rec.2020**
@@ -298,9 +298,13 @@ Where a technique is shared with [Hyperion](https://github.com/McNopper/Hyperion
 ### Material Model
 | Resource | Relevance |
 |----------|-----------|
-| [OpenPBR Surface Specification v1.1](https://academysoftwarefoundation.github.io/OpenPBR/) | Material layer stack, parameter naming, F82-tint conductor model |
+| [OpenPBR Surface Specification v1.1.1](https://academysoftwarefoundation.github.io/OpenPBR/) | Material layer stack, parameter naming, F82-tint conductor model |
 | [MaterialX Standard Surface](https://materialx.org/) | Cross-reference for PBR parameter vocabulary; `mx_ggx_dir_albedo_analytic` for IBL |
 | [Blender Principled BSDF](https://docs.blender.org/manual/en/latest/render/shader_nodes/shader/principled.html) | Cross-reference for PBR parameter vocabulary |
+| [Henyey & Greenstein — "Diffuse Radiation in the Galaxy" (1941)](https://articles.adsabs.harvard.edu/pdf/1941ApJ....93...70H) | Henyey-Greenstein phase function for the subsurface / transmission volumetric random walk (RT-GI compute stage) |
+| [Wilkie et al. — "Hero Wavelength Spectral Sampling" (EGSR 2014)](https://cgg.mff.cuni.cz/~wilkie/Website/EGSR_14_files/WNDWH14.pdf) | Hero-wavelength spectral-MIS estimator for chromatic (per-channel) subsurface / transmission media |
+| [Novák et al. — "Monte Carlo Methods for Volumetric Light Transport Simulation" (Eurographics STAR 2018)](https://cs.dartmouth.edu/~wjarosz/publications/novak18monte.html) | Free-flight distance sampling, collision estimators, and transmittance for the medium walk |
+| [Harmonia README — Surface BSDF references](https://github.com/McNopper/Harmonia#references) | Full citations for the shared BSDF closures (thin-film, sheen/LTC, MS-comp, conductor Fresnel) implemented in `bsdf_shared.slang` |
 
 ### Color Science
 | Resource | Relevance |
