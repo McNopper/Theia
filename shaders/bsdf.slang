@@ -214,6 +214,14 @@ BSDFSample sampleBSDF(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B, 
     sample.weight = 0.0.xxx;
     sample.pdf = 0.0;
     sample.isDelta = false;
+    // Step 3 (bulk subsurface random walk) is Hyperion-native for now (see
+    // theia-realtime-volumetric in the roadmap); Theia keeps the existing tinted-diffuse
+    // subsurface approximation and never enters the medium.
+    sample.entersMedium = false;
+    sample.mediumSigmaT = 0.0;
+    sample.mediumAlbedo = 0.0.xxx;
+    sample.mediumG = 0.0;
+    sample.mediumEta = 1.0;
 
     if (abs(woL.z) <= 1.0e-5) {
         return sample;
