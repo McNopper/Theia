@@ -53,6 +53,7 @@ cbuffer GiPC {
 [[vk::binding(11, 0)]] StructuredBuffer<float>               envMarginalCdf;
 [[vk::binding(12, 0)]] StructuredBuffer<float>               envConditionalCdf;
 [[vk::binding(13, 0)]] Sampler2D                             t_bindless[];
+[[vk::binding(14, 0)]] StructuredBuffer<float>              emissiveCdf;        // power-proportional NEE selection CDF
 
 // Per-sample firefly clamp on the indirect contribution (display-referred, post-exposure),
 // matching the forward pass kFireflyClampDisplay threshold.
@@ -499,7 +500,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
         }
         state.depth = bounce + 1u;
         integrateSurface(tracer, surf,
-            emissiveTriangleCount, emissiveTriangles,
+            emissiveTriangleCount, emissiveTriangles, emissiveCdf,
             envMarginalCdf, envConditionalCdf,
             envImportanceWidth, envImportanceHeight, envEnabled, envLuminanceScale,
             t_envMap, s_env, state);

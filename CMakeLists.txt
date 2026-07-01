@@ -23,7 +23,7 @@ add_compile_definitions(VK_NO_PROTOTYPES)
 # ── Shared libraries: Aether (file format) + Harmonia (common Vulkan) ─────────
 # Consumed via FetchContent, pinned to published release tags.  For local
 # development against working copies, override FETCHCONTENT_SOURCE_DIR_AETHER /
-# FETCHCONTENT_SOURCE_DIR_HARMONIA.  Aether is pinned v0.5.0; Harmonia is pinned v0.6.2.
+# FETCHCONTENT_SOURCE_DIR_HARMONIA.  Aether is pinned v0.5.0; Harmonia is pinned v0.6.3.
 FetchContent_Declare(
     aether
     GIT_REPOSITORY https://github.com/McNopper/Aether.git
@@ -32,7 +32,7 @@ FetchContent_Declare(
 FetchContent_Declare(
     harmonia
     GIT_REPOSITORY https://github.com/McNopper/Harmonia.git
-    GIT_TAG v0.6.2
+    GIT_TAG v0.6.3
 )
 FetchContent_MakeAvailable(aether harmonia)
 

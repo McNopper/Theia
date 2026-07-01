@@ -508,6 +508,7 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     // Emissive triangle buffer — collect one GpuEmissiveTriangle per emissive mesh triangle
     // for NEE direct area sampling.  Bounding spheres are not used.
     std::vector<GpuEmissiveTriangle> emissiveTriangles;
+    std::vector<float> emissivePower; // per-triangle power = area × luminance(Le), for the selection CDF
     for (size_t i = 0; i < m_geometries.size(); ++i) {
         const GpuInstance& inst = m_instances[i];
         if (inst.geometryKind != 0U) {
@@ -559,6 +560,9 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
                 .edge2_emitG = glm::vec4(edge2, emission.g),
                 .normal_emitB = glm::vec4(normal, emission.b),
             });
+            // Power for power-proportional NEE selection: area × luminance(Le) (Rec.2020).
+            const float lumLe = 0.2627F * emission.r + 0.6780F * emission.g + 0.0593F * emission.b;
+            emissivePower.push_back(area * std::max(lumLe, 0.0F));
         }
     }
     m_emissiveTriangleCount = static_cast<uint32_t>(emissiveTriangles.size());
@@ -575,6 +579,43 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
         return emissiveBuf.error();
     }
     m_emissiveTriangleBuffer = std::move(*emissiveBuf);
+
+    // Power-proportional selection CDF: cdf[i] = (Σ_{j≤i} power_j) / totalPower, so cdf[N-1] == 1.
+    // Falls back to a uniform CDF when all emitters have zero power (degenerate/black emitters).
+    std::vector<float> emissiveCdf;
+    emissiveCdf.reserve(emissivePower.size());
+    double totalPower = 0.0;
+    for (const float p : emissivePower) {
+        totalPower += static_cast<double>(p);
+    }
+    if (totalPower > 0.0) {
+        double running = 0.0;
+        for (const float p : emissivePower) {
+            running += static_cast<double>(p);
+            emissiveCdf.push_back(static_cast<float>(running / totalPower));
+        }
+        if (!emissiveCdf.empty()) {
+            emissiveCdf.back() = 1.0F; // guard against rounding leaving cdf[N-1] < 1
+        }
+    } else {
+        const auto count = static_cast<uint32_t>(emissivePower.size());
+        for (uint32_t i = 0; i < count; ++i) {
+            emissiveCdf.push_back(static_cast<float>(i + 1) / static_cast<float>(count));
+        }
+    }
+    if (emissiveCdf.empty()) {
+        emissiveCdf.push_back(1.0F); // sentinel — keeps the binding valid when no emitters
+    }
+    auto emissiveCdfBuf = Buffer::upload(
+        ctx,
+        pool,
+        std::as_bytes(std::span<const float>(emissiveCdf.data(), emissiveCdf.size())),
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        "scene.emissiveCdf");
+    if (!emissiveCdfBuf) {
+        return emissiveCdfBuf.error();
+    }
+    m_emissiveCdfBuffer = std::move(*emissiveCdfBuf);
 
     return VK_SUCCESS;
 }

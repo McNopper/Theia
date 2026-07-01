@@ -88,6 +88,7 @@ class Scene : public ISceneBuilder {
     [[nodiscard]] const Buffer& meshletTriangleBuffer() const noexcept { return m_meshletTriangleBuffer; }
     [[nodiscard]] const Buffer& lightBuffer() const noexcept { return m_lightBuffer; }
     [[nodiscard]] const Buffer& emissiveTriangleBuffer() const noexcept { return m_emissiveTriangleBuffer; }
+    [[nodiscard]] const Buffer& emissiveCdfBuffer() const noexcept { return m_emissiveCdfBuffer; }
     [[nodiscard]] const std::vector<Texture>& textures() const noexcept { return m_textures; }
     [[nodiscard]] uint32_t instanceCount() const noexcept { return static_cast<uint32_t>(m_geometries.size()); }
     [[nodiscard]] uint32_t lightCount() const noexcept { return m_lightCount; }
@@ -111,6 +112,7 @@ class Scene : public ISceneBuilder {
     Buffer m_meshletTriangleBuffer{};
     Buffer m_lightBuffer{};
     Buffer m_emissiveTriangleBuffer{};
+    Buffer m_emissiveCdfBuffer{};
     uint32_t m_emissiveTriangleCount = 0;
     uint32_t m_lightCount = 0;
     AccelerationStructure m_tlas{};
