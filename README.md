@@ -5,7 +5,7 @@ GPU-driven real-time renderer for OpenPBR materials.
 > *[Theia](https://en.wikipedia.org/wiki/Theia_(mythology)) — Titaness of heavenly light, mother of Helios, Selene and Eos.*
 
 Theia is a modern Vulkan 1.4 renderer built on GPU-driven forward rendering techniques.  
-It implements the [OpenPBR Surface v1.1.1](https://academysoftwarefoundation.github.io/OpenPBR/) material model in real-time and targets visual parity with [Hyperion](https://github.com/McNopper/Hyperion)'s path-traced output on identical test scenes. A **unified HW ray-traced GI pass** (sharing Hyperion's `path_integrator`) provides multi-bounce indirect light *and* transmission/refraction, and is the single indirect/reflection/occlusion path. See *RT-GI* in the roadmap below.
+It implements the [OpenPBR Surface v1.1.1](https://academysoftwarefoundation.github.io/OpenPBR/) material model in real-time and targets visual parity with [Hyperion](https://github.com/McNopper/Hyperion)'s path-traced output on identical test scenes. A **unified HW ray-traced GI pass** (sharing Hyperion's `path_integrator`) provides multi-bounce indirect light *and* transmission/refraction, and is the single indirect/reflection/occlusion path. See *Indirect lighting and GI architecture* below.
 
 **Interactive real-time rendering** — explore complex materials, dynamic lighting, and HDR output in real-time.  
 **Architecture driven by [GPU-Driven Rendering](https://vkguide.dev/docs/gpudriven)** — compute-based culling, indirect dispatch, and clustered lighting.
@@ -229,8 +229,8 @@ RT-GI is the single unified indirect + transmission provider and drives both the
 >
 > **Transparency parity note:** Transparent surfaces route through the **shared Harmonia
 > `path_integrator`** (smooth-dielectric delta refraction lobe + Beer-Lambert + env-NEE) — the same
-> estimator Hyperion uses. Remaining residuals are localized high-energy-IBL-through-glass variance
-> and a minor TIR notch, tracked as ongoing parity work.
+> estimator Hyperion uses. Residuals are localized high-energy-IBL-through-glass variance and a
+> minor TIR notch.
 >
 > **Gate policy:** keep the strict absolute gate (`mean_diff <= 4.0`) for opaque/direct/SDR fixtures.
 > For HDR transmissive fixtures, use `compare_renders.py --gate scale-aware` (absolute OR relative+PSNR),
@@ -270,8 +270,6 @@ Where a technique is shared with [Hyperion](https://github.com/McNopper/Hyperion
 | [Khronos — Mesh Shading for Vulkan](https://www.khronos.org/blog/mesh-shading-for-vulkan) | `VK_EXT_mesh_shader` task/mesh pipeline, `EmitMeshTasksEXT` |
 | [Meshoptimizer — Arseny Kapoulkine](https://github.com/zeux/meshoptimizer) | `meshopt_buildMeshlets`, `meshopt_computeMeshletBounds`, cone culling |
 | [Heitz, Dupuy, Hill & Neubelt — "Real-Time Polygonal-Light Shading with Linearly Transformed Cosines" (SIGGRAPH 2016)](https://eheitzresearch.wordpress.com/415-2/) | Analytic area-light evaluation reference |
-| [McGuire & Mara — "Efficient GPU Screen-Space Ray Tracing" (JCGT 2014)](https://jcgt.org/published/0003/04/04/) | Screen-space reflection depth intersection / ray march |
-| [AMD FidelityFX SSSR](https://github.com/GPUOpen-Effects/FidelityFX-SSSR) | SSR reference implementation (MIT) — GGX jitter, denoising, confidence fade |
 | [Walter, Marschner, Li & Torrance — "Microfacet Models for Refraction through Rough Surfaces" (EGSR 2007)](https://www.cs.cornell.edu/~srm/publications/EGSR07-btdf.pdf) | GGX (Trowbridge-Reitz) NDF and Smith G2 — foundation of specular evaluation |
 | [Heitz — "Sampling the GGX Distribution of Visible Normals" (JCGT 2018)](https://jcgt.org/published/0007/04/01/) | VNDF importance sampling in the IBL pre-filter compute shader |
 | [Ray Tracing Gems I & II](https://www.realtimerendering.com/raytracinggems/) (Haines et al., Marrs et al.) | Hybrid rendering, ray query patterns, shadow ray precision |
