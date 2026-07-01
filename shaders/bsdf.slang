@@ -56,9 +56,11 @@ float3 evalBSDF(GpuMaterial mat, float3 wo, float3 wi, float3 N, float3 T, float
     float3 Emetal = baseColor * saturate(mat.specularColorWeight.w);
     float3 Edielectric = lerp(baseColor, subsurfaceColor, saturate(mat.subsurfaceColorWeight.w));
     float3 Ebase = lerp(Edielectric, Emetal, saturate(mat.baseMetalnessDiffRough.x));
+    // G8: fuzz (topmost) attenuates both the base and the coat lobe below it.
+    float fuzzAtten = 1.0 - mx_zeltner_sheen_dir_albedo(woL.z, saturate(mat.fuzzRoughPad.x)) * fuzzWeight;
     float3 baseLayerScale = openpbrCoatDarkening(Ebase, coatEta, coatWeight, coatDark)
-                          * openpbrCoatColorAttenuation(coatColor, coatWeight);
-    baseLayerScale *= 1.0 - mx_zeltner_sheen_dir_albedo(woL.z, saturate(mat.fuzzRoughPad.x)) * fuzzWeight;
+                          * openpbrCoatColorAttenuation(coatColor, coatWeight)
+                          * fuzzAtten;
 
     float3 result = 0.0.xxx;
     if (wiL.z > 0.0 && woL.z > 0.0) {
@@ -102,7 +104,7 @@ float3 evalBSDF(GpuMaterial mat, float3 wo, float3 wi, float3 N, float3 T, float
         float3 wiC = toLocal(wi, cTs, cBs, cNs);
         if (woC.z > 0.0 && wiC.z > 0.0) {
             float3 coatF0 = iorToF0(coatEta) * max(coatColor, 0.04.xxx);
-            result += coatWeight * evalReflectionMicrofacetThinFilm(coatF0, coatF0, coatColor, 0.0, woC, wiC, coatAlphaX, coatAlphaY, mat.thinFilmParams.x, max(mat.thinFilmParams.y, 1.0), mat.thinFilmParams.z);
+            result += fuzzAtten * coatWeight * evalReflectionMicrofacetThinFilm(coatF0, coatF0, coatColor, 0.0, woC, wiC, coatAlphaX, coatAlphaY, mat.thinFilmParams.x, max(mat.thinFilmParams.y, 1.0), mat.thinFilmParams.z);
         }
     }
 
