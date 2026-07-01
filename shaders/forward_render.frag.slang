@@ -90,7 +90,7 @@ struct FS_OUT {
 // Keep in sync with Hyperion firefly suppression threshold (display-referred units after exposure).
 static const float kFireflyClampDisplay = 100.0;
 
-uint composePixelSeed(float4 pixelPos, uint bounceIndex) {
+RngState composePixelSeed(float4 pixelPos, uint bounceIndex) {
     const uint2 pixel = uint2(uint(pixelPos.x), uint(pixelPos.y));
     return composeRngSeed(pixel, frameSampleIndex, bounceIndex, rngBaseSeed);
 }

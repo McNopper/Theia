@@ -387,7 +387,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
         return;
     }
 
-    uint seed = composeRngSeed(px, frameSampleIndex, 0u, rngBaseSeed);
+    RngState seed = composeRngSeed(px, frameSampleIndex, 0u, rngBaseSeed);
 
     PathState state;
     state.radiance = 0.0.xxx;

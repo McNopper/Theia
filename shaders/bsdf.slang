@@ -204,7 +204,7 @@ float pdfBSDF(GpuMaterial mat, float3 wo, float3 wi, float3 N, float3 T, float3 
     return pdf / sum;
 }
 
-BSDFSample sampleBSDF(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B, float3 cN, float3 cT, float3 cB, inout uint seed)
+BSDFSample sampleBSDF(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B, float3 cN, float3 cT, float3 cB, inout RngState seed)
 {
     float3 Ns;
     float3 Ts;
