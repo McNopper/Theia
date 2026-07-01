@@ -217,11 +217,10 @@ BSDFSample sampleBSDF(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B, 
     sample.weight = 0.0.xxx;
     sample.pdf = 0.0;
     sample.isDelta = false;
-    // Step 3 (bulk subsurface random walk) is Hyperion-native for now (see
-    // theia-realtime-volumetric in the roadmap); Theia keeps the existing tinted-diffuse
-    // subsurface approximation and never enters the medium.
+    // G9/G10: Theia routes bulk subsurface + transmission_scatter through the SAME shared
+    // volumetric random walk as Hyperion (executed in gi.comp.slang's compute loop).
     sample.entersMedium = false;
-    sample.mediumSigmaT = 0.0;
+    sample.mediumSigmaT = 0.0.xxx;
     sample.mediumAlbedo = 0.0.xxx;
     sample.mediumG = 0.0;
     sample.mediumEta = 1.0;
@@ -285,8 +284,47 @@ BSDFSample sampleBSDF(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B, 
 
     float3 wiLocal = 0.0.xxx;
     bool haveCoatDir = false;
-    if (lobe == 0u || lobe == 1u || lobe == 5u) {
+    if (lobe == 0u || lobe == 5u) {
         wiLocal = sampleCosineHemisphere(randFloat2(seed));
+    } else if (lobe == 1u) {
+        bool thinWalledSSS = mat.opacityFlagsPad.w > 0.5;
+        if (thinWalledSSS) {
+            wiLocal = sampleCosineHemisphere(randFloat2(seed));
+        } else {
+            // G9: bulk subsurface enters the shared volumetric medium (walked in gi.comp).
+            float invPLobeSS = total / max(subsurfaceWeight, 1.0e-6);
+            float Fss = fresnelDielectric(abs(woL.z), eta);
+            if (randFloat(seed) < Fss) {
+                float3 wiReflectSS = reflect(-woL, float3(0.0, 0.0, 1.0));
+                sample.direction = toWorld(wiReflectSS, Ts, Bs, Ns);
+                sample.weight = invPLobeSS.xxx;
+                sample.pdf = 1.0;
+                sample.isDelta = true;
+                return sample;
+            }
+            float etaRatioSS = woL.z > 0.0 ? (1.0 / eta) : eta;
+            float3 mSS = float3(0.0, 0.0, woL.z > 0.0 ? 1.0 : -1.0);
+            float3 wiEnter = refract(-woL, mSS, etaRatioSS);
+            if (all(abs(wiEnter) < 1.0e-6.xxx)) {
+                wiEnter = reflect(-woL, mSS);
+                sample.direction = normalize(toWorld(wiEnter, Ts, Bs, Ns));
+                sample.weight = invPLobeSS.xxx;
+                sample.pdf = 1.0;
+                sample.isDelta = true;
+                return sample;
+            }
+            sample.direction = normalize(toWorld(wiEnter, Ts, Bs, Ns));
+            sample.weight = invPLobeSS.xxx;
+            sample.pdf = 1.0;
+            sample.isDelta = true;
+            sample.entersMedium = true;
+            float radius = max(mat.subsurfaceRadiusScale.w, 1.0e-4);
+            sample.mediumSigmaT = sssExtinction(radius, saturate3(mat.subsurfaceRadiusScale.xyz));
+            sample.mediumAlbedo = saturate3(mat.subsurfaceColorWeight.xyz);
+            sample.mediumG = clamp(mat.opacityFlagsPad.z, -0.95, 0.95);
+            sample.mediumEta = eta;
+            return sample;
+        }
     } else if (lobe == 6u) {
         // Thin-walled diffuse transmission into the back hemisphere.
         float3 wh = sampleCosineHemisphere(randFloat2(seed));
@@ -380,15 +418,36 @@ BSDFSample sampleBSDF(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B, 
             float etaRatioD = woL.z > 0.0 ? (1.0 / eta) : eta;
             float3 mD = float3(0.0, 0.0, woL.z > 0.0 ? 1.0 : -1.0);
             float3 wiRefract = refract(-woL, mD, etaRatioD);
-            if (all(abs(wiRefract) < 1.0e-6.xxx)) {
-                // Total internal reflection -> specular reflect (still a delta event).
+            bool tirD = all(abs(wiRefract) < 1.0e-6.xxx);
+            if (tirD) {
                 wiRefract = reflect(-woL, mD);
+                sample.direction = normalize(toWorld(wiRefract, Ts, Bs, Ns));
+                float3 absorptionR = exp(-max(mat.transmissionParams.x, 0.001) * (1.0.xxx - effectiveTransColor(mat)));
+                sample.weight = effectiveTransColor(mat) * absorptionR * invPLobe;
+                sample.pdf = 1.0;
+                sample.isDelta = true;
+                return sample;
             }
             sample.direction = normalize(toWorld(wiRefract, Ts, Bs, Ns));
-            float3 absorptionD = exp(-max(mat.transmissionParams.x, 0.001) * (1.0.xxx - effectiveTransColor(mat)));
-            sample.weight = effectiveTransColor(mat) * absorptionD * invPLobe;
             sample.pdf = 1.0;
             sample.isDelta = true;
+            // G10: chromatic transmission volume — enter the shared medium (walked in gi.comp).
+            float scatterLum = luminance(saturate3(mat.transmissionScatter.xyz));
+            if (scatterLum > 1.0e-3 && mat.transmissionParams.x > 1.0e-4) {
+                float3 volSigmaT;
+                float3 volAlbedo;
+                transmissionVolumeCoeffs(mat.transmissionColorWeight.xyz, mat.transmissionScatter.xyz,
+                                         mat.transmissionParams.x, volSigmaT, volAlbedo);
+                sample.weight = invPLobe.xxx;
+                sample.entersMedium = true;
+                sample.mediumSigmaT = volSigmaT;
+                sample.mediumAlbedo = volAlbedo;
+                sample.mediumG = clamp(mat.transmissionScatter.w, -0.95, 0.95);
+                sample.mediumEta = eta;
+                return sample;
+            }
+            float3 absorptionD = exp(-max(mat.transmissionParams.x, 0.001) * (1.0.xxx - effectiveTransColor(mat)));
+            sample.weight = effectiveTransColor(mat) * absorptionD * invPLobe;
             return sample;
         }
 

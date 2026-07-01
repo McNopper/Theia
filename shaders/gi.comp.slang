@@ -82,12 +82,15 @@ struct GiHit {
     float3 geoNormal; // geometric normal, oriented to face the incoming ray's origin
     float2 uv;
     float3 tangent;
+    float  dist;      // committed ray T (used for volumetric medium boundary transmittance)
 };
 
 float maxComp(float3 v) { return max(v.x, max(v.y, v.z)); }
 
 /// Closest-hit query against the scene TLAS, reconstructing position/material/normal.
-GiHit traceClosestHit(float3 origin, float3 dir) {
+/// `maxDist` bounds the ray (kInf for ordinary bounces; a sampled free-flight distance for
+/// volumetric medium segments — a miss within maxDist is an in-medium scattering event).
+GiHit traceClosestHit(float3 origin, float3 dir, float maxDist) {
     GiHit hit;
     hit.hit = false;
     hit.materialIdx = 0u;
@@ -100,7 +103,7 @@ GiHit traceClosestHit(float3 origin, float3 dir) {
     ray.Origin = origin;
     ray.Direction = rayDir;
     ray.TMin = kRayEpsilon;
-    ray.TMax = kInf;
+    ray.TMax = maxDist;
 
     RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
     q.TraceRayInline(t_tlas, RAY_FLAG_NONE, kInstanceMaskAll, ray);
@@ -156,8 +159,62 @@ GiHit traceClosestHit(float3 origin, float3 dir) {
     hit.shadingNormal = Ns;
     hit.geoNormal = Ng;
     hit.materialIdx = inst.materialIndex;
+    hit.dist = q.CommittedRayT();
     hit.hit = true;
     return hit;
+}
+
+/// G9/G10: run the shared volumetric random walk (chromatic hero-wavelength estimator) inside
+/// the compute GI loop, mirroring Hyperion's raygen/miss/closesthit. Consumes its own bounded
+/// budget (does NOT count against the surface bounce budget). On exit, updates origin/dir to the
+/// refracted ray leaving the medium and clears insideMedium; on absorption terminates the path.
+void runMediumWalk(inout PathState state, inout float3 origin, inout float3 dir) {
+    const uint kMaxMediumWalk = 256u;
+    for (uint i = 0u; i < kMaxMediumWalk && state.insideMedium && !state.terminated; ++i) {
+        float3 st = max(state.mediumSigmaT, 1.0e-6.xxx);
+        float chSel = randFloat(state.seed);
+        float sigmaHero = chSel < (1.0 / 3.0) ? st.x : (chSel < (2.0 / 3.0) ? st.y : st.z);
+        float u = randFloat(state.seed);
+        float freeDist = -log(max(1.0 - u, 1.0e-6)) / max(sigmaHero, 1.0e-6);
+
+        GiHit h = traceClosestHit(origin, dir, freeDist);
+        if (!h.hit) {
+            // Scatter event at freeDist — spectral factor sigma_s*T/pdf_coll.
+            float3 T = exp(-st * freeDist);
+            float3 sigmaS = state.mediumAlbedo * st;
+            float pdfColl = (st.x * T.x + st.y * T.y + st.z * T.z) * (1.0 / 3.0);
+            state.throughput *= (sigmaS * T) / max(pdfColl, 1.0e-8);
+            float q = saturate(maxComp(state.throughput));
+            if (randFloat(state.seed) > q) { state.terminated = true; return; }
+            state.throughput /= max(q, 1.0e-3);
+            float3 scatterPos = origin + dir * freeDist;
+            float3 newDir = sampleHenyeyGreenstein(dir, state.mediumG, randFloat2(state.seed));
+            origin = scatterPos + newDir * kRayEpsilon;
+            dir = newDir;
+            continue;
+        }
+
+        // Boundary crossing at h.dist — spectral transmittance factor, then Fresnel exit/TIR.
+        float3 Tb = exp(-st * h.dist);
+        float pdfSurf = (Tb.x + Tb.y + Tb.z) * (1.0 / 3.0);
+        state.throughput *= Tb / max(pdfSurf, 1.0e-8);
+
+        float3 outwardN = h.geoNormal;
+        float cosI = abs(dot(normalize(dir), outwardN));
+        float F = fresnelDielectric(-cosI, state.mediumEta);
+        float3 refracted = refract(normalize(dir), -outwardN, state.mediumEta);
+        bool tir = dot(refracted, refracted) < 1.0e-9;
+        if (tir || randFloat(state.seed) < F) {
+            dir = reflect(normalize(dir), outwardN);
+            origin = h.worldPos - outwardN * kRayEpsilon;
+            continue;
+        }
+        dir = normalize(refracted);
+        origin = h.worldPos + outwardN * kRayEpsilon;
+        state.insideMedium = false;
+        return;
+    }
+    if (state.insideMedium) { state.terminated = true; }
 }
 
 float4 sampleBindless(uint idx, float2 uv) {
@@ -265,7 +322,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // position; this works for opaque AND transparent (glass) pixels alike. The view-space
     // G-buffer normal is only needed as a fallback when the re-trace misses (e.g. the
     // transparent pass does not write the normal G-buffer), so it is computed lazily below.
-    GiHit primaryHit = traceClosestHit(cameraPos.xyz, worldPos - cameraPos.xyz);
+    GiHit primaryHit = traceClosestHit(cameraPos.xyz, worldPos - cameraPos.xyz, kInf);
     // Trust the re-traced closest hit as the authoritative nearest surface. The rasterized
     // G-buffer materialIdx is draw-order dependent for transparent geometry (depth-write
     // disabled), so overlapping transparent surfaces can record the farther one; the inline
@@ -340,6 +397,11 @@ void main(uint3 tid : SV_DispatchThreadID) {
     state.terminated = false;
     state.specularBounce = false;
     state.lastBsdfPdf = 0.0;
+    state.insideMedium = false;
+    state.mediumSigmaT = 0.0.xxx;
+    state.mediumAlbedo = 0.0.xxx;
+    state.mediumG = 0.0;
+    state.mediumEta = 1.0;
 
     const bool envEnabled = (hasEnvMap != 0u);
     const bool envImportance = envEnabled && envImportanceWidth > 0u && envImportanceHeight > 0u;
@@ -382,6 +444,13 @@ void main(uint3 tid : SV_DispatchThreadID) {
         state.throughput = bs.weight;
         state.specularBounce = bs.isDelta;
         state.lastBsdfPdf = bs.isDelta ? 1.0e30 : bs.pdf;
+        // G9/G10: capture a primary-vertex medium entry (bulk SSS / transmission scatter) so the
+        // shared walk runs on the first segment too, matching Hyperion's primary SSS handling.
+        state.insideMedium = bs.entersMedium;
+        state.mediumSigmaT = bs.mediumSigmaT;
+        state.mediumAlbedo = bs.mediumAlbedo;
+        state.mediumG      = bs.mediumG;
+        state.mediumEta    = bs.mediumEta;
         origin = primary.position + primary.geoNormal * (dot(bs.direction, primary.geoNormal) >= 0.0 ? kRayEpsilon : -kRayEpsilon);
         dir = normalize(bs.direction);
     } else {
@@ -392,9 +461,14 @@ void main(uint3 tid : SV_DispatchThreadID) {
         dir = normalize(fwd);
     }
 
+    // G9/G10: if the primary continuation entered a medium, walk it before the surface loop.
+    if (state.insideMedium) {
+        runMediumWalk(state, origin, dir);
+    }
+
     const uint bounces = max(maxDepth, 1u);
-    for (uint bounce = 0u; bounce < bounces; ++bounce) {
-        GiHit h = traceClosestHit(origin, dir);
+    for (uint bounce = 0u; bounce < bounces && !state.terminated; ++bounce) {
+        GiHit h = traceClosestHit(origin, dir, kInf);
         if (!h.hit) {
             if (envEnabled) {
                 const float3 Le = sampleEnvMapLatLong(t_envMap, s_env, dir) * envLuminanceScale;
@@ -435,6 +509,16 @@ void main(uint3 tid : SV_DispatchThreadID) {
         }
         origin = state.nextOrigin;
         dir = state.nextDirection;
+
+        // G9/G10: if the BSDF sample entered a bulk subsurface / transmission-scatter medium,
+        // run the shared volumetric random walk here (its own bounded budget) before resuming
+        // the surface bounce loop from the refracted exit ray.
+        if (state.insideMedium) {
+            runMediumWalk(state, origin, dir);
+            if (state.terminated) {
+                break;
+            }
+        }
     }
 
     float3 indirectPrimaryEnvNee = primaryEnvNee * exposure;
