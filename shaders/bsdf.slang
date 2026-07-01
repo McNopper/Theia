@@ -30,14 +30,13 @@ float3 evalBSDF(GpuMaterial mat, float3 wo, float3 wi, float3 N, float3 T, float
     float diffuseRough = saturate(mat.baseMetalnessDiffRough.y);
     float coatDark = saturate(mat.coatRoughAnisoIorDark.w);
 
+    float effSpecRough = openpbrEffectiveSpecularRoughness(baseRough, coatRough, saturate(mat.coatColorWeight.w));
     float alphaX;
     float alphaY;
-    computeAlpha(baseRough, baseAniso, alphaX, alphaY);
+    computeAlpha(effSpecRough, baseAniso, alphaX, alphaY);
     float coatAlphaX;
     float coatAlphaY;
     computeAlpha(coatRough, coatAniso, coatAlphaX, coatAlphaY);
-    alphaX = safeSqrt(alphaX * alphaX + coatAlphaX * coatAlphaX * saturate(mat.coatColorWeight.w));
-    alphaY = safeSqrt(alphaY * alphaY + coatAlphaY * coatAlphaY * saturate(mat.coatColorWeight.w));
 
     float diffuseWeight;
     float subsurfaceWeight;
@@ -155,9 +154,10 @@ float pdfBSDF(GpuMaterial mat, float3 wo, float3 wi, float3 N, float3 T, float3 
     float baseAniso = mat.specularRoughAnisoIor.y;
     float coatRough = mat.coatRoughAnisoIorDark.x;
     float coatAniso = mat.coatRoughAnisoIorDark.y;
+    float effSpecRough = openpbrEffectiveSpecularRoughness(baseRough, coatRough, saturate(mat.coatColorWeight.w));
     float alphaX;
     float alphaY;
-    computeAlpha(baseRough, baseAniso, alphaX, alphaY);
+    computeAlpha(effSpecRough, baseAniso, alphaX, alphaY);
     float coatAlphaX;
     float coatAlphaY;
     computeAlpha(coatRough, coatAniso, coatAlphaX, coatAlphaY);
@@ -244,9 +244,10 @@ BSDFSample sampleBSDF(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B, 
     float baseAniso = mat.specularRoughAnisoIor.y;
     float coatRough = mat.coatRoughAnisoIorDark.x;
     float coatAniso = mat.coatRoughAnisoIorDark.y;
+    float effSpecRough = openpbrEffectiveSpecularRoughness(baseRough, coatRough, saturate(mat.coatColorWeight.w));
     float alphaX;
     float alphaY;
-    computeAlpha(baseRough, baseAniso, alphaX, alphaY);
+    computeAlpha(effSpecRough, baseAniso, alphaX, alphaY);
     float coatAlphaX;
     float coatAlphaY;
     computeAlpha(coatRough, coatAniso, coatAlphaX, coatAlphaY);
