@@ -28,12 +28,16 @@ class MotionVectorPass {
         VkImageView giBufferView = VK_NULL_HANDLE;
     };
 
-    /// Per-frame matrices passed as push constants.
+    /// Per-frame matrices and buffer handles passed each frame.
     struct FrameParams {
         /// glm::transpose(proj * view) for the current frame — Slang mul(M,v) convention.
         glm::mat4 curViewProj{1.0f};
         /// glm::transpose(proj * view) for the previous frame.
         glm::mat4 prevViewProj{1.0f};
+        /// Per-instance previous-frame world transforms (one glm::mat4 per instance).
+        /// Must remain valid until record() returns.  May be VK_NULL_HANDLE on the first
+        /// frame before the scene is loaded (record() is a no-op in that case).
+        VkBuffer prevInstanceTransformBuffer = VK_NULL_HANDLE;
     };
 
     MotionVectorPass() = default;

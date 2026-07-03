@@ -229,6 +229,10 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     if (indices.empty()) {
         indices.push_back(0);
     }
+    // Record the true meshlet count before any sentinel padding below. The visibility
+    // buffer is sized from this; the padding meshlet (index gpuMeshlets.size()) is never
+    // referenced by any instance's [meshletOffset, meshletOffset+meshletCount) range.
+    m_meshletCount = static_cast<uint32_t>(gpuMeshlets.size());
     if (gpuMeshlets.empty()) {
         gpuMeshlets.push_back(GpuMeshlet{});
     }
@@ -314,6 +318,59 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     m_meshletVertexBuffer = std::move(*meshletVertexBuf);
     m_meshletTriangleBuffer = std::move(*meshletTriangleBuf);
     Logger::info("Scene built: {} meshlets", gpuMeshlets.size());
+
+    // Per-instance world transforms.  In the current static-scene model, vertex
+    // positions are baked into world space at load time (ObjImporter::flushMesh
+    // applies the scene-file TRS to every vertex), so all geometry xforms are
+    // identity.  These buffers are the A1b infrastructure for future dynamic
+    // objects: when an instance's transform changes, callers update
+    // m_instanceTransformBuffer and shift the old value into
+    // m_prevInstanceTransformBuffer before each frame.
+    const size_t instCount = std::max<size_t>(m_geometries.size(), 1);
+    std::vector<glm::mat4> instanceTransforms(instCount, glm::mat4(1.0f));
+    for (size_t i = 0; i < m_geometries.size(); ++i) {
+        instanceTransforms[i] = m_geometries[i]->xform.matrix();
+    }
+
+    auto transformBuf =
+        Buffer::upload(ctx,
+                       pool,
+                       std::as_bytes(std::span<const glm::mat4>(instanceTransforms.data(), instanceTransforms.size())),
+                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                       "scene.instanceTransforms");
+    if (!transformBuf) {
+        return transformBuf.error();
+    }
+    // Previous-frame transforms start equal to current (first-frame / static default).
+    auto prevTransformBuf =
+        Buffer::upload(ctx,
+                       pool,
+                       std::as_bytes(std::span<const glm::mat4>(instanceTransforms.data(), instanceTransforms.size())),
+                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                       "scene.prevInstanceTransforms");
+    if (!prevTransformBuf) {
+        return prevTransformBuf.error();
+    }
+
+    // Stable per-object IDs: objectId[i] == i.  Persistent across frames as long as
+    // the scene is not rebuilt.  Suitable for temporal reservoir keys (ReSTIR DI, A-SVGF).
+    std::vector<uint32_t> objectIds(instCount, 0u);
+    for (uint32_t i = 0; i < static_cast<uint32_t>(m_geometries.size()); ++i) {
+        objectIds[i] = i;
+    }
+    auto objectIdBuf =
+        Buffer::upload(ctx,
+                       pool,
+                       std::as_bytes(std::span<const uint32_t>(objectIds.data(), objectIds.size())),
+                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                       "scene.objectIds");
+    if (!objectIdBuf) {
+        return objectIdBuf.error();
+    }
+
+    m_instanceTransformBuffer = std::move(*transformBuf);
+    m_prevInstanceTransformBuffer = std::move(*prevTransformBuf);
+    m_objectIdBuffer = std::move(*objectIdBuf);
 
     // Light buffer — always upload at least one sentinel entry so the binding is valid.
     std::vector<GpuLight> gpuLights;

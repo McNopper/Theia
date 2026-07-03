@@ -80,6 +80,7 @@ bool MotionVectorPass::createImage() noexcept {
 bool MotionVectorPass::createPipeline(const char* spvName) noexcept {
     // Binding 0: GI G-buffer (sampled image — integer Load, no sampler needed)
     // Binding 1: motion vector output (storage image, R32G32F)
+    // Binding 2: prevInstanceTransforms (storage buffer, one float4x4 per instance)
     const std::array bindings{
         VkDescriptorSetLayoutBinding{
             .binding = 0,
@@ -91,6 +92,13 @@ bool MotionVectorPass::createPipeline(const char* spvName) noexcept {
         VkDescriptorSetLayoutBinding{
             .binding = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+            .pImmutableSamplers = nullptr,
+        },
+        VkDescriptorSetLayoutBinding{
+            .binding = 2,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             .descriptorCount = 1,
             .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
             .pImmutableSamplers = nullptr,
@@ -162,6 +170,10 @@ void MotionVectorPass::record(VkCommandBuffer cmd, const FrameParams& params) no
     if (m_pipeline == VK_NULL_HANDLE || !m_motionVectorImage.isValid()) {
         return;
     }
+    // Guard: prev-instance-transform buffer must be valid before we can push the descriptor.
+    if (params.prevInstanceTransformBuffer == VK_NULL_HANDLE) {
+        return;
+    }
 
     // Transition the output image: UNDEFINED → GENERAL on first use.
     const VkImageMemoryBarrier2 preMvBarrier{
@@ -187,7 +199,8 @@ void MotionVectorPass::record(VkCommandBuffer cmd, const FrameParams& params) no
     m_firstUse = false;
 
     // Push descriptors: binding 0 = giBuffer (sampled, SHADER_READ_ONLY_OPTIMAL after GiPass),
-    //                   binding 1 = motion vector output (storage, GENERAL).
+    //                   binding 1 = motion vector output (storage, GENERAL),
+    //                   binding 2 = prevInstanceTransforms (storage buffer).
     const VkDescriptorImageInfo giInfo{
         .sampler     = VK_NULL_HANDLE,
         .imageView   = m_cfg.giBufferView,
@@ -197,6 +210,11 @@ void MotionVectorPass::record(VkCommandBuffer cmd, const FrameParams& params) no
         .sampler     = VK_NULL_HANDLE,
         .imageView   = m_motionVectorImage.view(),
         .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+    };
+    const VkDescriptorBufferInfo prevTransformInfo{
+        .buffer = params.prevInstanceTransformBuffer,
+        .offset = 0,
+        .range  = VK_WHOLE_SIZE,
     };
     const std::array writes{
         VkWriteDescriptorSet{
@@ -218,6 +236,16 @@ void MotionVectorPass::record(VkCommandBuffer cmd, const FrameParams& params) no
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
             .pImageInfo = &mvInfo,
+        },
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = nullptr,
+            .dstSet = VK_NULL_HANDLE,
+            .dstBinding = 2,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &prevTransformInfo,
         },
     };
 

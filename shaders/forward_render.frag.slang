@@ -76,6 +76,7 @@ struct FS_IN {
     float3 worldPos      : TEXCOORD0;
     float2 uv            : TEXCOORD1;
     nointerpolation uint materialIdx : TEXCOORD2;
+    nointerpolation uint instanceIdx : TEXCOORD4;
 };
 
 /// Output: HDR color (target 0) + thin GBuffer (target 1).
@@ -84,7 +85,7 @@ struct FS_IN {
 struct FS_OUT {
     float4 hdrColor : SV_Target0;
     float4 gbuffer  : SV_Target1; // xyz = viewN [0,1], w = roughness
-    float4 giBuffer : SV_Target2; // xyz = world-space primary hit position, w = asfloat(materialIdx + 1) (0 = background)
+    float4 giBuffer : SV_Target2; // xyz = world-space primary hit position, w = asfloat(instanceIdx + 1) (0 = background)
 };
 
 // Keep in sync with Hyperion firefly suppression threshold (display-referred units after exposure).
@@ -777,8 +778,10 @@ FS_OUT main(FS_IN input) {
     FS_OUT output;
     output.hdrColor = float4(Lo, indirectWeight);
     output.gbuffer  = float4(viewN * 0.5 + 0.5, roughness); // encode to [0,1]
-    // GI buffer (target 2): world-space primary hit position + material index (+1; 0 = background).
-    // Consumed by the ray-query GI compute stage to seed indirect path segments.
-    output.giBuffer = float4(input.worldPos, asfloat(input.materialIdx + 1u));
+    // GI buffer (target 2): world-space primary hit position + instance index (+1; 0 = background/sky).
+    // Consumed by the ray-query GI compute stage and the motion vector pass.
+    // instanceIdx+1 is bit-cast to float via asfloat so the w channel doubles
+    // as a hit sentinel (0 = no geometry).
+    output.giBuffer = float4(input.worldPos, asfloat(input.instanceIdx + 1u));
     return output;
 }

@@ -41,7 +41,7 @@ cbuffer GiPC {
 
 [[vk::binding(0, 0)]]  RaytracingAccelerationStructure       t_tlas;
 [[vk::binding(1, 0)]]  RWTexture2D<float4>                   hdrImage;
-[[vk::binding(2, 0)]]  Texture2D<float4>                     t_giBuffer;   // xyz = worldPos, w = asfloat(matIdx+1)
+[[vk::binding(2, 0)]]  Texture2D<float4>                     t_giBuffer;   // xyz = worldPos, w = asfloat(instanceIdx+1)
 [[vk::binding(3, 0)]]  Texture2D<float4>                     t_gbuffer;    // xyz = viewN*0.5+0.5, w = roughness
 [[vk::binding(4, 0)]]  Texture2D<float4>                     t_envMap;
 [[vk::binding(5, 0)]]  SamplerState                          s_env;
@@ -312,11 +312,15 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
     // --- Primary surface from the forward G-buffer ---
     const float4 giSample = t_giBuffer.Load(loadCoord);
-    const uint matIdxPlus1 = asuint(giSample.w);
-    if (matIdxPlus1 == 0u) {
+    // w = asfloat(instanceIdx+1): 0 means background / sky (A1b: changed from materialIdx+1).
+    const uint instIdxPlus1 = asuint(giSample.w);
+    if (instIdxPlus1 == 0u) {
         return; // background / non-geometry pixel (and transparent pixels keep the sentinel)
     }
-    const uint materialIdx = matIdxPlus1 - 1u;
+    const uint primaryInstIdx = instIdxPlus1 - 1u;
+    // Derive the material index from the instance table — the ray-query primary hit
+    // below will use its own instIdx, but the fallback path needs this as a best-guess.
+    const uint materialIdx = instances[primaryInstIdx].materialIndex;
     const float3 worldPos = giSample.xyz;
 
     // Reconstruct the primary surface by re-tracing the camera ray to the recorded world

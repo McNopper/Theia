@@ -89,8 +89,29 @@ class Scene : public ISceneBuilder {
     [[nodiscard]] const Buffer& lightBuffer() const noexcept { return m_lightBuffer; }
     [[nodiscard]] const Buffer& emissiveTriangleBuffer() const noexcept { return m_emissiveTriangleBuffer; }
     [[nodiscard]] const Buffer& emissiveCdfBuffer() const noexcept { return m_emissiveCdfBuffer; }
+
+    /// Per-instance world transforms (one glm::mat4 per instance, column-major).
+    /// For the current frame.  In the present static-scene model, transforms are
+    /// baked into vertex positions at load time so these matrices are always identity.
+    [[nodiscard]] const Buffer& instanceTransformBuffer() const noexcept { return m_instanceTransformBuffer; }
+    /// Per-instance world transforms from the previous frame.  Used by the motion
+    /// vector pass to correct per-object motion for dynamic objects.  Equal to
+    /// instanceTransformBuffer() for static scenes (all identity).
+    [[nodiscard]] const Buffer& prevInstanceTransformBuffer() const noexcept { return m_prevInstanceTransformBuffer; }
+
+    /// Stable per-object IDs: buffer of uint32_t, one per instance,
+    /// where objectId[i] == i (the instance's index in the scene array).
+    /// Persistent across frames as long as the scene is not rebuilt.
+    /// Suitable as a temporal reservoir key for ReSTIR DI / A-SVGF.
+    [[nodiscard]] const Buffer& objectIdBuffer() const noexcept { return m_objectIdBuffer; }
+
+    /// Light IDs are stable indices [0, lightCount()).
+    /// Safe for temporal reservoir indexing — the light array does not
+    /// change between frames within a loaded scene.
     [[nodiscard]] const std::vector<Texture>& textures() const noexcept { return m_textures; }
     [[nodiscard]] uint32_t instanceCount() const noexcept { return static_cast<uint32_t>(m_geometries.size()); }
+    /// Total number of meshlets across all instances (size of the per-meshlet visibility buffer).
+    [[nodiscard]] uint32_t meshletCount() const noexcept { return m_meshletCount; }
     [[nodiscard]] uint32_t lightCount() const noexcept { return m_lightCount; }
     [[nodiscard]] uint32_t emissiveTriangleCount() const noexcept { return m_emissiveTriangleCount; }
 
@@ -113,8 +134,12 @@ class Scene : public ISceneBuilder {
     Buffer m_lightBuffer{};
     Buffer m_emissiveTriangleBuffer{};
     Buffer m_emissiveCdfBuffer{};
+    Buffer m_instanceTransformBuffer{};
+    Buffer m_prevInstanceTransformBuffer{};
+    Buffer m_objectIdBuffer{};
     uint32_t m_emissiveTriangleCount = 0;
     uint32_t m_lightCount = 0;
+    uint32_t m_meshletCount = 0; ///< total meshlets across all instances (visibility buffer size)
     AccelerationStructure m_tlas{};
     VkDeviceAddress m_tlasAddress{};
 };

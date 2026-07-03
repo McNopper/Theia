@@ -249,6 +249,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
             MotionVectorPass::FrameParams mvp{};
             mvp.curViewProj  = curViewProjT;
             mvp.prevViewProj = m_prevViewProjValid ? m_prevViewProj : curViewProjT;
+            mvp.prevInstanceTransformBuffer = m_scene->prevInstanceTransformBuffer().handle();
             m_motionVectorPass.record(cmd, mvp);
         }
     }
