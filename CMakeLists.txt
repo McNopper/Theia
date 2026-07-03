@@ -23,7 +23,7 @@ add_compile_definitions(VK_NO_PROTOTYPES)
 # ── Shared libraries: Aether (file format) + Harmonia (common Vulkan) ─────────
 # Consumed via FetchContent, pinned to published release tags.  For local
 # development against working copies, override FETCHCONTENT_SOURCE_DIR_AETHER /
-# FETCHCONTENT_SOURCE_DIR_HARMONIA.  Aether is pinned v0.5.0; Harmonia is pinned v0.6.3.
+# FETCHCONTENT_SOURCE_DIR_HARMONIA.  Aether is pinned v0.5.0; Harmonia is pinned v0.6.4.
 FetchContent_Declare(
     aether
     GIT_REPOSITORY https://github.com/McNopper/Aether.git
@@ -32,7 +32,7 @@ FetchContent_Declare(
 FetchContent_Declare(
     harmonia
     GIT_REPOSITORY https://github.com/McNopper/Harmonia.git
-    GIT_TAG v0.6.3
+    GIT_TAG v0.6.4
 )
 FetchContent_MakeAvailable(aether harmonia)
 
@@ -52,6 +52,7 @@ set(THEIA_ENTRY_SHADERS
     light_cull.comp.slang
     gi.comp.slang
     motion_vector.comp.slang
+    hiz_build.comp.slang
 )
 
 # Theia-specific sources only. Common Vulkan code now lives in Harmonia and the
@@ -63,6 +64,7 @@ set(THEIA_LIBRARY_SOURCES
     src/theia/renderer/LightCuller.cpp
     src/theia/renderer/GiPass.cpp
     src/theia/renderer/MotionVectorPass.cpp
+    src/theia/renderer/HiZPass.cpp
     # Theia GPU scene (rasterizer/meshlet layout — renderer-specific)
     src/theia/scene/Scene.cpp
 )

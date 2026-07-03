@@ -207,6 +207,25 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
     // Transposed VP for Slang mul(M, v) convention (used by motion vector shader).
     const glm::mat4 curViewProjT = glm::transpose(proj * view);
 
+    // Camera-cut detection: disable the Hi-Z occlusion test for one frame after a large view
+    // change so newly disoccluded meshlets (whose stale visibility is 0) are drawn instead of
+    // wrongly culled. Uses view-direction angle + focus-relative translation (scale-independent).
+    {
+        const glm::vec3 curDir = glm::normalize(m_camera.target - m_camera.position);
+        const float focusDist = glm::length(m_camera.target - m_camera.position);
+        bool cut = !m_hiZPrevValid;
+        if (m_hiZPrevValid) {
+            const float posDelta = glm::length(m_camera.position - m_hiZPrevPos);
+            const float cosAng = glm::clamp(glm::dot(curDir, m_hiZPrevDir), -1.0f, 1.0f);
+            const float angle = std::acos(cosAng);
+            cut = (angle > 0.1745f /* ~10 deg */) || (posDelta > 0.5f * std::max(focusDist, 1e-3f));
+        }
+        m_renderer->setHiZTestEnabled(!cut);
+        m_hiZPrevPos = m_camera.position;
+        m_hiZPrevDir = curDir;
+        m_hiZPrevValid = true;
+    }
+
     // Forward+ light culling compute pass (runs before geometry rendering).
     if (m_scene && m_scene->lightCount() > 0 && m_lightCuller.tilesX() > 0) {
         m_lightCuller.dispatch(cmd,

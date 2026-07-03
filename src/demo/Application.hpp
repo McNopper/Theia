@@ -121,6 +121,13 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     glm::vec3 m_prevCamUp{0.0f};
     float m_prevEv100 = 0.0f;
     bool m_viewSigValid = false;
+
+    // Camera-cut detection for two-pass Hi-Z occlusion culling: on a large view change the
+    // previous-frame visibility set is stale, so the Hi-Z test is disabled for that frame and
+    // all remaining meshlets are drawn conservatively (prevents culling disoccluded geometry).
+    glm::vec3 m_hiZPrevPos{0.0f};
+    glm::vec3 m_hiZPrevDir{0.0f, 0.0f, -1.0f};
+    bool m_hiZPrevValid = false;
 };
 
 } // namespace theia

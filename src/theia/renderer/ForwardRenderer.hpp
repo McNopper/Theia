@@ -11,6 +11,7 @@
 #include "harmonia/core/CommandPool.hpp"
 #include "harmonia/core/Image.hpp"
 #include "harmonia/renderer/Camera.hpp"
+#include "theia/renderer/HiZPass.hpp"
 #include "theia/renderer/IblPrecompute.hpp"
 
 class Scene;
@@ -100,6 +101,10 @@ class ForwardRenderer {
     void setCameraJitterEnabled(bool enabled) noexcept { m_cameraJitterEnabled = enabled; }
     void setRngDebug(bool enabled) noexcept { m_rngDebug = enabled ? 1U : 0U; }
 
+    /// Enable/disable the Hi-Z occlusion test for the NEXT frame. Disabled on a camera cut
+    /// (large motion) so newly disoccluded geometry is drawn conservatively.
+    void setHiZTestEnabled(bool enabled) noexcept { m_hiZTestEnabled = enabled; }
+
     /// Update tile light list buffers (called by LightCuller each frame before recordFrame).
     void setTileBuffers(VkBuffer tileLightCounts, VkBuffer tileLightIndices, uint32_t tilesX, uint32_t tilesY);
 
@@ -133,18 +138,23 @@ class ForwardRenderer {
         uint32_t  frameSampleIndex     = 0; ///< per-frame sample counter for stochastic stages
         uint32_t  rngBaseSeed          = 0; ///< base seed for composeRngSeed(pixel, frame, bounce, seed)
         uint32_t  rngFlags             = 0; ///< bit0 = deterministic replay, bit1 = RNG debug view
-        uint32_t  _padRng              = 0;
+        uint32_t  cullPhase            = 0; ///< Hi-Z pass: 0 = draw all, 1 = prev-visible, 2 = remaining + Hi-Z
         uint32_t  envImportanceWidth   = 0; ///< CDF width; 0 disables env importance sampling
         uint32_t  envImportanceHeight  = 0; ///< CDF height
-        uint32_t  _padEnv              = 0;
+        uint32_t  hiZMipCount          = 0; ///< Hi-Z mip levels; 0 disables the occlusion test
         uint32_t  giEnabled            = 0; ///< 1 when GiPass supplies indirect; disables forward IBL/ambient
         glm::vec4 sunDirection; ///< xyz = world dir toward sun, w = shadow strength (0 disables)
-        glm::vec4 shadowParams; ///< x = ray tMin, y = sky ambient floor, z = env_unit_nits
-        glm::vec4 presentationParams; ///< x = indirect ambient strength (scene-linear), yzw reserved
+        glm::vec4 shadowParams; ///< x = ray tMin, y = sky ambient floor, z = env_unit_nits, w = |proj[0][0]|
+        glm::vec4 presentationParams; ///< x = indirect ambient, y = pass flag, z = debug ray-hit, w = |proj[1][1]|
     };
     static_assert(sizeof(MeshPushConstants) == 256);
     bool createDepthTarget();
     bool createPipeline();
+    /// (Re)create the ping-pong per-meshlet visibility buffers for the current scene and
+    /// clear both to 0 on the first frame. Called when the bound scene changes.
+    bool ensureVisibilityBuffers();
+    /// Record one opaque meshlet draw for the given cull phase / Hi-Z mip count.
+    void drawOpaque(VkCommandBuffer cmd, const MeshPushConstants& pcBase, uint32_t cullPhase, uint32_t hiZMipCount);
 
     Config m_config{};
     CameraParams m_camera{};
@@ -231,6 +241,16 @@ class ForwardRenderer {
 
     bool m_initialized = false;
     bool m_hdrFirstUse = true; ///< tracks whether HDR image is still in UNDEFINED layout
+
+    // Two-pass Hi-Z occlusion culling (B4).
+    HiZPass m_hiZPass;                    ///< current-frame depth pyramid builder
+    Buffer m_meshletVisibility[2];        ///< ping-pong per-meshlet visibility (uint per meshlet)
+    uint32_t m_visFrame = 0;              ///< index of the buffer holding PREVIOUS-frame visibility
+    uint32_t m_visMeshletCount = 0;       ///< meshlet count the visibility buffers were sized for
+    const Scene* m_visBuiltFor = nullptr; ///< scene the visibility buffers were built for
+    bool m_hiZTestEnabled = true;         ///< set false for one frame on a camera cut
+    bool m_visClearPrev = false;          ///< clear PREV visibility next frame (freshly (re)built)
+    bool m_hiZDebugDisabled = false;      ///< THEIA_DISABLE_HIZ: draw all meshlets (A-B debug)
 };
 
 } // namespace theia

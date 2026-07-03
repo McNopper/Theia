@@ -34,6 +34,16 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
         return false;
     }
 
+    // Hi-Z depth pyramid for two-pass occlusion culling. A pipeline failure (e.g. missing
+    // shader) is non-fatal: the image is still created, the occlusion test disabled, and the
+    // renderer falls back to drawing all meshlets. Only a failure to create the image itself
+    // (catastrophic / OOM) is fatal.
+    (void)m_hiZPass.initialize(ctx, config.width, config.height);
+    if (m_hiZPass.sampledView() == VK_NULL_HANDLE) {
+        Logger::error("Failed to create Hi-Z image");
+        return false;
+    }
+
     if (!createPipeline()) {
         Logger::error("Failed to create pipeline");
         return false;
@@ -46,6 +56,18 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
         std::free(debugModeRaw);
         if (m_debugRayHitMode > 0.0f) {
             Logger::info("THEIA_DEBUG_RAY_HIT_MODE = {:.1f}", m_debugRayHitMode);
+        }
+    }
+
+    // Debug/A-B toggle: set THEIA_DISABLE_HIZ to draw all meshlets (two passes, no occlusion
+    // test). Used to verify the Hi-Z culling introduces no visual regression.
+    char* hiZDisableRaw = nullptr;
+    size_t hiZDisableLen = 0;
+    if (_dupenv_s(&hiZDisableRaw, &hiZDisableLen, "THEIA_DISABLE_HIZ") == 0 && hiZDisableRaw != nullptr) {
+        m_hiZDebugDisabled = (hiZDisableRaw[0] != '\0' && hiZDisableRaw[0] != '0');
+        std::free(hiZDisableRaw);
+        if (m_hiZDebugDisabled) {
+            Logger::info("THEIA_DISABLE_HIZ set — Hi-Z occlusion test disabled");
         }
     }
 
@@ -139,6 +161,12 @@ void ForwardRenderer::shutdown() {
     m_iblSet = VK_NULL_HANDLE;
     m_textureSet = VK_NULL_HANDLE;
     m_texturesBoundFor = nullptr;
+    m_hiZPass.shutdown();
+    m_meshletVisibility[0] = {};
+    m_meshletVisibility[1] = {};
+    m_visBuiltFor = nullptr;
+    m_visMeshletCount = 0;
+    m_visFrame = 0;
     m_depthTarget = {};
     m_gbufferTarget = {};
     m_giBufferTarget = {};
@@ -159,6 +187,9 @@ bool ForwardRenderer::resize(uint32_t width, uint32_t height, VkImage hdrImage, 
     m_gbufferTarget = {};
     m_giBufferTarget = {};
     m_hdrFirstUse = true;
+    // Recreate the Hi-Z pyramid at the new resolution. Visibility buffers are
+    // resolution-independent (one entry per meshlet) and are kept across resize.
+    (void)m_hiZPass.initialize(*m_ctx, width, height);
     return createDepthTarget();
 }
 
@@ -304,6 +335,59 @@ bool ForwardRenderer::createDepthTarget() {
     return true;
 }
 
+bool ForwardRenderer::ensureVisibilityBuffers() {
+    if (m_scene == nullptr) {
+        return false;
+    }
+    if (m_visBuiltFor == m_scene && m_meshletVisibility[0].handle() != VK_NULL_HANDLE) {
+        return true;
+    }
+    const uint32_t meshletCount = std::max(1u, m_scene->meshletCount());
+    const VkDeviceSize size = static_cast<VkDeviceSize>(meshletCount) * sizeof(uint32_t);
+    for (auto& buf : m_meshletVisibility) {
+        auto created = Buffer::create(*m_ctx,
+                                      size,
+                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                      VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                      "theia.meshletVisibility");
+        if (!created) {
+            Logger::error("Failed to create meshlet visibility buffer");
+            return false;
+        }
+        buf = std::move(*created);
+    }
+    m_visMeshletCount = meshletCount;
+    m_visBuiltFor = m_scene;
+    m_visFrame = 0;
+    // Both buffers hold undefined VMA memory; the first frame clears both (see recordFrame).
+    m_visClearPrev = true;
+    return true;
+}
+
+void ForwardRenderer::drawOpaque(VkCommandBuffer cmd,
+                                 const MeshPushConstants& pcBase,
+                                 uint32_t cullPhase,
+                                 uint32_t hiZMipCount) {
+    const uint32_t instanceCount = m_scene->instanceCount();
+    if (instanceCount == 0 || vkCmdDrawMeshTasksEXT == nullptr) {
+        return;
+    }
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_graphicsPipeline);
+    const std::array<VkDescriptorSet, 4> descSets{m_meshSet, m_matSet, m_iblSet, m_textureSet};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 4, descSets.data(), 0, nullptr);
+    auto pc = pcBase;
+    pc.presentationParams.y = 0.0f; // opaque routing in the task shader
+    pc.cullPhase = cullPhase;
+    pc.hiZMipCount = hiZMipCount;
+    vkCmdPushConstants(cmd,
+                       m_pipelineLayout,
+                       VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0,
+                       sizeof(MeshPushConstants),
+                       &pc);
+    vkCmdDrawMeshTasksEXT(cmd, instanceCount, 1, 1);
+}
+
 bool ForwardRenderer::createPipeline() {
     auto loadShaderModule = [this](const char* filename) -> VkShaderModule {
         auto module = harmonia::createShaderModule(m_ctx->device, shaderPath(filename));
@@ -340,7 +424,10 @@ bool ForwardRenderer::createPipeline() {
     };
 
     // Set 0: geometry buffers + material table for task-shader bucketing.
-    const std::array<VkDescriptorSetLayoutBinding, 7> meshBindings{
+    // Bindings 7-9 drive two-pass Hi-Z occlusion culling in the mesh shader:
+    //   7 = previous-frame per-meshlet visibility (read), 8 = current-frame visibility
+    //   (written), 9 = current-frame Hi-Z max-depth pyramid (sampled).
+    const std::array<VkDescriptorSetLayoutBinding, 10> meshBindings{
         VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTaskMeshFragStages, nullptr},
         VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTaskMeshFragStages, nullptr},
         VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
@@ -348,9 +435,13 @@ bool ForwardRenderer::createPipeline() {
         VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
         VkDescriptorSetLayoutBinding{5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
         VkDescriptorSetLayoutBinding{6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_TASK_BIT_EXT, nullptr},
+        VkDescriptorSetLayoutBinding{7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
+        VkDescriptorSetLayoutBinding{8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
+        VkDescriptorSetLayoutBinding{9, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
     };
     constexpr VkDescriptorBindingFlags kUAB = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
-    const std::array<VkDescriptorBindingFlags, 7> meshBindingFlags{kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB};
+    const std::array<VkDescriptorBindingFlags, 10> meshBindingFlags{
+        kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo meshBindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = static_cast<uint32_t>(meshBindingFlags.size()),
@@ -479,8 +570,8 @@ bool ForwardRenderer::createPipeline() {
 
     // Single pool for all four sets.
     const std::array<VkDescriptorPoolSize, 5> poolSizes{
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 14},
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 5},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 16},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 6},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLER, 1},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
@@ -856,6 +947,9 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         return;
     }
 
+    // Ensure the two-pass Hi-Z visibility buffers exist for the current scene.
+    const bool visReady = ensureVisibilityBuffers();
+
     const std::array imageBarriers{
         VkImageMemoryBarrier2{
             .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
@@ -1009,7 +1103,31 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         .pAccelerationStructures = &sceneTlas,
     };
 
-    std::array<VkWriteDescriptorSet, 15> writes{
+    // Two-pass Hi-Z bindings (set 0, bindings 7-9). prev = last frame's visibility,
+    // curr = this frame's (written by the mesh shader). Buffers ping-pong per frame. If the
+    // visibility buffers are unavailable (allocation failed), fall back to a valid scene
+    // buffer so descriptors stay valid; the mesh shader runs cullPhase 0 (draw-all) and never
+    // reads/writes them in that path.
+    const VkBuffer visFallbackBuf = m_scene->meshletBuffer().handle();
+    const VkBuffer prevVisBuf = m_meshletVisibility[m_visFrame].handle();
+    const VkBuffer currVisBuf = m_meshletVisibility[m_visFrame ^ 1u].handle();
+    VkDescriptorBufferInfo prevVisInfo{
+        .buffer = (prevVisBuf != VK_NULL_HANDLE) ? prevVisBuf : visFallbackBuf,
+        .offset = 0,
+        .range = VK_WHOLE_SIZE,
+    };
+    VkDescriptorBufferInfo currVisInfo{
+        .buffer = (currVisBuf != VK_NULL_HANDLE) ? currVisBuf : visFallbackBuf,
+        .offset = 0,
+        .range = VK_WHOLE_SIZE,
+    };
+    VkDescriptorImageInfo hiZInfo{
+        .sampler = VK_NULL_HANDLE,
+        .imageView = m_hiZPass.sampledView(),
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    };
+
+    std::array<VkWriteDescriptorSet, 18> writes{
         VkWriteDescriptorSet{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .dstSet = m_meshSet,
@@ -1133,6 +1251,31 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             .pBufferInfo = &envConditionalCdfInfo,
         },
+        // Set 0, bindings 7-9: two-pass Hi-Z occlusion culling resources.
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_meshSet,
+            .dstBinding = 7,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &prevVisInfo,
+        },
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_meshSet,
+            .dstBinding = 8,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &currVisInfo,
+        },
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_meshSet,
+            .dstBinding = 9,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+            .pImageInfo = &hiZInfo,
+        },
     };
     vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 
@@ -1164,20 +1307,6 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         m_texturesBoundFor = m_scene;
     }
 
-    // Set dynamic state
-    VkViewport vp{
-        .x = 0.0f,
-        .y = 0.0f,
-        .width = static_cast<float>(m_config.width),
-        .height = static_cast<float>(m_config.height),
-        .minDepth = 0.0f,
-        .maxDepth = 1.0f,
-    };
-    vkCmdSetViewport(cmd, 0, 1, &vp);
-
-    VkRect2D scissor{{0, 0}, {m_config.width, m_config.height}};
-    vkCmdSetScissor(cmd, 0, 1, &scissor);
-
     // Begin dynamic rendering (Vulkan 1.4 - no render pass!)
     VkClearColorValue clearCol{{0.0f, 0.0f, 0.0f, 1.0f}};
     // GBuffer clear: encoded normal (0.5,0.5,0.5) = view-space (0,0,0), roughness=1 → background
@@ -1187,59 +1316,99 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
     VkClearColorValue clearGi{{0.0f, 0.0f, 0.0f, 0.0f}};
     VkClearDepthStencilValue clearDepth{1.0f, 0};
 
-    VkRenderingAttachmentInfo colorAttachment{
-        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-        .imageView = m_config.hdrImageView, // externally owned HDR image
-        .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-        .clearValue{.color = clearCol},
+    // Camera matrices + push constants (needed before rendering so the two Hi-Z passes and
+    // the Hi-Z occlusion test share the same projection).
+    glm::mat4 proj = glm::perspective(glm::radians(m_camera.vfovDeg),
+                                      static_cast<float>(m_config.width) / static_cast<float>(m_config.height),
+                                      m_camera.nearPlane,
+                                      m_camera.farPlane);
+    proj[1][1] *= -1.0f;
+    if (m_cameraJitterEnabled) {
+        proj = applyProjectionJitter(proj, cameraJitterNdc(m_frameSampleIndex, m_config.width, m_config.height));
+    }
+    const glm::mat4 view = glm::lookAt(m_camera.position, m_camera.target, m_camera.up);
+    const glm::mat4 viewProj = proj * view;
+    // exposure = 1 / (1.2 * 2^EV100) — matches Hyperion's PhysicalCamera calc
+    const float exposure = m_camera.physical.exposure();
+    // NDC projection scales for the mesh-shader Hi-Z bounding-sphere footprint estimate.
+    const float projScaleX = std::abs(proj[0][0]);
+    const float projScaleY = std::abs(proj[1][1]);
+
+    const ForwardRenderer::MeshPushConstants pcBase{
+        .viewProj = glm::transpose(viewProj), // transposed for Slang mul(pos, mat)
+        .view = glm::transpose(view),
+        .cameraPos = glm::vec4(m_camera.position, 1.0f),
+        .exposure = exposure,
+        .lightCount = m_scene ? m_scene->lightCount() : 0u,
+        .emissiveTriangleCount = m_scene ? m_scene->emissiveTriangleCount() : 0u,
+        .tilesX = m_tilesX,
+        .tilesY = m_tilesY,
+        .screenWidth = m_config.width,
+        .screenHeight = m_config.height,
+        .transparentMaxDepth = m_transparentMaxDepth,
+        .frameSampleIndex = m_frameSampleIndex,
+        .rngBaseSeed = m_rngBaseSeed,
+        .rngFlags = (m_deterministicReplay ? 0x1u : 0u) | (m_rngDebug != 0u ? 0x2u : 0u),
+        .cullPhase = 0u,
+        .envImportanceWidth = m_envImportanceWidth,
+        .envImportanceHeight = m_envImportanceHeight,
+        .hiZMipCount = 0u,
+        .giEnabled = m_giEnabled,
+        // Ray-traced sun shadow: direction toward the dominant IBL light + strength.
+        // shadowParams: x = ray tMin (scene-scale bias from camera near plane), y = sky ambient
+        // floor, z = env_unit_nits, w = |proj[0][0]| (Hi-Z footprint x scale).
+        .sunDirection = glm::vec4(m_sunDir, m_hasEnv ? m_sunStrength : 0.0f),
+        .shadowParams = glm::vec4(std::max(m_camera.nearPlane, 1e-4f), 0.35f, m_envUnitNits, projScaleX),
+        // presentationParams.w = |proj[1][1]| (Hi-Z footprint y scale).
+        .presentationParams = glm::vec4(m_indirectAmbientStrength, 0.0f, m_debugRayHitMode, projScaleY),
     };
 
-    VkRenderingAttachmentInfo gbufferAttachment{
-        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-        .imageView = m_gbufferTarget.view(),
-        .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .storeOp = VK_ATTACHMENT_STORE_OP_STORE, // must store for SSR to read
-        .clearValue{.color = clearGbuf},
+    // Attachment builders — CLEAR for the first pass, LOAD for the second (preserving pass-1
+    // color/depth/GBuffer so the two Hi-Z passes composite into the same targets).
+    auto colorAtt = [&](VkImageView v, VkAttachmentLoadOp op, VkClearColorValue c) {
+        return VkRenderingAttachmentInfo{
+            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+            .imageView = v,
+            .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+            .loadOp = op,
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+            .clearValue{.color = c},
+        };
+    };
+    auto depthAtt = [&](VkAttachmentLoadOp op) {
+        return VkRenderingAttachmentInfo{
+            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+            .imageView = m_depthTarget.view(),
+            .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+            .loadOp = op,
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+            .clearValue{.depthStencil = clearDepth},
+        };
+    };
+    auto beginRendering = [&](VkCommandBuffer c, VkAttachmentLoadOp op) {
+        const std::array<VkRenderingAttachmentInfo, 3> atts{
+            colorAtt(m_config.hdrImageView, op, clearCol),
+            colorAtt(m_gbufferTarget.view(), op, clearGbuf),
+            colorAtt(m_giBufferTarget.view(), op, clearGi),
+        };
+        const VkRenderingAttachmentInfo depth = depthAtt(op);
+        const VkRenderingInfo info{
+            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+            .renderArea{{0, 0}, {m_config.width, m_config.height}},
+            .layerCount = 1,
+            .colorAttachmentCount = static_cast<uint32_t>(atts.size()),
+            .pColorAttachments = atts.data(),
+            .pDepthAttachment = &depth,
+        };
+        vkCmdBeginRendering(c, &info);
     };
 
-    VkRenderingAttachmentInfo depthAttachment{
-        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-        .imageView = m_depthTarget.view(),
-        .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .storeOp = VK_ATTACHMENT_STORE_OP_STORE, // must store for SSR depth ray march
-        .clearValue{.depthStencil = clearDepth},
-    };
-
-    VkRenderingAttachmentInfo giBufferAttachment{
-        .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-        .imageView = m_giBufferTarget.view(),
-        .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .storeOp = VK_ATTACHMENT_STORE_OP_STORE, // must store for GiPass to read
-        .clearValue{.color = clearGi},
-    };
-
-    const std::array<VkRenderingAttachmentInfo, 3> colorAttachments{
-        colorAttachment, gbufferAttachment, giBufferAttachment};
-    VkRenderingInfo rendering{
-        .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-        .renderArea{{0, 0}, {m_config.width, m_config.height}},
-        .layerCount = 1,
-        .colorAttachmentCount = static_cast<uint32_t>(colorAttachments.size()),
-        .pColorAttachments = colorAttachments.data(),
-        .pDepthAttachment = &depthAttachment,
-    };
-
-    vkCmdBeginRendering(cmd, &rendering);
-
-    // Draw the environment sky background first (only when the scene has an env map).
-    // It fills every pixel at the far plane with no depth write; opaque geometry then
-    // overwrites it. Scenes without an env keep the black color clear.
-    if (m_hasEnv && m_skyPipeline != VK_NULL_HANDLE) {
+    // Draw the environment sky background (only when the scene has an env map). Fills every
+    // pixel at the far plane with no depth write; opaque geometry then overwrites it.
+    auto drawSky = [&](VkCommandBuffer c) {
+        if (!m_hasEnv || m_skyPipeline == VK_NULL_HANDLE) {
+            return;
+        }
         glm::mat4 skyProj = glm::perspective(glm::radians(m_camera.vfovDeg),
                                              static_cast<float>(m_config.width) / static_cast<float>(m_config.height),
                                              m_camera.nearPlane,
@@ -1258,98 +1427,192 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
             .envScale = m_envUnitNits,
             ._pad1 = 0u,
         };
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skyPipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skyPipelineLayout, 0, 1, &m_iblSet, 0, nullptr);
-        vkCmdPushConstants(cmd,
-                           m_skyPipelineLayout,
-                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0,
-                           sizeof(skyPc),
-                           &skyPc);
-        vkCmdDraw(cmd, 3, 1, 0, 0);
-    }
-
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_graphicsPipeline);
-
-    // Bind descriptor sets: set 0 = geometry, set 1 = materials/lights, set 2 = IBL, set 3 = bindless textures.
-    const std::array<VkDescriptorSet, 4> descSets{m_meshSet, m_matSet, m_iblSet, m_textureSet};
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 4, descSets.data(), 0, nullptr);
-
-    // Push constants: camera matrices + OpenPBR lighting params
-    glm::mat4 proj = glm::perspective(glm::radians(m_camera.vfovDeg),
-                                      static_cast<float>(m_config.width) / static_cast<float>(m_config.height),
-                                      m_camera.nearPlane,
-                                      m_camera.farPlane);
-    proj[1][1] *= -1.0f;
-    if (m_cameraJitterEnabled) {
-        proj = applyProjectionJitter(proj, cameraJitterNdc(m_frameSampleIndex, m_config.width, m_config.height));
-    }
-    const glm::mat4 view = glm::lookAt(m_camera.position, m_camera.target, m_camera.up);
-    const glm::mat4 viewProj = proj * view;
-    // exposure = 1 / (1.2 * 2^EV100) — matches Hyperion's PhysicalCamera calc
-    const float exposure = m_camera.physical.exposure();
-
-    const ForwardRenderer::MeshPushConstants pcBase{
-        .viewProj = glm::transpose(viewProj), // transposed for Slang mul(pos, mat)
-        .view = glm::transpose(view),
-        .cameraPos = glm::vec4(m_camera.position, 1.0f),
-        .exposure = exposure,
-        .lightCount = m_scene ? m_scene->lightCount() : 0u,
-        .emissiveTriangleCount = m_scene ? m_scene->emissiveTriangleCount() : 0u,
-        .tilesX = m_tilesX,
-        .tilesY = m_tilesY,
-        .screenWidth = m_config.width,
-        .screenHeight = m_config.height,
-        .transparentMaxDepth = m_transparentMaxDepth,
-        .frameSampleIndex = m_frameSampleIndex,
-        .rngBaseSeed = m_rngBaseSeed,
-        .rngFlags = (m_deterministicReplay ? 0x1u : 0u) | (m_rngDebug != 0u ? 0x2u : 0u),
-        ._padRng = 0u,
-        .envImportanceWidth = m_envImportanceWidth,
-        .envImportanceHeight = m_envImportanceHeight,
-        ._padEnv = 0u,
-        .giEnabled = m_giEnabled,
-        // Ray-traced sun shadow: direction toward the dominant IBL light + strength.
-        // shadowParams: x = ray tMin (scene-scale bias from camera near plane), y = sky ambient floor,
-        // z = env_unit_nits for raw-env transparent rays.
-        .sunDirection = glm::vec4(m_sunDir, m_hasEnv ? m_sunStrength : 0.0f),
-        .shadowParams = glm::vec4(std::max(m_camera.nearPlane, 1e-4f), 0.35f, m_envUnitNits, 0.0f),
-        .presentationParams = glm::vec4(m_indirectAmbientStrength, 0.0f, m_debugRayHitMode, 0.0f),
+        vkCmdBindPipeline(c, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skyPipeline);
+        vkCmdBindDescriptorSets(c, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skyPipelineLayout, 0, 1, &m_iblSet, 0, nullptr);
+        vkCmdPushConstants(
+            c, m_skyPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(skyPc), &skyPc);
+        vkCmdDraw(c, 3, 1, 0, 0);
     };
 
-    const uint32_t instanceCount = m_scene->instanceCount();
-    if (instanceCount > 0) {
-        if (vkCmdDrawMeshTasksEXT == nullptr) {
-            Logger::error("vkCmdDrawMeshTasksEXT is NULL - mesh shader extension not loaded!");
-        } else {
-            // Opaque pass: depth-test + depth-write.
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_graphicsPipeline);
-            auto opaquePc = pcBase;
-            opaquePc.presentationParams.y = 0.0f;
-            vkCmdPushConstants(cmd,
-                               m_pipelineLayout,
-                               VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0,
-                               sizeof(ForwardRenderer::MeshPushConstants),
-                               &opaquePc);
-            vkCmdDrawMeshTasksEXT(cmd, instanceCount, 1, 1);
+    const std::array<VkDescriptorSet, 4> descSets{m_meshSet, m_matSet, m_iblSet, m_textureSet};
+    auto bindMeshSets = [&](VkCommandBuffer c) {
+        vkCmdBindDescriptorSets(c, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 4, descSets.data(), 0, nullptr);
+    };
+    auto drawTransparent = [&](VkCommandBuffer c) {
+        vkCmdBindPipeline(c, VK_PIPELINE_BIND_POINT_GRAPHICS, m_graphicsPipelineTransparent);
+        bindMeshSets(c);
+        auto pc = pcBase;
+        pc.presentationParams.y = 1.0f; // transparent routing in the task shader
+        pc.cullPhase = 0u;              // transparent geometry is not occlusion-culled
+        pc.hiZMipCount = 0u;
+        vkCmdPushConstants(c,
+                           m_pipelineLayout,
+                           VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0,
+                           sizeof(MeshPushConstants),
+                           &pc);
+        vkCmdDrawMeshTasksEXT(c, m_scene->instanceCount(), 1, 1);
+    };
 
-            // Transparent pass: depth-test against opaque depth, no depth writes.
-            // Shader routes only non-opaque instances and outputs a debug flat color for 26a.
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_graphicsPipelineTransparent);
-            auto transparentPc = pcBase;
-            transparentPc.presentationParams.y = 1.0f;
-            vkCmdPushConstants(cmd,
-                               m_pipelineLayout,
-                               VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0,
-                               sizeof(ForwardRenderer::MeshPushConstants),
-                               &transparentPc);
-            vkCmdDrawMeshTasksEXT(cmd, instanceCount, 1, 1);
+    // Set dynamic state (shared by both passes).
+    VkViewport vp{
+        .x = 0.0f,
+        .y = 0.0f,
+        .width = static_cast<float>(m_config.width),
+        .height = static_cast<float>(m_config.height),
+        .minDepth = 0.0f,
+        .maxDepth = 1.0f,
+    };
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    VkRect2D scissor{{0, 0}, {m_config.width, m_config.height}};
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    const uint32_t instanceCount = m_scene->instanceCount();
+    const bool canDraw = (instanceCount > 0) && (vkCmdDrawMeshTasksEXT != nullptr);
+    const bool twoPass = canDraw && visReady;
+    const uint32_t hiZMip =
+        (twoPass && m_hiZPass.isInitialized() && m_hiZTestEnabled && !m_hiZDebugDisabled)
+            ? m_hiZPass.mipLevels()
+            : 0u;
+
+    if (!twoPass) {
+        // Fallback: single pass drawing all meshlets (original behavior). Also covers the
+        // vkCmdDrawMeshTasksEXT-missing case (draws nothing but keeps attachments cleared).
+        if (instanceCount > 0 && vkCmdDrawMeshTasksEXT == nullptr) {
+            Logger::error("vkCmdDrawMeshTasksEXT is NULL - mesh shader extension not loaded!");
         }
+        m_hiZPass.prepareForSampling(cmd);
+        beginRendering(cmd, VK_ATTACHMENT_LOAD_OP_CLEAR);
+        drawSky(cmd);
+        if (canDraw) {
+            drawOpaque(cmd, pcBase, /*cullPhase*/ 0u, /*hiZMipCount*/ 0u);
+            drawTransparent(cmd);
+        }
+        vkCmdEndRendering(cmd);
+        m_hdrFirstUse = false;
+        return;
     }
 
+    // ---- Two-pass Hi-Z occlusion culling ----
+    // Ensure the Hi-Z image is sampleable in both passes (first-use layout transition).
+    m_hiZPass.prepareForSampling(cmd);
+
+    // Reset the current-frame visibility (and previous on the first frame for a scene).
+    vkCmdFillBuffer(cmd, currVisBuf, 0, VK_WHOLE_SIZE, 0u);
+    if (m_visClearPrev) {
+        vkCmdFillBuffer(cmd, prevVisBuf, 0, VK_WHOLE_SIZE, 0u);
+        m_visClearPrev = false;
+    }
+    const std::array visFillBarriers{
+        VkBufferMemoryBarrier2{
+            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT,
+            .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+            .buffer = currVisBuf,
+            .offset = 0,
+            .size = VK_WHOLE_SIZE,
+        },
+        VkBufferMemoryBarrier2{
+            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT,
+            .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+            .buffer = prevVisBuf,
+            .offset = 0,
+            .size = VK_WHOLE_SIZE,
+        },
+    };
+    const VkDependencyInfo visFillDep{
+        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+        .bufferMemoryBarrierCount = static_cast<uint32_t>(visFillBarriers.size()),
+        .pBufferMemoryBarriers = visFillBarriers.data(),
+    };
+    vkCmdPipelineBarrier2(cmd, &visFillDep);
+
+    // Pass 1: redraw only meshlets visible last frame → current-frame initial depth.
+    beginRendering(cmd, VK_ATTACHMENT_LOAD_OP_CLEAR);
+    drawSky(cmd);
+    drawOpaque(cmd, pcBase, /*cullPhase*/ 1u, /*hiZMipCount*/ 0u);
     vkCmdEndRendering(cmd);
+
+    // Build the current-frame Hi-Z pyramid from pass-1 depth (skipped when the test is off).
+    if (hiZMip > 0u) {
+        const VkImageMemoryBarrier2 depthToRead{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+            .srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            .dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+            .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = m_depthTarget.handle(),
+            .subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1},
+        };
+        const VkDependencyInfo depthReadDep{
+            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &depthToRead,
+        };
+        vkCmdPipelineBarrier2(cmd, &depthReadDep);
+
+        m_hiZPass.build(cmd, m_depthTarget.view());
+
+        // Restore depth to a write attachment for pass 2 (contents preserved for LOAD).
+        const VkImageMemoryBarrier2 depthToAttach{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            .srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+            .dstAccessMask =
+                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .newLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = m_depthTarget.handle(),
+            .subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1},
+        };
+        const VkDependencyInfo depthAttachDep{
+            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &depthToAttach,
+        };
+        vkCmdPipelineBarrier2(cmd, &depthAttachDep);
+    }
+
+    // Make pass-1 visibility writes available to pass-2 visibility writes (WAW safety).
+    const VkBufferMemoryBarrier2 visRWBarrier{
+        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+        .srcStageMask = VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT,
+        .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+        .dstStageMask = VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT,
+        .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+        .buffer = currVisBuf,
+        .offset = 0,
+        .size = VK_WHOLE_SIZE,
+    };
+    const VkDependencyInfo visRWDep{
+        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+        .bufferMemoryBarrierCount = 1,
+        .pBufferMemoryBarriers = &visRWBarrier,
+    };
+    vkCmdPipelineBarrier2(cmd, &visRWDep);
+
+    // Pass 2: remaining meshlets, occlusion-tested against the current-frame Hi-Z, then the
+    // transparent pass — composited over pass-1 targets (LOAD, no clear).
+    beginRendering(cmd, VK_ATTACHMENT_LOAD_OP_LOAD);
+    drawOpaque(cmd, pcBase, /*cullPhase*/ 2u, hiZMip);
+    drawTransparent(cmd);
+    vkCmdEndRendering(cmd);
+
+    // Swap ping-pong: this frame's visibility becomes next frame's "previous".
+    m_visFrame ^= 1u;
+    m_hdrFirstUse = false;
 }
 
 } // namespace theia
