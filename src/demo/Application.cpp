@@ -260,6 +260,14 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         gp.frameSampleIndex = frameIndex();
         gp.rngBaseSeed = config().rngSeed;
         gp.maxDepth = m_sceneMaxDepth;
+        // A3: firefly / chromatic-SSS noise reduction (Theia-only, flag-gated;
+        // Hyperion stays the unbiased ground truth). Defaults ON.
+        gp.useA3Regularization = true;      // A3(a): secondary-bounce roughness regularization
+        gp.useA3ChromaticImportance = true; // A3(c): σ_t-weighted hero channel selection (unbiased)
+        // A3(b): the A-SVGF gradient/variance guide lives inside Harmonia's
+        // SceneOutputCopyPass and is not exported yet — leave null so GiPass binds
+        // its 1×1 dummy and the shader keeps the legacy fixed firefly clamp.
+        gp.gradientVarianceView = VK_NULL_HANDLE;
         m_giPass.record(cmd, gp);
 
         // After GiPass, the GI G-buffer is in SHADER_READ_ONLY_OPTIMAL.

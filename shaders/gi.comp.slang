@@ -37,6 +37,10 @@ cbuffer GiPC {
     uint     screenWidth;
     uint     screenHeight;
     uint     _pad0;
+    uint     a3RegularizationEnabled;      // A3(a): secondary-bounce roughness regularization (Theia-only bias)
+    uint     a3ChromaticImportanceEnabled; // A3(c): σ_t-importance-weighted hero channel selection
+    uint     hasGradientVariance;          // A3(b): 1 when t_gradientVariance holds a real A-SVGF guide
+    uint     _pad1;
 };
 
 [[vk::binding(0, 0)]]  RaytracingAccelerationStructure       t_tlas;
@@ -54,6 +58,7 @@ cbuffer GiPC {
 [[vk::binding(12, 0)]] StructuredBuffer<float>               envConditionalCdf;
 [[vk::binding(13, 0)]] Sampler2D                             t_bindless[];
 [[vk::binding(14, 0)]] StructuredBuffer<float>              emissiveCdf;        // power-proportional NEE selection CDF
+[[vk::binding(15, 0)]] Texture2D<float2>                    t_gradientVariance; // R=gradient, G=variance (from A-SVGF); 1×1 dummy when unavailable
 
 // Per-sample firefly clamp on the indirect contribution (display-referred, post-exposure),
 // matching the forward pass kFireflyClampDisplay threshold.
@@ -173,8 +178,26 @@ void runMediumWalk(inout PathState state, inout float3 origin, inout float3 dir)
     const uint kMaxMediumWalk = 256u;
     for (uint i = 0u; i < kMaxMediumWalk && state.insideMedium && !state.terminated; ++i) {
         float3 st = max(state.mediumSigmaT, 1.0e-6.xxx);
+        // A3(c): σ_t-importance-weighted hero channel selection (flag-gated, Theia-only knob).
+        // Legacy estimator picks each channel uniformly (1/3); with the flag on, each channel
+        // is selected proportionally to its extinction so samples are not wasted on
+        // near-transparent (σ_t ≈ 0) channels — Kutz et al. 2017 (spectral tracking),
+        // adapted from spectral to RGB channels.
+        //
+        // Unbiasedness: the free-flight distance is drawn from the hero channel's exponential
+        // distribution, so marginalized over the channel choice the sampling pdfs are the
+        // mixtures  p_coll(t) = Σ_c chProb_c · σ_c e^{-σ_c t}   (collision at t)
+        //           P_surf(d) = Σ_c chProb_c · e^{-σ_c d}       (flight past the boundary at d)
+        // Dividing the spectral integrand by these mixture pdfs below is the standard
+        // one-sample balance-heuristic estimator, exactly unbiased for ANY chProb > 0 —
+        // the flag only changes variance, never the expected value. With the flag off,
+        // chProb = 1/3 reproduces the legacy uniform estimator bit-for-bit.
+        float3 chProb = (1.0 / 3.0).xxx;
+        if (a3ChromaticImportanceEnabled != 0u) {
+            chProb = st / (st.x + st.y + st.z);
+        }
         float chSel = randFloat(state.seed);
-        float sigmaHero = chSel < (1.0 / 3.0) ? st.x : (chSel < (2.0 / 3.0) ? st.y : st.z);
+        float sigmaHero = chSel < chProb.x ? st.x : (chSel < chProb.x + chProb.y ? st.y : st.z);
         float u = randFloat(state.seed);
         float freeDist = -log(max(1.0 - u, 1.0e-6)) / max(sigmaHero, 1.0e-6);
 
@@ -183,7 +206,7 @@ void runMediumWalk(inout PathState state, inout float3 origin, inout float3 dir)
             // Scatter event at freeDist — spectral factor sigma_s*T/pdf_coll.
             float3 T = exp(-st * freeDist);
             float3 sigmaS = state.mediumAlbedo * st;
-            float pdfColl = (st.x * T.x + st.y * T.y + st.z * T.z) * (1.0 / 3.0);
+            float pdfColl = dot(chProb, st * T);
             state.throughput *= (sigmaS * T) / max(pdfColl, 1.0e-8);
             float q = saturate(maxComp(state.throughput));
             if (randFloat(state.seed) > q) { state.terminated = true; return; }
@@ -197,7 +220,7 @@ void runMediumWalk(inout PathState state, inout float3 origin, inout float3 dir)
 
         // Boundary crossing at h.dist — spectral transmittance factor, then Fresnel exit/TIR.
         float3 Tb = exp(-st * h.dist);
-        float pdfSurf = (Tb.x + Tb.y + Tb.z) * (1.0 / 3.0);
+        float pdfSurf = dot(chProb, Tb);
         state.throughput *= Tb / max(pdfSurf, 1.0e-8);
 
         float3 outwardN = h.geoNormal;
@@ -502,6 +525,19 @@ void main(uint3 tid : SV_DispatchThreadID) {
         if (bounce == 0u && maxComp(surfEmission) > 0.0 && dot(surf.wo, surf.geoNormal) > 0.0) {
             break;
         }
+        // A3(a): path regularization — widen near-specular GGX lobes on secondary+ bounces
+        // to reduce firefly variance (Kaplanyan & Dachsbacher 2013; PBRT 4e §16). Trades a
+        // small known bias for much lower variance. Theia-only, flag-gated; Hyperion stays
+        // the unbiased ground truth.
+        if (a3RegularizationEnabled != 0u && bounce > 0u) {
+            const float regStrength = 0.3; // roughness floor the lobe is widened toward
+            const float curRough = surf.mat.specularRoughAnisoIor.x;
+            // Smooth ramp: full effect at roughness 0, fades to nothing by regStrength.
+            const float regT = saturate((regStrength - curRough) / max(regStrength, 1.0e-4));
+            const float regRough = lerp(curRough, max(curRough, regStrength), regT);
+            surf.mat.specularRoughAnisoIor.x = regRough;
+            surf.mat.coatRoughAnisoIorDark.x = max(surf.mat.coatRoughAnisoIorDark.x, regRough * 0.5);
+        }
         state.depth = bounce + 1u;
         integrateSurface(tracer, surf,
             emissiveTriangleCount, emissiveTriangles, emissiveCdf,
@@ -537,12 +573,24 @@ void main(uint3 tid : SV_DispatchThreadID) {
         return;
     }
     indirect = max(indirect, 0.0.xxx);
+    // A3(b): variance-aware adaptive firefly clamp. When the A-SVGF gradient/variance
+    // guide is bound, high local variance (genuine bright/complex region) relaxes the
+    // clamp while low variance keeps the tight legacy threshold, suppressing isolated
+    // outliers. With hasGradientVariance == 0 this reduces exactly to the legacy
+    // fixed kFireflyClampDisplay behaviour.
+    float adaptiveClamp = kFireflyClampDisplay;
+    if (hasGradientVariance != 0u) {
+        const float variance = t_gradientVariance.Load(loadCoord).g;
+        // Higher local variance → allow higher values (genuine bright spot);
+        // lower local variance → tighter clamp (isolated outlier).
+        adaptiveClamp = kFireflyClampDisplay * max(1.0, 1.0 + variance * 20.0);
+    }
     // Hard ceiling on top of the per-sample firefly suppression below.
-    indirect = clamp(indirect, 0.0.xxx, (kFireflyClampDisplay * 3.0).xxx);
+    indirect = clamp(indirect, 0.0.xxx, (adaptiveClamp * 3.0).xxx);
     // Per-sample firefly suppression (averaged across accumulated frames downstream).
     const float avg = (indirect.x + indirect.y + indirect.z) * (1.0 / 3.0);
-    if (avg > kFireflyClampDisplay) {
-        indirect *= kFireflyClampDisplay / avg;
+    if (avg > adaptiveClamp) {
+        indirect *= adaptiveClamp / avg;
     }
     hdrImage[px] += float4(indirect + indirectPrimaryEnvNee, 0.0);
 }

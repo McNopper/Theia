@@ -56,6 +56,23 @@ bool GiPass::initialize(const DeviceContext& ctx, const Config& cfg, const char*
     m_boundEnvSampler = VK_NULL_HANDLE;
     m_boundEnvMarginalCdf = VK_NULL_HANDLE;
     m_boundEnvConditionalCdf = VK_NULL_HANDLE;
+    m_boundGradientVarianceView = VK_NULL_HANDLE;
+    m_dummyGradientReady = false;
+
+    // A3(b): 1×1 R32G32F placeholder for binding 15 when no A-SVGF gradient/variance
+    // guide is available. Keeps the descriptor valid; hasGradientVariance=0 gates reads.
+    auto dummyGrad = Image::create(ctx,
+                                   {1U, 1U},
+                                   VK_FORMAT_R32G32_SFLOAT,
+                                   VK_IMAGE_USAGE_SAMPLED_BIT,
+                                   VK_IMAGE_ASPECT_COLOR_BIT,
+                                   "theia.gi.dummyGradientVariance");
+    if (!dummyGrad) {
+        Logger::error("GiPass: failed to create dummy gradient/variance image: VkResult {}",
+                      static_cast<int>(dummyGrad.error()));
+        return false;
+    }
+    m_dummyGradientVariance = std::move(*dummyGrad);
 
     if (!createDescriptors()) {
         return false;
@@ -71,6 +88,8 @@ void GiPass::shutdown() {
         return;
     }
     const VkDevice device = m_ctx->device;
+    m_dummyGradientVariance = {};
+    m_dummyGradientReady = false;
     if (m_pipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(device, m_pipeline, nullptr);
         m_pipeline = VK_NULL_HANDLE;
@@ -94,10 +113,11 @@ void GiPass::shutdown() {
     m_boundEnvSampler = VK_NULL_HANDLE;
     m_boundEnvMarginalCdf = VK_NULL_HANDLE;
     m_boundEnvConditionalCdf = VK_NULL_HANDLE;
+    m_boundGradientVarianceView = VK_NULL_HANDLE;
 }
 
 bool GiPass::createDescriptors() {
-    const std::array<VkDescriptorSetLayoutBinding, 15> bindings{{
+    const std::array<VkDescriptorSetLayoutBinding, 16> bindings{{
         {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // TLAS
         {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // hdr (RW)
         {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // giBuffer
@@ -113,15 +133,16 @@ bool GiPass::createDescriptors() {
         {12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},            // conditional CDF
         {13, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // textures
         {14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},            // emissive power CDF
+        {15, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},             // A3(b) gradient/variance
     }};
 
     constexpr VkDescriptorBindingFlags kUpdateAfterBind = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
     constexpr VkDescriptorBindingFlags kTextureFlags =
         VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
-    const std::array<VkDescriptorBindingFlags, 15> bindingFlags{
+    const std::array<VkDescriptorBindingFlags, 16> bindingFlags{
         kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind,
         kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind,
-        kUpdateAfterBind, kTextureFlags, kUpdateAfterBind};
+        kUpdateAfterBind, kTextureFlags, kUpdateAfterBind, kUpdateAfterBind};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = static_cast<uint32_t>(bindingFlags.size()),
@@ -143,7 +164,7 @@ bool GiPass::createDescriptors() {
     const std::array<VkDescriptorPoolSize, 6> poolSizes{{
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
-        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 3},
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 4},
         {VK_DESCRIPTOR_TYPE_SAMPLER, 1},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 8},
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures},
@@ -257,7 +278,15 @@ void GiPass::updateDescriptors(const FrameParams& params) {
     const VkDescriptorBufferInfo marginalInfo{marginalCdf, 0, VK_WHOLE_SIZE};
     const VkDescriptorBufferInfo conditionalInfo{conditionalCdf, 0, VK_WHOLE_SIZE};
 
-    const std::array<VkWriteDescriptorSet, 14> writes{{
+    // A3(b): A-SVGF gradient/variance guide, or the 1×1 dummy when unavailable.
+    // Both live in VK_IMAGE_LAYOUT_GENERAL (the real guide is a denoiser storage image).
+    const VkDescriptorImageInfo gradientVarianceInfo{
+        .imageView = (params.gradientVarianceView != VK_NULL_HANDLE) ? params.gradientVarianceView
+                                                                     : m_dummyGradientVariance.view(),
+        .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+    };
+
+    const std::array<VkWriteDescriptorSet, 15> writes{{
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, &tlasWriteInfo, m_set, 0, 0, 1,
          VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, nullptr, nullptr, nullptr},
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 1, 0, 1,
@@ -286,6 +315,8 @@ void GiPass::updateDescriptors(const FrameParams& params) {
          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &conditionalInfo, nullptr},
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 14, 0, 1,
          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &emissiveCdfInfo, nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 15, 0, 1,
+         VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &gradientVarianceInfo, nullptr, nullptr},
     }};
 
     std::vector<VkWriteDescriptorSet> allWrites(writes.begin(), writes.end());
@@ -318,7 +349,8 @@ void GiPass::updateDescriptors(const FrameParams& params) {
 
 bool GiPass::descriptorsDirty(const FrameParams& params) const {
     return m_boundScene != params.scene || m_boundEnvMapView != params.envMapView || m_boundEnvSampler != params.envSampler ||
-           m_boundEnvMarginalCdf != params.envMarginalCdf || m_boundEnvConditionalCdf != params.envConditionalCdf;
+           m_boundEnvMarginalCdf != params.envMarginalCdf || m_boundEnvConditionalCdf != params.envConditionalCdf ||
+           m_boundGradientVarianceView != params.gradientVarianceView;
 }
 
 void GiPass::record(VkCommandBuffer cmd, const FrameParams& params) {
@@ -333,6 +365,20 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params) {
         m_boundEnvSampler = params.envSampler;
         m_boundEnvMarginalCdf = params.envMarginalCdf;
         m_boundEnvConditionalCdf = params.envConditionalCdf;
+        m_boundGradientVarianceView = params.gradientVarianceView;
+    }
+
+    // One-time layout transition for the dummy gradient/variance placeholder: it is never
+    // written, but the descriptor declares GENERAL, so move it out of UNDEFINED once.
+    if (!m_dummyGradientReady && m_dummyGradientVariance.isValid()) {
+        m_dummyGradientVariance.transition(cmd,
+                                           VK_IMAGE_LAYOUT_UNDEFINED,
+                                           VK_IMAGE_LAYOUT_GENERAL,
+                                           VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+                                           VK_ACCESS_2_NONE,
+                                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                           VK_ACCESS_2_SHADER_READ_BIT);
+        m_dummyGradientReady = true;
     }
 
     // ---- Barriers: forward attachments -> compute inputs/outputs ----
@@ -382,6 +428,10 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params) {
         .screenWidth = m_cfg.width,
         .screenHeight = m_cfg.height,
         ._pad0 = 0u,
+        .a3RegularizationEnabled = params.useA3Regularization ? 1u : 0u,
+        .a3ChromaticImportanceEnabled = params.useA3ChromaticImportance ? 1u : 0u,
+        .hasGradientVariance = (params.gradientVarianceView != VK_NULL_HANDLE) ? 1u : 0u,
+        ._pad1 = 0u,
     };
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);

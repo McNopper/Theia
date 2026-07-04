@@ -5,6 +5,7 @@
 #include <glm/glm.hpp>
 
 #include "harmonia/DeviceContext.hpp"
+#include "harmonia/core/Image.hpp"
 
 class Scene;
 
@@ -56,6 +57,19 @@ class GiPass {
         uint32_t frameSampleIndex = 0;
         uint32_t rngBaseSeed = 0;
         uint32_t maxDepth = 3;
+
+        /// A3(b): optional A-SVGF gradient/variance guide (R32G32F, R = gradient,
+        /// G = variance) for the variance-aware adaptive firefly clamp. When
+        /// VK_NULL_HANDLE, a 1×1 dummy is bound and the shader falls back to the
+        /// legacy fixed clamp (bit-identical behaviour). A provided view must be
+        /// in VK_IMAGE_LAYOUT_GENERAL for the compute dispatch.
+        VkImageView gradientVarianceView = VK_NULL_HANDLE;
+        /// A3(a): secondary-bounce GGX roughness regularization (Theia-only bias;
+        /// Hyperion stays unbiased). Off → estimator identical to before.
+        bool useA3Regularization = true;
+        /// A3(c): σ_t-importance-weighted hero channel selection in the medium walk
+        /// (unbiased reweighting). Off → legacy uniform 1/3 channel pick.
+        bool useA3ChromaticImportance = true;
     };
 
     GiPass() = default;
@@ -90,8 +104,12 @@ class GiPass {
         uint32_t screenWidth = 0;
         uint32_t screenHeight = 0;
         uint32_t _pad0 = 0;
+        uint32_t a3RegularizationEnabled = 1;      ///< A3(a): secondary-bounce roughness regularization
+        uint32_t a3ChromaticImportanceEnabled = 1; ///< A3(c): σ_t-weighted hero channel selection
+        uint32_t hasGradientVariance = 0;          ///< A3(b): 1 when a real A-SVGF guide is bound
+        uint32_t _pad1 = 0;
     };
-    static_assert(sizeof(GiPushConstants) == 128);
+    static_assert(sizeof(GiPushConstants) == 144);
 
     [[nodiscard]] bool createDescriptors();
     [[nodiscard]] bool createPipeline(const char* giSpv);
@@ -114,6 +132,13 @@ class GiPass {
     VkSampler m_boundEnvSampler = VK_NULL_HANDLE;
     VkBuffer m_boundEnvMarginalCdf = VK_NULL_HANDLE;
     VkBuffer m_boundEnvConditionalCdf = VK_NULL_HANDLE;
+    VkImageView m_boundGradientVarianceView = VK_NULL_HANDLE;
+
+    /// A3(b): 1×1 R32G32F placeholder bound to binding 15 when no A-SVGF
+    /// gradient/variance guide is provided; hasGradientVariance=0 ensures the
+    /// shader never reads it.
+    Image m_dummyGradientVariance{};
+    bool m_dummyGradientReady = false; ///< one-time UNDEFINED → GENERAL transition done
 };
 
 } // namespace theia
