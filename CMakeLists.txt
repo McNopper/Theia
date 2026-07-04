@@ -27,7 +27,7 @@ add_compile_definitions(VK_NO_PROTOTYPES)
 FetchContent_Declare(
     aether
     GIT_REPOSITORY https://github.com/McNopper/Aether.git
-    GIT_TAG v0.5.0
+    GIT_TAG v0.5.1
 )
 FetchContent_Declare(
     harmonia
