@@ -363,7 +363,8 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         gp.maxDepth = m_sceneMaxDepth;
         gp.useA3Regularization = true;
         gp.useA3ChromaticImportance = true;
-        gp.gradientVarianceView = VK_NULL_HANDLE;
+        // A3(b): wire the A-SVGF gradient/variance guide from the shared denoiser pass.
+        gp.gradientVarianceView = denoiserGradientImageView();
 
         // Store motion vector params for use in onBeforeSceneStages() (runs on graphics queue).
         m_pendingMvp.curViewProj  = curViewProjT;
@@ -374,14 +375,16 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         const uint32_t asyncFamily = deviceContext().asyncComputeQueueFamily;
 
         // GRAPHICS RELEASE: transfer giBuffer, gbuffer, hdr ownership to async compute.
-        // Layout stays ATTACHMENT_OPTIMAL; the async ACQUIRE barriers do the transitions.
+        // The release barrier performs the layout transition (Vulkan spec §7.7.5: both release
+        // and acquire must specify identical oldLayout/newLayout — the transition happens once
+        // during the release operation). Acquire barriers use the same layout pair.
         const std::array<VkImageMemoryBarrier2, 3> gfxRelease{{
             {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, .pNext = nullptr,
              .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
              .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
              .dstStageMask = VK_PIPELINE_STAGE_2_NONE, .dstAccessMask = VK_ACCESS_2_NONE,
              .oldLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-             .newLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+             .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,  // matches asyncAcquire
              .srcQueueFamilyIndex = gfxFamily, .dstQueueFamilyIndex = asyncFamily,
              .image = m_renderer->giBufferImage(),
              .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
@@ -390,7 +393,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
              .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
              .dstStageMask = VK_PIPELINE_STAGE_2_NONE, .dstAccessMask = VK_ACCESS_2_NONE,
              .oldLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-             .newLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+             .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,  // matches asyncAcquire
              .srcQueueFamilyIndex = gfxFamily, .dstQueueFamilyIndex = asyncFamily,
              .image = m_renderer->gbufferImage(),
              .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
@@ -399,7 +402,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
              .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
              .dstStageMask = VK_PIPELINE_STAGE_2_NONE, .dstAccessMask = VK_ACCESS_2_NONE,
              .oldLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-             .newLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+             .newLayout = VK_IMAGE_LAYOUT_GENERAL,                   // matches asyncAcquire
              .srcQueueFamilyIndex = gfxFamily, .dstQueueFamilyIndex = asyncFamily,
              .image = target.image,
              .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
@@ -477,7 +480,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
              .srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
              .dstStageMask = VK_PIPELINE_STAGE_2_NONE, .dstAccessMask = VK_ACCESS_2_NONE,
              .oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-             .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+             .newLayout = VK_IMAGE_LAYOUT_GENERAL,                   // matches gfxAcquire
              .srcQueueFamilyIndex = asyncFamily, .dstQueueFamilyIndex = gfxFamily,
              .image = m_renderer->gbufferImage(),
              .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
@@ -524,10 +527,8 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         // Hyperion stays the unbiased ground truth). Defaults ON.
         gp.useA3Regularization = true;      // A3(a): secondary-bounce roughness regularization
         gp.useA3ChromaticImportance = true; // A3(c): σ_t-weighted hero channel selection (unbiased)
-        // A3(b): the A-SVGF gradient/variance guide lives inside Harmonia's
-        // SceneOutputCopyPass and is not exported yet — leave null so GiPass binds
-        // its 1×1 dummy and the shader keeps the legacy fixed firefly clamp.
-        gp.gradientVarianceView = VK_NULL_HANDLE;
+        // A3(b): wire the A-SVGF gradient/variance guide from the shared denoiser pass.
+        gp.gradientVarianceView = denoiserGradientImageView();
         m_giPass.record(cmd, gp);
 
         // After GiPass, the GI G-buffer is in SHADER_READ_ONLY_OPTIMAL.
