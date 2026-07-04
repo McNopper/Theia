@@ -29,6 +29,7 @@ namespace theia {
 /// VK_IMAGE_LAYOUT_GENERAL.
 class Application final : public harmonia::App, public harmonia::IRenderer {
   public:
+    ~Application();
     void setCameraJitterEnabled(bool enabled) noexcept { m_cameraJitterEnabled = enabled; }
     // harmonia::IRenderer
     void record(VkCommandBuffer cmd, const harmonia::RenderTarget& target) noexcept override;
@@ -63,6 +64,8 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     [[nodiscard]] uint32_t offscreenFrameCount() const noexcept override {
         return std::max(config().offscreenFrames, 1U);
     }
+    [[nodiscard]] std::pair<VkCommandBuffer, VkSemaphore>
+    onBeforeSceneStages(VkCommandBuffer renderCmd) noexcept override;
 
   private:
     /// First-person camera controller (WASD + right-mouse-drag + scroll).
@@ -128,6 +131,22 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     glm::vec3 m_hiZPrevPos{0.0f};
     glm::vec3 m_hiZPrevDir{0.0f, 0.0f, -1.0f};
     bool m_hiZPrevValid = false;
+
+    // ── Async compute resources ──────────────────────────────────────────────
+    // When the device exposes a dedicated compute queue family (COMPUTE only),
+    // GiPass is dispatched there while the next frame's raster work runs on
+    // the graphics queue simultaneously. MotionVectorPass runs in the graphics
+    // stages cmd to keep motionVectorImage on the graphics queue family.
+    VkCommandPool   m_asyncCmdPool          = VK_NULL_HANDLE;
+    std::array<VkCommandBuffer, 2> m_asyncCmdBufs    = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    /// Per-slot graphics-family cmd bufs for the scene stages (denoiser etc.) in async mode.
+    std::array<VkCommandBuffer, 2> m_stagesCmdBufs   = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    std::array<VkSemaphore, 2> m_gfxDoneSemaphores  = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    std::array<VkSemaphore, 2> m_asyncSemaphores    = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    std::array<VkFence, 2>     m_asyncFences        = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    bool m_asyncComputeEnabled  = false;
+    /// Pending motion-vector params set in record() and consumed by onBeforeSceneStages().
+    MotionVectorPass::FrameParams m_pendingMvp{};
 };
 
 } // namespace theia

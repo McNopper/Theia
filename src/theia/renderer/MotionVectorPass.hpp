@@ -61,6 +61,10 @@ class MotionVectorPass {
     [[nodiscard]] VkImageView motionVectorImageView() const noexcept {
         return m_motionVectorImage.isValid() ? m_motionVectorImage.view() : VK_NULL_HANDLE;
     }
+    /// Raw image handle, used by Application for cross-queue ownership transfers.
+    [[nodiscard]] VkImage motionVectorImageHandle() const noexcept {
+        return m_motionVectorImage.isValid() ? m_motionVectorImage.handle() : VK_NULL_HANDLE;
+    }
 
   private:
     struct alignas(16) MotionVectorPC {

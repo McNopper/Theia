@@ -353,7 +353,7 @@ bool GiPass::descriptorsDirty(const FrameParams& params) const {
            m_boundGradientVarianceView != params.gradientVarianceView;
 }
 
-void GiPass::record(VkCommandBuffer cmd, const FrameParams& params) {
+void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPreBarriers) {
     if (m_pipeline == VK_NULL_HANDLE || params.scene == nullptr || m_cfg.hdrImage == VK_NULL_HANDLE) {
         return;
     }
@@ -382,35 +382,37 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params) {
     }
 
     // ---- Barriers: forward attachments -> compute inputs/outputs ----
-    const std::array<VkImageMemoryBarrier2, 3> preBarriers{{
-        imgBarrier(m_cfg.giBufferImage,
-                   VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                   VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                   VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                   VK_ACCESS_2_SHADER_READ_BIT),
-        imgBarrier(m_cfg.gbufferImage,
-                   VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                   VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                   VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                   VK_ACCESS_2_SHADER_READ_BIT),
-        imgBarrier(m_cfg.hdrImage,
-                   VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-                   VK_IMAGE_LAYOUT_GENERAL,
-                   VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                   VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                   VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT),
-    }};
-    const VkDependencyInfo preDep{
-        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-        .imageMemoryBarrierCount = static_cast<uint32_t>(preBarriers.size()),
-        .pImageMemoryBarriers = preBarriers.data(),
-    };
-    vkCmdPipelineBarrier2(cmd, &preDep);
+    if (!skipPreBarriers) {
+        const std::array<VkImageMemoryBarrier2, 3> preBarriers{{
+            imgBarrier(m_cfg.giBufferImage,
+                       VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                       VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                       VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                       VK_ACCESS_2_SHADER_READ_BIT),
+            imgBarrier(m_cfg.gbufferImage,
+                       VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                       VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                       VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                       VK_ACCESS_2_SHADER_READ_BIT),
+            imgBarrier(m_cfg.hdrImage,
+                       VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                       VK_IMAGE_LAYOUT_GENERAL,
+                       VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                       VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                       VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT),
+        }};
+        const VkDependencyInfo preDep{
+            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .imageMemoryBarrierCount = static_cast<uint32_t>(preBarriers.size()),
+            .pImageMemoryBarriers = preBarriers.data(),
+        };
+        vkCmdPipelineBarrier2(cmd, &preDep);
+    }
     m_hdrFirstUse = false;
 
     const GiPushConstants pc{

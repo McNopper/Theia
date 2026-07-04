@@ -84,7 +84,10 @@ class GiPass {
     /// in the same command buffer. Transitions:
     ///   giBuffer / gbuffer : ATTACHMENT_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL
     ///   hdr                : ATTACHMENT_OPTIMAL -> GENERAL (stays GENERAL after this call)
-    void record(VkCommandBuffer cmd, const FrameParams& params);
+    /// @param skipPreBarriers When true the caller has already issued the layout
+    ///        transitions (e.g. via queue-family acquire barriers on an async compute
+    ///        command buffer). The dispatch still runs; only the pre-barriers are skipped.
+    void record(VkCommandBuffer cmd, const FrameParams& params, bool skipPreBarriers = false);
 
     [[nodiscard]] bool isInitialized() const noexcept { return m_pipeline != VK_NULL_HANDLE; }
 
