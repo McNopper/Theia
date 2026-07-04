@@ -433,7 +433,7 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         .a3RegularizationEnabled = params.useA3Regularization ? 1u : 0u,
         .a3ChromaticImportanceEnabled = params.useA3ChromaticImportance ? 1u : 0u,
         .hasGradientVariance = (params.gradientVarianceView != VK_NULL_HANDLE) ? 1u : 0u,
-        ._pad1 = 0u,
+        .giAdaptiveMaxSamples = std::max(1u, params.adaptiveMaxSamples),
     };
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);

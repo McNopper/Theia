@@ -42,9 +42,9 @@ It implements the [OpenPBR Surface v1.1.1](https://academysoftwarefoundation.git
 |:-------------:|:---------------------:|:---------------------:|
 | ![textured_cube](screenshots/textured_cube.png) | ![dragon_teapot](screenshots/dragon_teapot.png) | ![openpbr_advanced](screenshots/openpbr_advanced.png) |
 
-| A Beautiful Game (IBL) |
-|:----------------------:|
-| ![ABeautifulGame](screenshots/ABeautifulGame.png) |
+| A Beautiful Game (IBL) | Bunny + ShaderBall (IBL) | Blender Export |
+|:----------------------:|:------------------------:|:------------------------:|
+| ![ABeautifulGame](screenshots/ABeautifulGame.png) | ![bunny_shaderball](screenshots/bunny_shaderball.png) | ![camera_suzanne](screenshots/camera_suzanne.png) |
 
 ---
 
@@ -274,16 +274,6 @@ Where a technique is shared with [Hyperion](https://github.com/McNopper/Hyperion
 | [Heitz — "Sampling the GGX Distribution of Visible Normals" (JCGT 2018)](https://jcgt.org/published/0007/04/01/) | VNDF importance sampling in the IBL pre-filter compute shader |
 | [Ray Tracing Gems I & II](https://www.realtimerendering.com/raytracinggems/) (Haines et al., Marrs et al.) | Hybrid rendering, ray query patterns, shadow ray precision |
 | [Shirley et al. — "Monte Carlo Techniques for Direct Lighting Calculations" (TOG 1996)](https://dl.acm.org/doi/10.1145/226550.226571) | Emissive-triangle NEE: area sampling, area-to-solid-angle PDF conversion |
-
-### Global Illumination & ReSTIR
-| Resource | Relevance |
-|----------|-----------|
-| [Bitterli, Wyman et al. — "Spatiotemporal Reservoir Resampling for Real-Time Ray Tracing with Dynamic Direct Illumination" (SIGGRAPH 2020)](https://research.nvidia.com/publication/2020-07_spatiotemporal-reservoir-resampling-real-time-ray-tracing-dynamic-direct) | ReSTIR DI: spatiotemporal reservoir resampling for direct illumination |
-| [Ouyang, Liu, Lin et al. — "ReSTIR GI: Path Resampling for Real-Time Path Tracing" (HPG 2021)](https://dl.acm.org/doi/10.1145/3451256) | ReSTIR GI: spatiotemporal path resampling for indirect illumination |
-| [Lin, Kettunen, Bitterli et al. — "Generalized Resampled Importance Sampling: Foundations of ReSTIR" (SIGGRAPH 2022)](https://research.nvidia.com/publication/2022-07_generalized-resampled-importance-sampling-foundations-restir) | GRIS: unbiased ReSTIR generalization; correctness foundation for RT parity |
-| [Wyman, Panteleev — "Rearchitecting Spatiotemporal Resampling for Production" (HPG 2021)](https://research.nvidia.com/publication/2021-07_rearchitecting-spatiotemporal-resampling-production) | ReSTIR DI production implementation and bias-correction techniques |
-| [NVIDIA RTXDI SDK](https://github.com/NVIDIAGameWorks/RTXDI) | Open-source ReSTIR DI reference implementation (Apache 2.0) |
-| [Heitz, Hill et al. — "Combining Analytic Direct Illumination and Stochastic Shadows" (I3D 2018)](https://research.nvidia.com/publication/2018-05_combining-analytic-direct-illumination-and-stochastic-shadows) | Shadow denoising and analytical/stochastic integration strategies |
 
 ### Vulkan & API
 | Resource | Relevance |

@@ -365,6 +365,9 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         gp.useA3ChromaticImportance = true;
         // A3(b): wire the A-SVGF gradient/variance guide from the shared denoiser pass.
         gp.gradientVarianceView = denoiserGradientImageView();
+        // c1: variance-guided adaptive sampling (unbiased; only active when the guide above is
+        // bound, otherwise the shader forces a single sample = legacy behaviour).
+        gp.adaptiveMaxSamples = 4;
 
         // Store motion vector params for use in onBeforeSceneStages() (runs on graphics queue).
         m_pendingMvp.curViewProj  = curViewProjT;
@@ -529,6 +532,9 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         gp.useA3ChromaticImportance = true; // A3(c): σ_t-weighted hero channel selection (unbiased)
         // A3(b): wire the A-SVGF gradient/variance guide from the shared denoiser pass.
         gp.gradientVarianceView = denoiserGradientImageView();
+        // c1: variance-guided adaptive sampling (unbiased; only active when the guide above is
+        // bound, otherwise the shader forces a single sample = legacy behaviour).
+        gp.adaptiveMaxSamples = 4;
         m_giPass.record(cmd, gp);
 
         // After GiPass, the GI G-buffer is in SHADER_READ_ONLY_OPTIMAL.

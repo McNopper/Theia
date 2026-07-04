@@ -40,7 +40,7 @@ cbuffer GiPC {
     uint     a3RegularizationEnabled;      // A3(a): secondary-bounce roughness regularization (Theia-only bias)
     uint     a3ChromaticImportanceEnabled; // A3(c): σ_t-importance-weighted hero channel selection
     uint     hasGradientVariance;          // A3(b): 1 when t_gradientVariance holds a real A-SVGF guide
-    uint     _pad1;
+    uint     giAdaptiveMaxSamples;         // c1: max GI samples/pixel for variance-guided adaptive sampling (1 = off)
 };
 
 [[vk::binding(0, 0)]]  RaytracingAccelerationStructure       t_tlas;
@@ -63,6 +63,11 @@ cbuffer GiPC {
 // Per-sample firefly clamp on the indirect contribution (display-referred, post-exposure),
 // matching the forward pass kFireflyClampDisplay threshold.
 static const float kFireflyClampDisplay = 100.0;
+
+// c1: variance→extra-samples mapping. Local A-SVGF variance is scaled by this factor and
+// saturated to [0,1]; the result linearly interpolates the per-pixel GI sample count between
+// 1 and giAdaptiveMaxSamples. Matches the magnitude the A3(b) clamp uses (variance * 20).
+static const float kAdaptiveVarianceScale = 20.0;
 
 /// Inline-ray-query shadow tracer satisfying the shared estimator's ITracer interface.
 struct TheiaTracer : ITracer {
@@ -325,6 +330,195 @@ SurfaceHit makeSurfaceHit(GiHit h, float3 wo) {
     return surf;
 }
 
+/// One independent GI estimate for a reconstructed primary surface: primary-vertex env NEE +
+/// BSDF continuation + the bounce/medium transport loop, followed by the per-sample firefly
+/// clamp. `seed` decorrelates this estimate from the others (c1 adaptive sampling averages
+/// several of these). Returns false when the sample produced no usable contribution (degenerate
+/// BSDF direction or a non-finite result); callers treat that as a zero contribution. `outEnvNee`
+/// is kept separate from `outIndirect` so the firefly clamp never biases the sun term.
+bool estimateGiSample(SurfaceHit primary, RngState seed, float adaptiveClamp,
+                      out float3 outIndirect, out float3 outEnvNee) {
+    outIndirect = 0.0.xxx;
+    outEnvNee = 0.0.xxx;
+
+    PathState state;
+    state.radiance = 0.0.xxx;
+    state.throughput = 1.0.xxx;
+    state.depth = 0u;
+    state.seed = seed;
+    state.terminated = false;
+    state.specularBounce = false;
+    state.lastBsdfPdf = 0.0;
+    state.insideMedium = false;
+    state.mediumSigmaT = 0.0.xxx;
+    state.mediumAlbedo = 0.0.xxx;
+    state.mediumG = 0.0;
+    state.mediumEta = 1.0;
+
+    const bool envEnabled = (hasEnvMap != 0u);
+    const bool envImportance = envEnabled && envImportanceWidth > 0u && envImportanceHeight > 0u;
+    TheiaTracer tracer;
+    float3 origin = 0.0.xxx;
+    float3 dir = 0.0.xxx;
+
+    // Primary-vertex stochastic geometry_opacity pass-through gate (shared-integrator contract):
+    // with probability (1-opacity), continue the camera ray unchanged with delta semantics.
+    const float primaryOpacity = saturate(primary.mat.opacityFlagsPad.x);
+    const bool primaryPassThrough = randFloat(state.seed) < (1.0 - primaryOpacity);
+
+    // Primary-vertex environment NEE only (shared estimator conventions). Keep this in a
+    // separate accumulator so firefly suppression does not bias the sun term.
+    float3 primaryEnvNee = 0.0.xxx;
+    if (!primaryPassThrough) {
+        if (envImportance) {
+            float3 sum = 0.0.xxx;
+            const uint count = 4u;
+            for (uint i = 0u; i < count; ++i) {
+                EnvNeeSample envNee = evalEnvNEESample(
+                    tracer, primary,
+                    envMarginalCdf, envConditionalCdf,
+                    envImportanceWidth, envImportanceHeight, envEnabled, envLuminanceScale,
+                    t_envMap, s_env, state.seed);
+                sum += envNee.contribution;
+            }
+            primaryEnvNee = sum / float(count);
+            if (!all(isfinite(primaryEnvNee)) || any(isnan(primaryEnvNee))) {
+                primaryEnvNee = 0.0.xxx;
+            }
+        }
+
+        // --- Primary BSDF continuation (primary env NEE above; analytic/emissive direct handled by forward) ---
+        BSDFSample bs = sampleBSDF(primary.mat, primary.wo,
+            primary.normal, primary.T, primary.B, primary.coatN, primary.coatT, primary.coatB, state.seed);
+        if (bs.pdf <= 0.0 || maxComp(bs.weight) <= 0.0 || !all(isfinite(bs.weight))) {
+            return false;
+        }
+        state.throughput = bs.weight;
+        state.specularBounce = bs.isDelta;
+        state.lastBsdfPdf = bs.isDelta ? 1.0e30 : bs.pdf;
+        // G9/G10: capture a primary-vertex medium entry (bulk SSS / transmission scatter) so the
+        // shared walk runs on the first segment too, matching Hyperion's primary SSS handling.
+        state.insideMedium = bs.entersMedium;
+        state.mediumSigmaT = bs.mediumSigmaT;
+        state.mediumAlbedo = bs.mediumAlbedo;
+        state.mediumG      = bs.mediumG;
+        state.mediumEta    = bs.mediumEta;
+        origin = primary.position + primary.geoNormal * (dot(bs.direction, primary.geoNormal) >= 0.0 ? kRayEpsilon : -kRayEpsilon);
+        dir = normalize(bs.direction);
+    } else {
+        const float3 fwd = -primary.wo;
+        state.specularBounce = true;
+        state.lastBsdfPdf = 1.0e30; // delta pass-through for downstream MIS weighting
+        origin = primary.position + primary.geoNormal * (dot(fwd, primary.geoNormal) >= 0.0 ? kRayEpsilon : -kRayEpsilon);
+        dir = normalize(fwd);
+    }
+
+    // G9/G10: if the primary continuation entered a medium, walk it before the surface loop.
+    if (state.insideMedium) {
+        runMediumWalk(state, origin, dir);
+    }
+
+    const uint bounces = max(maxDepth, 1u);
+    for (uint bounce = 0u; bounce < bounces && !state.terminated; ++bounce) {
+        GiHit h = traceClosestHit(origin, dir, kInf);
+        if (!h.hit) {
+            if (envEnabled) {
+                const float3 Le = sampleEnvMapLatLong(t_envMap, s_env, dir) * envLuminanceScale;
+                float misW = 1.0;
+                // Weight BSDF-to-env against the matching environment-NEE strategy.
+                if (envImportance) {
+                    const float envPdf = evalEnvImportancePdfDir(
+                        envMarginalCdf, envConditionalCdf, envImportanceWidth, envImportanceHeight, dir);
+                    misW = state.lastBsdfPdf / max(state.lastBsdfPdf + envPdf, 1.0e-6);
+                }
+                state.radiance += state.throughput * Le * misW;
+            }
+            break;
+        }
+
+        SurfaceHit surf = makeSurfaceHit(h, -dir);
+        // Reject a non-finite secondary material rather than propagating NaN through
+        // integrateSurface — terminate the path and keep the radiance accumulated so far.
+        if (!all(isfinite(surf.mat.baseColorWeight.xyz)) || !all(isfinite(surf.mat.emissionColorLum.xyz))) {
+            break;
+        }
+        // Prevent primary direct-light double count: camera->primary->emissive (bounce 0)
+        // is forward-owned direct (RectLight/emissive proxy), so GI must not add it.
+        const float3 surfEmission = max(surf.mat.emissionColorLum.xyz, 0.0.xxx)
+                                  * max(surf.mat.emissionColorLum.w, 0.0);
+        if (bounce == 0u && maxComp(surfEmission) > 0.0 && dot(surf.wo, surf.geoNormal) > 0.0) {
+            break;
+        }
+        // A3(a): path regularization — widen near-specular GGX lobes on secondary+ bounces
+        // to reduce firefly variance (Kaplanyan & Dachsbacher 2013; PBRT 4e §16). Trades a
+        // small known bias for much lower variance. Theia-only, flag-gated; Hyperion stays
+        // the unbiased ground truth.
+        //
+        // Exempt smooth dielectric transmission (glass): those surfaces refract via the exact
+        // Snell delta lobe (see bsdf.slang, baseRough < 0.05). Regularizing their roughness up
+        // to 0.3 would frost the glass and push it onto the microfacet-transmission path,
+        // broadening/strengthening refracted colour (e.g. the green cast of a gem on the floor)
+        // and diverging from Hyperion. Keep them sharp to preserve OpenPBR parity.
+        const bool smoothDielectricTransmission =
+            saturate(surf.mat.transmissionColorWeight.w) > 0.1 &&
+            surf.mat.specularRoughAnisoIor.x < 0.05;
+        if (a3RegularizationEnabled != 0u && bounce > 0u && !smoothDielectricTransmission) {
+            const float regStrength = 0.3; // roughness floor the lobe is widened toward
+            const float curRough = surf.mat.specularRoughAnisoIor.x;
+            // Smooth ramp: full effect at roughness 0, fades to nothing by regStrength.
+            const float regT = saturate((regStrength - curRough) / max(regStrength, 1.0e-4));
+            const float regRough = lerp(curRough, max(curRough, regStrength), regT);
+            surf.mat.specularRoughAnisoIor.x = regRough;
+            surf.mat.coatRoughAnisoIorDark.x = max(surf.mat.coatRoughAnisoIorDark.x, regRough * 0.5);
+        }
+        state.depth = bounce + 1u;
+        integrateSurface(tracer, surf,
+            emissiveTriangleCount, emissiveTriangles, emissiveCdf,
+            envMarginalCdf, envConditionalCdf,
+            envImportanceWidth, envImportanceHeight, envEnabled, envLuminanceScale,
+            t_envMap, s_env, state);
+
+        if (state.terminated) {
+            break;
+        }
+        origin = state.nextOrigin;
+        dir = state.nextDirection;
+
+        // G9/G10: if the BSDF sample entered a bulk subsurface / transmission-scatter medium,
+        // run the shared volumetric random walk here (its own bounded budget) before resuming
+        // the surface bounce loop from the refracted exit ray.
+        if (state.insideMedium) {
+            runMediumWalk(state, origin, dir);
+            if (state.terminated) {
+                break;
+            }
+        }
+    }
+
+    float3 indirectPrimaryEnvNee = primaryEnvNee * exposure;
+    if (!all(isfinite(indirectPrimaryEnvNee)) || any(isnan(indirectPrimaryEnvNee))) {
+        indirectPrimaryEnvNee = 0.0.xxx;
+    }
+    float3 indirect = state.radiance * exposure;
+    // Per-sample NaN/Inf guard: discard this sample's indirect term (report invalid) so the
+    // caller keeps the pixel's accumulated value instead of poisoning it with a bad bounce.
+    if (!all(isfinite(indirect)) || any(isnan(indirect))) {
+        return false;
+    }
+    indirect = max(indirect, 0.0.xxx);
+    // Hard ceiling on top of the per-sample firefly suppression below.
+    indirect = clamp(indirect, 0.0.xxx, (adaptiveClamp * 3.0).xxx);
+    // Per-sample firefly suppression (averaged across accumulated frames + adaptive samples).
+    const float avg = (indirect.x + indirect.y + indirect.z) * (1.0 / 3.0);
+    if (avg > adaptiveClamp) {
+        indirect *= adaptiveClamp / avg;
+    }
+
+    outIndirect = indirect;
+    outEnvNee = indirectPrimaryEnvNee;
+    return true;
+}
+
 [numthreads(8, 8, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
     if (tid.x >= screenWidth || tid.y >= screenHeight) {
@@ -415,182 +609,50 @@ void main(uint3 tid : SV_DispatchThreadID) {
         return;
     }
 
-    RngState seed = composeRngSeed(px, frameSampleIndex, 0u, rngBaseSeed);
-
-    PathState state;
-    state.radiance = 0.0.xxx;
-    state.throughput = 1.0.xxx;
-    state.depth = 0u;
-    state.seed = seed;
-    state.terminated = false;
-    state.specularBounce = false;
-    state.lastBsdfPdf = 0.0;
-    state.insideMedium = false;
-    state.mediumSigmaT = 0.0.xxx;
-    state.mediumAlbedo = 0.0.xxx;
-    state.mediumG = 0.0;
-    state.mediumEta = 1.0;
-
-    const bool envEnabled = (hasEnvMap != 0u);
-    const bool envImportance = envEnabled && envImportanceWidth > 0u && envImportanceHeight > 0u;
-    TheiaTracer tracer;
-    float3 origin = 0.0.xxx;
-    float3 dir = 0.0.xxx;
-
-    // Primary-vertex stochastic geometry_opacity pass-through gate (shared-integrator contract):
-    // with probability (1-opacity), continue the camera ray unchanged with delta semantics.
-    const float primaryOpacity = saturate(primary.mat.opacityFlagsPad.x);
-    const bool primaryPassThrough = randFloat(state.seed) < (1.0 - primaryOpacity);
-
-    // Primary-vertex environment NEE only (shared estimator conventions). Keep this in a
-    // separate accumulator so firefly suppression does not bias the sun term.
-    float3 primaryEnvNee = 0.0.xxx;
-    if (!primaryPassThrough) {
-        if (envImportance) {
-            float3 sum = 0.0.xxx;
-            const uint count = 4u;
-            for (uint i = 0u; i < count; ++i) {
-                EnvNeeSample envNee = evalEnvNEESample(
-                    tracer, primary,
-                    envMarginalCdf, envConditionalCdf,
-                    envImportanceWidth, envImportanceHeight, envEnabled, envLuminanceScale,
-                    t_envMap, s_env, state.seed);
-                sum += envNee.contribution;
-            }
-            primaryEnvNee = sum / float(count);
-            if (!all(isfinite(primaryEnvNee)) || any(isnan(primaryEnvNee))) {
-                primaryEnvNee = 0.0.xxx;
-            }
-        }
-
-        // --- Primary BSDF continuation (primary env NEE above; analytic/emissive direct handled by forward) ---
-        BSDFSample bs = sampleBSDF(primary.mat, primary.wo,
-            primary.normal, primary.T, primary.B, primary.coatN, primary.coatT, primary.coatB, state.seed);
-        if (bs.pdf <= 0.0 || maxComp(bs.weight) <= 0.0 || !all(isfinite(bs.weight))) {
-            return;
-        }
-        state.throughput = bs.weight;
-        state.specularBounce = bs.isDelta;
-        state.lastBsdfPdf = bs.isDelta ? 1.0e30 : bs.pdf;
-        // G9/G10: capture a primary-vertex medium entry (bulk SSS / transmission scatter) so the
-        // shared walk runs on the first segment too, matching Hyperion's primary SSS handling.
-        state.insideMedium = bs.entersMedium;
-        state.mediumSigmaT = bs.mediumSigmaT;
-        state.mediumAlbedo = bs.mediumAlbedo;
-        state.mediumG      = bs.mediumG;
-        state.mediumEta    = bs.mediumEta;
-        origin = primary.position + primary.geoNormal * (dot(bs.direction, primary.geoNormal) >= 0.0 ? kRayEpsilon : -kRayEpsilon);
-        dir = normalize(bs.direction);
-    } else {
-        const float3 fwd = -primary.wo;
-        state.specularBounce = true;
-        state.lastBsdfPdf = 1.0e30; // delta pass-through for downstream MIS weighting
-        origin = primary.position + primary.geoNormal * (dot(fwd, primary.geoNormal) >= 0.0 ? kRayEpsilon : -kRayEpsilon);
-        dir = normalize(fwd);
-    }
-
-    // G9/G10: if the primary continuation entered a medium, walk it before the surface loop.
-    if (state.insideMedium) {
-        runMediumWalk(state, origin, dir);
-    }
-
-    const uint bounces = max(maxDepth, 1u);
-    for (uint bounce = 0u; bounce < bounces && !state.terminated; ++bounce) {
-        GiHit h = traceClosestHit(origin, dir, kInf);
-        if (!h.hit) {
-            if (envEnabled) {
-                const float3 Le = sampleEnvMapLatLong(t_envMap, s_env, dir) * envLuminanceScale;
-                float misW = 1.0;
-                // Weight BSDF-to-env against the matching environment-NEE strategy.
-                if (envImportance) {
-                    const float envPdf = evalEnvImportancePdfDir(
-                        envMarginalCdf, envConditionalCdf, envImportanceWidth, envImportanceHeight, dir);
-                    misW = state.lastBsdfPdf / max(state.lastBsdfPdf + envPdf, 1.0e-6);
-                }
-                state.radiance += state.throughput * Le * misW;
-            }
-            break;
-        }
-
-        SurfaceHit surf = makeSurfaceHit(h, -dir);
-        // Reject a non-finite secondary material rather than propagating NaN through
-        // integrateSurface — terminate the path and keep the radiance accumulated so far.
-        if (!all(isfinite(surf.mat.baseColorWeight.xyz)) || !all(isfinite(surf.mat.emissionColorLum.xyz))) {
-            break;
-        }
-        // Prevent primary direct-light double count: camera->primary->emissive (bounce 0)
-        // is forward-owned direct (RectLight/emissive proxy), so GI must not add it.
-        const float3 surfEmission = max(surf.mat.emissionColorLum.xyz, 0.0.xxx)
-                                  * max(surf.mat.emissionColorLum.w, 0.0);
-        if (bounce == 0u && maxComp(surfEmission) > 0.0 && dot(surf.wo, surf.geoNormal) > 0.0) {
-            break;
-        }
-        // A3(a): path regularization — widen near-specular GGX lobes on secondary+ bounces
-        // to reduce firefly variance (Kaplanyan & Dachsbacher 2013; PBRT 4e §16). Trades a
-        // small known bias for much lower variance. Theia-only, flag-gated; Hyperion stays
-        // the unbiased ground truth.
-        if (a3RegularizationEnabled != 0u && bounce > 0u) {
-            const float regStrength = 0.3; // roughness floor the lobe is widened toward
-            const float curRough = surf.mat.specularRoughAnisoIor.x;
-            // Smooth ramp: full effect at roughness 0, fades to nothing by regStrength.
-            const float regT = saturate((regStrength - curRough) / max(regStrength, 1.0e-4));
-            const float regRough = lerp(curRough, max(curRough, regStrength), regT);
-            surf.mat.specularRoughAnisoIor.x = regRough;
-            surf.mat.coatRoughAnisoIorDark.x = max(surf.mat.coatRoughAnisoIorDark.x, regRough * 0.5);
-        }
-        state.depth = bounce + 1u;
-        integrateSurface(tracer, surf,
-            emissiveTriangleCount, emissiveTriangles, emissiveCdf,
-            envMarginalCdf, envConditionalCdf,
-            envImportanceWidth, envImportanceHeight, envEnabled, envLuminanceScale,
-            t_envMap, s_env, state);
-
-        if (state.terminated) {
-            break;
-        }
-        origin = state.nextOrigin;
-        dir = state.nextDirection;
-
-        // G9/G10: if the BSDF sample entered a bulk subsurface / transmission-scatter medium,
-        // run the shared volumetric random walk here (its own bounded budget) before resuming
-        // the surface bounce loop from the refracted exit ray.
-        if (state.insideMedium) {
-            runMediumWalk(state, origin, dir);
-            if (state.terminated) {
-                break;
-            }
-        }
-    }
-
-    float3 indirectPrimaryEnvNee = primaryEnvNee * exposure;
-    if (!all(isfinite(indirectPrimaryEnvNee)) || any(isnan(indirectPrimaryEnvNee))) {
-        indirectPrimaryEnvNee = 0.0.xxx;
-    }
-    float3 indirect = state.radiance * exposure;
-    // Global NaN/Inf guard: discard the whole sample so the pixel keeps its currently
-    // accumulated value instead of being poisoned by a single bad bounce.
-    if (!all(isfinite(indirect)) || any(isnan(indirect))) {
-        return;
-    }
-    indirect = max(indirect, 0.0.xxx);
-    // A3(b): variance-aware adaptive firefly clamp. When the A-SVGF gradient/variance
-    // guide is bound, high local variance (genuine bright/complex region) relaxes the
-    // clamp while low variance keeps the tight legacy threshold, suppressing isolated
-    // outliers. With hasGradientVariance == 0 this reduces exactly to the legacy
-    // fixed kFireflyClampDisplay behaviour.
+    // A3(b): variance-aware adaptive firefly clamp. When the A-SVGF gradient/variance guide is
+    // bound, high local variance (genuine bright/complex region) relaxes the clamp while low
+    // variance keeps the tight legacy threshold, suppressing isolated outliers. With
+    // hasGradientVariance == 0 this reduces exactly to the legacy fixed kFireflyClampDisplay.
+    float variance = 0.0;
     float adaptiveClamp = kFireflyClampDisplay;
     if (hasGradientVariance != 0u) {
-        const float variance = t_gradientVariance.Load(loadCoord).g;
+        variance = t_gradientVariance.Load(loadCoord).g;
         // Higher local variance → allow higher values (genuine bright spot);
         // lower local variance → tighter clamp (isolated outlier).
         adaptiveClamp = kFireflyClampDisplay * max(1.0, 1.0 + variance * 20.0);
     }
-    // Hard ceiling on top of the per-sample firefly suppression below.
-    indirect = clamp(indirect, 0.0.xxx, (adaptiveClamp * 3.0).xxx);
-    // Per-sample firefly suppression (averaged across accumulated frames downstream).
-    const float avg = (indirect.x + indirect.y + indirect.z) * (1.0 / 3.0);
-    if (avg > adaptiveClamp) {
-        indirect *= adaptiveClamp / avg;
+
+    // c1: variance-guided adaptive sampling. Spend extra unbiased GI samples in high-variance
+    // pixels (as flagged by the A-SVGF guide from prior frames — independent of this frame's
+    // realizations, so the per-pixel average stays unbiased). Without the guide, maxSamples
+    // collapses to 1 and the seed reduces to composeRngSeed(px, frameSampleIndex, ...): the
+    // estimator is then bit-identical to the legacy single-sample path.
+    const uint maxSamples = (hasGradientVariance != 0u) ? max(giAdaptiveMaxSamples, 1u) : 1u;
+    uint sampleCount = 1u;
+    if (maxSamples > 1u) {
+        const float t = saturate(variance * kAdaptiveVarianceScale);
+        sampleCount = 1u + uint(float(maxSamples - 1u) * t + 0.5);
     }
-    hdrImage[px] += float4(indirect + indirectPrimaryEnvNee, 0.0);
+
+    float3 sumIndirect = 0.0.xxx;
+    float3 sumEnvNee = 0.0.xxx;
+    for (uint s = 0u; s < sampleCount; ++s) {
+        // Decorrelate each extra sample with a distinct Sobol' index. Reserving maxSamples
+        // indices per frame keeps samples from overlapping across frames or within a pixel.
+        RngState sampleSeed = composeRngSeed(px, frameSampleIndex * maxSamples + s, 0u, rngBaseSeed);
+        float3 sampleIndirect;
+        float3 sampleEnvNee;
+        const bool valid = estimateGiSample(primary, sampleSeed, adaptiveClamp, sampleIndirect, sampleEnvNee);
+        // Preserve legacy behaviour on the non-adaptive path: a single invalid sample leaves
+        // the pixel's accumulated value untouched (no write) instead of adding zero.
+        if (maxSamples == 1u && !valid) {
+            return;
+        }
+        // Invalid samples on the adaptive path contribute zero (degenerate/non-finite outcome).
+        sumIndirect += sampleIndirect;
+        sumEnvNee += sampleEnvNee;
+    }
+
+    const float invN = 1.0 / float(sampleCount);
+    hdrImage[px] += float4((sumIndirect + sumEnvNee) * invN, 0.0);
 }

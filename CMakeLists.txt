@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(theia VERSION 0.6.2 LANGUAGES C CXX)
+project(theia VERSION 0.6.7 LANGUAGES C CXX)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
@@ -27,12 +27,12 @@ add_compile_definitions(VK_NO_PROTOTYPES)
 FetchContent_Declare(
     aether
     GIT_REPOSITORY https://github.com/McNopper/Aether.git
-    GIT_TAG v0.5.1
+    GIT_TAG v0.6.7
 )
 FetchContent_Declare(
     harmonia
     GIT_REPOSITORY https://github.com/McNopper/Harmonia.git
-    GIT_TAG v0.6.6
+    GIT_TAG v0.6.7
 )
 FetchContent_MakeAvailable(aether harmonia)
 

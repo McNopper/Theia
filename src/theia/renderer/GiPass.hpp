@@ -70,6 +70,12 @@ class GiPass {
         /// A3(c): σ_t-importance-weighted hero channel selection in the medium walk
         /// (unbiased reweighting). Off → legacy uniform 1/3 channel pick.
         bool useA3ChromaticImportance = true;
+        /// c1: variance-guided adaptive sampling. Upper bound on GI samples per pixel; the
+        /// per-pixel count ramps from 1 up to this with the A-SVGF variance guide. Averaging
+        /// independent samples keeps the estimator unbiased. 1 disables adaptive sampling.
+        /// Only takes effect when gradientVarianceView is bound; otherwise the shader forces 1
+        /// (bit-identical to the legacy single-sample path).
+        uint32_t adaptiveMaxSamples = 4;
     };
 
     GiPass() = default;
@@ -110,7 +116,7 @@ class GiPass {
         uint32_t a3RegularizationEnabled = 1;      ///< A3(a): secondary-bounce roughness regularization
         uint32_t a3ChromaticImportanceEnabled = 1; ///< A3(c): σ_t-weighted hero channel selection
         uint32_t hasGradientVariance = 0;          ///< A3(b): 1 when a real A-SVGF guide is bound
-        uint32_t _pad1 = 0;
+        uint32_t giAdaptiveMaxSamples = 1;         ///< c1: max GI samples/pixel (1 = adaptive sampling off / behavior-preserving)
     };
     static_assert(sizeof(GiPushConstants) == 144);
 
