@@ -91,6 +91,11 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     /// Compute initial yaw/pitch from a camera direction vector.
     static void directionToYawPitch(const glm::vec3& dir, float& yaw, float& pitch);
 
+    /// True in offscreen capture mode (--output set). Offscreen rendering integrates many
+    /// jittered/stochastic samples via progressive accumulation, which is incompatible with
+    /// TAA's temporal-reprojection blend — so TAA is never initialized or run in this mode.
+    [[nodiscard]] bool isOffscreenCapture() const noexcept { return !config().outputFile.empty(); }
+
     /// The ray-query GI compute stage runs whenever enabled and initialized.
     [[nodiscard]] bool giActive() const noexcept {
         return config().rtGi && m_giPass.isInitialized();
@@ -128,6 +133,13 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     /// Previous frame's transposed view-projection matrix for motion vector computation.
     glm::mat4 m_prevViewProj{1.0f};
     bool m_prevViewProjValid = false;
+
+    /// True when the camera view changed this frame (fresh, non-accumulated sample). Gates the
+    /// interactive-window TAA pass: TAA runs only during motion, never on a converged static view.
+    bool m_cameraMoving = false;
+    /// True if TAA ran last frame. Used to force a history-passthrough (firstFrame) when TAA
+    /// resumes after a static period — prevents ghosting from stale history.
+    bool m_taaPrevActive = false;
 
     // Previous view signature, used to reset progressive accumulation on change.
     glm::vec3 m_prevCamPos{0.0f};

@@ -132,8 +132,11 @@ bool Application::onInitialize() {
         m_renderer->setGiEnabled(false);
     }
 
-    // TaaPass — temporal anti-aliasing (runs after MotionVectorPass, before denoiser).
-    if (config().rtGi && m_motionVectorPass.isInitialized()) {
+    // TaaPass — temporal anti-aliasing for the interactive window ONLY. Offscreen capture
+    // integrates jittered/stochastic samples via progressive accumulation; TAA's temporal
+    // reprojection would double-filter that (blur/ghosting), so it is not initialized here
+    // in offscreen mode. See isOffscreenCapture() / onUpdate() motion gate.
+    if (config().rtGi && m_motionVectorPass.isInitialized() && m_useTaa && !isOffscreenCapture()) {
         const TaaPass::Config taaCfg{
             .width         = swapchain().extent().width,
             .height        = swapchain().extent().height,
@@ -576,12 +579,17 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
             mvp.prevInstanceTransformBuffer = m_scene->prevInstanceTransformBuffer().handle();
             m_motionVectorPass.record(cmd, mvp);
         }
-        // C4: TAA after MotionVectorPass, before denoiser.
-        if (m_taaPass.isInitialized() && m_useTaa) {
+        // C4: TAA after MotionVectorPass, before denoiser. Runs only while the camera is
+        // moving — a fresh, non-accumulated frame — because a static view is converged by
+        // progressive accumulation, which TAA would blur (offscreen never initializes TAA).
+        if (m_taaPass.isInitialized() && m_useTaa && m_cameraMoving) {
             m_taaPass.record(cmd, TaaPass::FrameParams{
                 .alpha      = 0.1f,
-                .firstFrame = (frameIndex() == 0),
+                .firstFrame = !m_taaPrevActive,  // passthrough when TAA resumes after static period
             });
+            m_taaPrevActive = true;
+        } else {
+            m_taaPrevActive = false;
         }
     }
 
@@ -707,8 +715,8 @@ void Application::onResize(VkExtent2D extent) noexcept {
         m_renderer->setGiEnabled(false);
     }
 
-    // Reinitialize TaaPass with new extent and views.
-    if (config().rtGi && m_motionVectorPass.isInitialized() && m_useTaa) {
+    // Reinitialize TaaPass with new extent and views (interactive window only).
+    if (config().rtGi && m_motionVectorPass.isInitialized() && m_useTaa && !isOffscreenCapture()) {
         const TaaPass::Config taaCfg{
             .width         = extent.width,
             .height        = extent.height,
@@ -881,12 +889,17 @@ Application::onBeforeSceneStages(VkCommandBuffer renderCmd) noexcept {
     if (m_motionVectorPass.isInitialized()) {
         m_motionVectorPass.record(stagesCmd, m_pendingMvp);
     }
-    // C4: TAA after MotionVectorPass, before denoiser (async path).
-    if (m_taaPass.isInitialized() && m_useTaa) {
+    // C4: TAA after MotionVectorPass, before denoiser (async path). Runs only while the
+    // camera is moving (fresh, non-accumulated frame); a static view is converged by
+    // progressive accumulation, which TAA would blur.
+    if (m_taaPass.isInitialized() && m_useTaa && m_cameraMoving) {
         m_taaPass.record(stagesCmd, TaaPass::FrameParams{
             .alpha      = 0.1f,
-            .firstFrame = (frameIndex() == 0),
+            .firstFrame = !m_taaPrevActive,  // passthrough when TAA resumes after static period
         });
+        m_taaPrevActive = true;
+    } else {
+        m_taaPrevActive = false;
     }
 
     return {stagesCmd, m_asyncSemaphores[slot]};
@@ -1024,6 +1037,10 @@ void Application::onUpdate(float dtSeconds) {
         m_prevEv100 = ev100;
         m_viewSigValid = true;
     }
+    // TAA gate: a changed view means this frame is a fresh, non-accumulated sample where TAA
+    // provides temporal stability; a static view is converged by progressive accumulation, so
+    // TAA is skipped to avoid blurring the converged result.
+    m_cameraMoving = viewChanged;
 
     // Update window title with FPS every second
     static uint64_t fpsLastTick = SDL_GetTicksNS();
