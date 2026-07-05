@@ -5,6 +5,7 @@
 #include "harmonia/core/Logger.hpp"
 
 int main(int argc, char* const argv[]) {
+    Logger::setTag("THEIA");
     harmonia::App::Config config;
     config.title = "Theia \xe2\x80\x94 Real-Time Renderer";
     config.width = 1024;
