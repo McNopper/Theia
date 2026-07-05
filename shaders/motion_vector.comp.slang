@@ -59,10 +59,13 @@ void main(uint3 tid : SV_DispatchThreadID) {
     float4x4 prevT = prevInstanceTransforms[instanceIdx];
     float3 prevWorldPos = mul(prevT, float4(wpos, 1.0)).xyz;
 
-    // Clip-space positions (homogeneous) using VP × world convention.
-    // curViewProj / prevViewProj are glm::transpose(VP), so mul(M, v) = VP × v.
-    float4 curClip  = mul(curViewProj,  float4(wpos, 1.0));
-    float4 prevClip = mul(prevViewProj, float4(prevWorldPos, 1.0));
+    // Clip-space positions (homogeneous).  curViewProj / prevViewProj are
+    // glm::transpose(VP), so the row-vector product mul(v, M) = (VP^T)^T * v = VP * v.
+    // This MUST match the forward mesh shader (forward_render.mesh.slang:
+    // "mul(float4(v.position, 1.0), viewProj)") — using mul(M, v) instead would apply
+    // the transposed projection and yield wrong motion vectors under camera motion.
+    float4 curClip  = mul(float4(wpos, 1.0),         curViewProj);
+    float4 prevClip = mul(float4(prevWorldPos, 1.0), prevViewProj);
 
     // Perspective divide to NDC [-1, 1].
     float2 curNdc  = curClip.xy  / max(curClip.w,  1e-6);

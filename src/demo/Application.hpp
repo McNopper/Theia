@@ -137,9 +137,6 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     /// True when the camera view changed this frame (fresh, non-accumulated sample). Gates the
     /// interactive-window TAA pass: TAA runs only during motion, never on a converged static view.
     bool m_cameraMoving = false;
-    /// True if TAA ran last frame. Used to force a history-passthrough (firstFrame) when TAA
-    /// resumes after a static period — prevents ghosting from stale history.
-    bool m_taaPrevActive = false;
 
     // Previous view signature, used to reset progressive accumulation on change.
     glm::vec3 m_prevCamPos{0.0f};

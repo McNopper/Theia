@@ -582,14 +582,14 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         // C4: TAA after MotionVectorPass, before denoiser. Runs only while the camera is
         // moving — a fresh, non-accumulated frame — because a static view is converged by
         // progressive accumulation, which TAA would blur (offscreen never initializes TAA).
+        // Never force firstFrame on motion resume: the AABB clamp rejects stale history
+        // colours outside the 3×3 neighbourhood, keeping diffuse surfaces clean without
+        // ghosting, so passthrough is not needed and only causes 1-frame noise spikes.
         if (m_taaPass.isInitialized() && m_useTaa && m_cameraMoving) {
             m_taaPass.record(cmd, TaaPass::FrameParams{
                 .alpha      = 0.1f,
-                .firstFrame = !m_taaPrevActive,  // passthrough when TAA resumes after static period
+                .firstFrame = false,
             });
-            m_taaPrevActive = true;
-        } else {
-            m_taaPrevActive = false;
         }
     }
 
@@ -892,14 +892,12 @@ Application::onBeforeSceneStages(VkCommandBuffer renderCmd) noexcept {
     // C4: TAA after MotionVectorPass, before denoiser (async path). Runs only while the
     // camera is moving (fresh, non-accumulated frame); a static view is converged by
     // progressive accumulation, which TAA would blur.
+    // AABB clamp handles stale history — no passthrough needed on motion resume.
     if (m_taaPass.isInitialized() && m_useTaa && m_cameraMoving) {
         m_taaPass.record(stagesCmd, TaaPass::FrameParams{
             .alpha      = 0.1f,
-            .firstFrame = !m_taaPrevActive,  // passthrough when TAA resumes after static period
+            .firstFrame = false,
         });
-        m_taaPrevActive = true;
-    } else {
-        m_taaPrevActive = false;
     }
 
     return {stagesCmd, m_asyncSemaphores[slot]};
