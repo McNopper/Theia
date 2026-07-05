@@ -65,7 +65,7 @@ bool MotionVectorPass::createImage() noexcept {
     auto img = Image::create(*m_ctx,
                               {m_cfg.width, m_cfg.height},
                               VK_FORMAT_R32G32_SFLOAT,
-                              VK_IMAGE_USAGE_STORAGE_BIT,
+                              VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                               VK_IMAGE_ASPECT_COLOR_BIT,
                               "theia.motionVectors");
     if (!img) {

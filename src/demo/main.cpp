@@ -14,6 +14,7 @@ int main(int argc, char* const argv[]) {
 
     bool cameraJitterEnabled = true;
     bool restirDiEnabled = true;
+    bool taaEnabled = true;
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
         if (arg == "--no-camera-jitter") {
@@ -24,11 +25,16 @@ int main(int argc, char* const argv[]) {
             restirDiEnabled = false;
             continue;
         }
+        if (arg == "--no-taa") {
+            taaEnabled = false;
+            continue;
+        }
         static_cast<void>(harmonia::App::applyCommonArg(config, i, argc, argv));
     }
 
     theia::Application app;
     app.setCameraJitterEnabled(cameraJitterEnabled);
     app.setRestirDiEnabled(restirDiEnabled);
+    app.setTaaEnabled(taaEnabled);
     return app.run(std::move(config));
 }

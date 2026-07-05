@@ -53,6 +53,7 @@ set(THEIA_ENTRY_SHADERS
     gi.comp.slang
     motion_vector.comp.slang
     hiz_build.comp.slang
+    taa.comp.slang
 )
 
 # Theia-specific sources only. Common Vulkan code now lives in Harmonia and the
@@ -64,6 +65,7 @@ set(THEIA_LIBRARY_SOURCES
     src/theia/renderer/LightCuller.cpp
     src/theia/renderer/GiPass.cpp
     src/theia/renderer/MotionVectorPass.cpp
+    src/theia/renderer/TaaPass.cpp
     src/theia/renderer/HiZPass.cpp
     # Theia GPU scene (rasterizer/meshlet layout — renderer-specific)
     src/theia/scene/Scene.cpp

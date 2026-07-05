@@ -132,6 +132,22 @@ bool Application::onInitialize() {
         m_renderer->setGiEnabled(false);
     }
 
+    // TaaPass — temporal anti-aliasing (runs after MotionVectorPass, before denoiser).
+    if (config().rtGi && m_motionVectorPass.isInitialized()) {
+        const TaaPass::Config taaCfg{
+            .width         = swapchain().extent().width,
+            .height        = swapchain().extent().height,
+            .hdrImage      = hdrImage().handle(),
+            .hdrView       = hdrImage().view(),
+            .motionVecView = m_motionVectorPass.motionVectorImageView(),
+        };
+        if (!m_taaPass.initialize(deviceContext(), taaCfg)) {
+            Logger::warn("TaaPass failed to initialize — TAA disabled");
+        } else {
+            Logger::info("TaaPass initialized (cross-vendor TAA, alpha=0.1)");
+        }
+    }
+
     // Set up the async compute queue infrastructure when a dedicated compute family
     // is available. GiPass + MotionVectorPass will be dispatched there to overlap
     // with the next frame's raster work on the graphics queue.
@@ -560,6 +576,13 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
             mvp.prevInstanceTransformBuffer = m_scene->prevInstanceTransformBuffer().handle();
             m_motionVectorPass.record(cmd, mvp);
         }
+        // C4: TAA after MotionVectorPass, before denoiser.
+        if (m_taaPass.isInitialized() && m_useTaa) {
+            m_taaPass.record(cmd, TaaPass::FrameParams{
+                .alpha      = 0.1f,
+                .firstFrame = (frameIndex() == 0),
+            });
+        }
     }
 
     // Store current VP for use as prevViewProj next frame.
@@ -630,6 +653,7 @@ void Application::onResize(VkExtent2D extent) noexcept {
     // GBuffer image views that ForwardRenderer::resize() is about to destroy.
     m_giPass.shutdown();
     m_motionVectorPass.shutdown();
+    m_taaPass.shutdown();
 
     // Resize ForwardRenderer: recreates depth/GBuffer at new extent, updates
     // the HDR image handles (App::handleResize has already recreated the HDR image).
@@ -681,6 +705,20 @@ void Application::onResize(VkExtent2D extent) noexcept {
         }
     } else {
         m_renderer->setGiEnabled(false);
+    }
+
+    // Reinitialize TaaPass with new extent and views.
+    if (config().rtGi && m_motionVectorPass.isInitialized() && m_useTaa) {
+        const TaaPass::Config taaCfg{
+            .width         = extent.width,
+            .height        = extent.height,
+            .hdrImage      = hdrImage().handle(),
+            .hdrView       = hdrImage().view(),
+            .motionVecView = m_motionVectorPass.motionVectorImageView(),
+        };
+        if (!m_taaPass.initialize(deviceContext(), taaCfg)) {
+            Logger::warn("TaaPass resize failed — TAA disabled");
+        }
     }
 
     // Invalidate the previous VP on resize so the first post-resize frame uses
@@ -842,6 +880,13 @@ Application::onBeforeSceneStages(VkCommandBuffer renderCmd) noexcept {
     // graphics family. giBuffer is now SHADER_READ_ONLY_OPTIMAL on the graphics queue.
     if (m_motionVectorPass.isInitialized()) {
         m_motionVectorPass.record(stagesCmd, m_pendingMvp);
+    }
+    // C4: TAA after MotionVectorPass, before denoiser (async path).
+    if (m_taaPass.isInitialized() && m_useTaa) {
+        m_taaPass.record(stagesCmd, TaaPass::FrameParams{
+            .alpha      = 0.1f,
+            .firstFrame = (frameIndex() == 0),
+        });
     }
 
     return {stagesCmd, m_asyncSemaphores[slot]};

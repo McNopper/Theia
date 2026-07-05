@@ -14,6 +14,7 @@
 #include "theia/renderer/IblPrecompute.hpp"
 #include "theia/renderer/LightCuller.hpp"
 #include "theia/renderer/MotionVectorPass.hpp"
+#include "theia/renderer/TaaPass.hpp"
 #include "theia/scene/Scene.hpp"
 
 namespace theia {
@@ -34,6 +35,7 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     /// A4: toggle ReSTIR DI spatiotemporal reservoir resampling (default on). When off the
     /// forward pass keeps ownership of emissive direct lighting (bit-identical pre-A4 path).
     void setRestirDiEnabled(bool enabled) noexcept { m_useRestirDi = enabled; }
+    void setTaaEnabled(bool enabled) noexcept { m_useTaa = enabled; }
     // harmonia::IRenderer
     void record(VkCommandBuffer cmd, const harmonia::RenderTarget& target) noexcept override;
     void onResize(VkExtent2D extent) noexcept override;
@@ -98,6 +100,7 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     LightCuller m_lightCuller;
     GiPass m_giPass;
     MotionVectorPass m_motionVectorPass;
+    TaaPass m_taaPass;
     IblPrecompute m_ibl;
     std::unique_ptr<Scene> m_scene = std::make_unique<Scene>();
 
@@ -119,6 +122,7 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     /// lighting (default on). When active the forward pass skips its emissive-derived
     /// rect lights (setRestirDiActive) so GiPass owns that term without double-counting.
     bool m_useRestirDi = true;
+    bool m_useTaa      = true;
     uint32_t m_sceneMaxDepth = 3u;
 
     /// Previous frame's transposed view-projection matrix for motion vector computation.
