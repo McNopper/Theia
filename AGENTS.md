@@ -13,9 +13,11 @@ RT-GI is the only indirect/reflection/occlusion path now.
 
 Pipeline (dependency direction):
 
-```
-Aether (file format)  ->  Harmonia (shared Vulkan lib)  ->  Hyperion (path tracer, ground truth)
-                                                         \-> Theia    (this repo, real-time)
+```mermaid
+flowchart LR
+    A["Aether<br/>file format"] --> H["Harmonia<br/>shared Vulkan lib"]
+    H --> Hy["Hyperion<br/>path tracer · ground truth"]
+    H --> T["<b>Theia</b><br/>real-time renderer (this repo)"]
 ```
 
 Consumes Aether + Harmonia via CMake FetchContent. The demo is a thin `harmonia::App`

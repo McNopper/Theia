@@ -10,12 +10,6 @@ It implements the [OpenPBR Surface v1.1.1](https://academysoftwarefoundation.git
 **Interactive real-time rendering** — explore complex materials, dynamic lighting, and HDR output in real-time.  
 **Architecture driven by [GPU-Driven Rendering](https://vkguide.dev/docs/gpudriven)** — compute-based culling, indirect dispatch, and clustered lighting.
 
-> **Performance scales with GPU tier.** The mesh-shader pipeline and rendering budget are designed to support HDR output across a range of targets — from 1080p/HDR/30fps on mid-range hardware (e.g. RTX 4050) up to 4K/HDR/60fps on high-end desktop GPUs (RTX 4090/5090 class). Development reference platform: **RTX 4050 at 1080p HDR**.
-
-> ⚠️ **Early stage / work in progress.** Theia is under active development. APIs, rendering
-> techniques, and visual output are still evolving, and some features are incomplete or
-> approximate. Expect rough edges and breaking changes.
-
 ---
 
 ## Screenshots
@@ -138,6 +132,13 @@ format reference.
 
 Theia is the **real-time** renderer in a family of four repositories:
 
+```mermaid
+flowchart LR
+    A["Aether<br/>file format"] --> H["Harmonia<br/>shared Vulkan lib"]
+    H --> Hy["Hyperion<br/>path tracer · ground truth"]
+    H --> T["<b>Theia</b><br/>real-time renderer"]
+```
+
 | Repository | Role |
 |------------|------|
 | [Aether](https://github.com/McNopper/Aether) | GPU-agnostic file formats & scene data (`.scene.toml` / `.materials.toml` / OBJ → plain CPU structs); no Vulkan |
@@ -198,9 +199,11 @@ build/theia.exe --scene cornell_classic --output out.exr
 | `--scene <name>` / `-s` | `cornell_classic.scene.toml` | Scene name or path; bare names resolve against the assets directory (also accepted as first positional argument) |
 | `--output <file>` / `-o` | — | Offscreen mode: render and save EXR (untonemapped) + PNG (tonemapped), then exit |
 | `--offscreen-frames <n>` | `4` | Number of frames accumulated/warmed up before offscreen capture is written |
-| `--width <n>` | 1920 | Render width in pixels |
-| `--height <n>` | 1080 | Render height in pixels |
+| `--width <n>` | 1024 | Render width in pixels |
+| `--height <n>` | 768 | Render height in pixels |
 | `--validation` / `--no-validation` | disabled | Enable / disable Vulkan validation layers |
+| `--taa` / `--no-taa` | on | Interactive-window temporal anti-aliasing during camera motion. `--taa` is **incompatible with `--output`** (offscreen uses progressive accumulation); the two must not be combined |
+| `--no-restir-di` | off (ReSTIR DI on) | Disable ReSTIR direct-light importance resampling (debug/baseline) |
 | `--no-postfx` | off | No-op, accepted for CLI compatibility |
 | `--rt-gi` / `--no-rt-gi` | on | Enable / disable the ray-query GI compute stage (use `--no-rt-gi` for debugging baselines) |
 | `--indirect-ambient <x>` | `0.0` | No-op, accepted for CLI compatibility |
