@@ -544,7 +544,14 @@ float3 shadeHitRadianceWithWo(RayHitData hit, float3 wo, float shadowBias) {
     const float3 shadowOrigin = hit.worldPos + N * shadowBias;
 
     float3 directLo = 0.0.xxx;
+    // A4: when ReSTIR DI (bit 1 of giEnabled) owns emissive-triangle direct lighting in the
+    // GI compute pass, skip the forward pass's emissive-derived rect/area lights here to
+    // avoid double-counting. Punctual lights (point/spot/directional) stay analytic.
+    const bool skipRectLights = (giEnabled & 2u) != 0u;
     for (uint i = 0; i < lightCount; ++i) {
+        if (skipRectLights && asuint(lights[i].typeF) == kLightRect) {
+            continue;
+        }
         directLo += shadeOneLight(lights[i], mat, hit.worldPos, wo, N, T, B, shadowOrigin, shadowBias);
     }
 
@@ -558,7 +565,7 @@ float3 shadeHitRadianceWithWo(RayHitData hit, float3 wo, float shadowBias) {
             iblShadow = lerp(1.0, lerp(skyFloor, 1.0, sunVis), sunStrength);
         }
     }
-    const float3 indirectLo = (giEnabled == 0u ? evalIBL(mat, wo, N, T, B) : 0.0.xxx) * iblShadow;
+    const float3 indirectLo = ((giEnabled & 1u) == 0u ? evalIBL(mat, wo, N, T, B) : 0.0.xxx) * iblShadow;
     const float3 emission = mat.emissionColorLum.xyz * mat.emissionColorLum.w;
     return directLo + indirectLo + emission;
 }
@@ -707,6 +714,8 @@ FS_OUT main(FS_IN input) {
         // Tile-based direct lighting (Forward+).
         // When tilesX == 0 (fallback), evaluate all lights directly.
         static const uint kMaxLightsPerTile = 128;
+        // A4: skip emissive-derived rect lights when ReSTIR DI owns emissive direct (bit 1).
+        const bool skipRectLightsT = (giEnabled & 2u) != 0u;
         if (tilesX > 0 && tilesY > 0) {
             const uint tileX = uint(input.pos.x) / 16u;
             const uint tileY = uint(input.pos.y) / 16u;
@@ -716,11 +725,13 @@ FS_OUT main(FS_IN input) {
             for (uint j = 0; j < tileCount; ++j) {
                 const uint i = tileLightIndices[tileId * kMaxLightsPerTile + j];
                 if (i >= lightCount) continue;
+                if (skipRectLightsT && asuint(lights[i].typeF) == kLightRect) continue;
                 directLo += shadeOneLight(lights[i], mat, input.worldPos, wo, N, T, B, shadowOrigin, shadowBias);
             }
         } else {
             // Fallback: evaluate all lights (used when light culler hasn't run).
             for (uint i = 0; i < lightCount; ++i) {
+                if (skipRectLightsT && asuint(lights[i].typeF) == kLightRect) continue;
                 directLo += shadeOneLight(lights[i], mat, input.worldPos, wo, N, T, B, shadowOrigin, shadowBias);
             }
         }
@@ -740,7 +751,7 @@ FS_OUT main(FS_IN input) {
                 iblShadow = 1.0 - sunStrength * (1.0 - skyFloor) * (1.0 - sunVis);
             }
         }
-        if (giEnabled == 0u) {
+        if ((giEnabled & 1u) == 0u) {
             indirectLo += evalIBL(mat, wo, N, T, B) * iblShadow;
 
             const float indirectAmbient = presentationParams.x;

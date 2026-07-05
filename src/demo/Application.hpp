@@ -31,6 +31,9 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
   public:
     ~Application();
     void setCameraJitterEnabled(bool enabled) noexcept { m_cameraJitterEnabled = enabled; }
+    /// A4: toggle ReSTIR DI spatiotemporal reservoir resampling (default on). When off the
+    /// forward pass keeps ownership of emissive direct lighting (bit-identical pre-A4 path).
+    void setRestirDiEnabled(bool enabled) noexcept { m_useRestirDi = enabled; }
     // harmonia::IRenderer
     void record(VkCommandBuffer cmd, const harmonia::RenderTarget& target) noexcept override;
     void onResize(VkExtent2D extent) noexcept override;
@@ -112,6 +115,10 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     ForwardRenderer::CameraParams m_camera{};
     CameraController m_camCtrl{};
     bool m_cameraJitterEnabled = true;
+    /// A4: ReSTIR DI spatiotemporal reservoir resampling for emissive-triangle direct
+    /// lighting (default on). When active the forward pass skips its emissive-derived
+    /// rect lights (setRestirDiActive) so GiPass owns that term without double-counting.
+    bool m_useRestirDi = true;
     uint32_t m_sceneMaxDepth = 3u;
 
     /// Previous frame's transposed view-projection matrix for motion vector computation.

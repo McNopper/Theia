@@ -111,6 +111,9 @@ bool Application::onInitialize() {
         // When GI will run, the forward pass must emit direct+emission only (no IBL/ambient);
         // the GI compute stage supplies the indirect term.
         m_renderer->setGiEnabled(giActive());
+        // A4: when ReSTIR DI is active it owns emissive-triangle direct lighting; tell the
+        // forward pass to skip its emissive-derived rect lights to avoid double-counting.
+        m_renderer->setRestirDiActive(giActive() && m_useRestirDi);
 
         // MotionVectorPass: compute per-pixel motion vectors after GiPass
         // (giBuffer will be in SHADER_READ_ONLY_OPTIMAL at that point).
@@ -369,7 +372,11 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         // bound, otherwise the shader forces a single sample = legacy behaviour).
         gp.adaptiveMaxSamples = 4;
 
-        // Store motion vector params for use in onBeforeSceneStages() (runs on graphics queue).
+        // A4: ReSTIR DI. Motion vectors run AFTER GiPass on the graphics queue, so on the
+        // async path GiPass would read a cross-queue image — bind the zero dummy instead
+        // (static-history temporal reuse; correct for the static offscreen audit).
+        gp.useRestirDi = m_useRestirDi;
+        gp.motionVectorView = VK_NULL_HANDLE;
         m_pendingMvp.curViewProj  = curViewProjT;
         m_pendingMvp.prevViewProj = m_prevViewProjValid ? m_prevViewProj : curViewProjT;
         m_pendingMvp.prevInstanceTransformBuffer = m_scene->prevInstanceTransformBuffer().handle();
@@ -535,6 +542,13 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         // c1: variance-guided adaptive sampling (unbiased; only active when the guide above is
         // bound, otherwise the shader forces a single sample = legacy behaviour).
         gp.adaptiveMaxSamples = 4;
+        // A4: ReSTIR DI direct lighting. MotionVectorPass runs AFTER GiPass and its image is
+        // UNDEFINED on frame 0, so feeding it here would hit layout/WAR hazards. The static
+        // offscreen audit has ~zero motion (dummy → prevPixel == curPixel gives identical
+        // temporal reuse), so the zero dummy is bound; the real view can be wired once the
+        // motion image is guaranteed GENERAL before GiPass (binding 18 is fully in place).
+        gp.useRestirDi = m_useRestirDi;
+        gp.motionVectorView = VK_NULL_HANDLE;
         m_giPass.record(cmd, gp);
 
         // After GiPass, the GI G-buffer is in SHADER_READ_ONLY_OPTIMAL.
@@ -651,6 +665,7 @@ void Application::onResize(VkExtent2D extent) noexcept {
             Logger::warn("GiPass resize failed — ray-query GI disabled");
         }
         m_renderer->setGiEnabled(giActive());
+        m_renderer->setRestirDiActive(giActive() && m_useRestirDi);
 
         // Reinitialize MotionVectorPass with the new GBuffer view and extent.
         if (m_giPass.isInitialized()) {

@@ -41,7 +41,70 @@ cbuffer GiPC {
     uint     a3ChromaticImportanceEnabled; // A3(c): σ_t-importance-weighted hero channel selection
     uint     hasGradientVariance;          // A3(b): 1 when t_gradientVariance holds a real A-SVGF guide
     uint     giAdaptiveMaxSamples;         // c1: max GI samples/pixel for variance-guided adaptive sampling (1 = off)
+    uint     restirDiEnabled;              // A4: 1 = spatiotemporal reservoir DI; 0 = no ReSTIR direct (bit-identical fallback)
+    uint     restirDiSpatial;              // A4: 1 = enable spatial reuse pass (default 0 = initial+temporal only)
+    uint     restirHasMotion;              // A4: 1 = t_motionVectors is a real motion image; 0 = dummy (skip reprojection)
+    uint     _restirPad1;
 };
+
+// ── A4: ReSTIR DI reservoir type ──────────────────────────────────────────────
+// Spatiotemporal Reservoir Resampling for direct illumination (Bitterli et al.
+// 2020). One reservoir per pixel holds the single light sample surviving weighted
+// reservoir sampling (WRS) over this frame's initial candidates + reused history.
+//
+// GPU layout note (the "40-byte pitfall"): the float3 members may be 16-byte
+// aligned by the Slang structured-buffer layout, so the true stride is up to 64
+// bytes. The C++ side allocates a generous per-element stride (see GiPass) that
+// covers whichever layout Slang picks; the CPU never indexes the contents, so
+// only the shader's own read/write consistency and a large-enough allocation
+// matter.
+struct Reservoir {
+    uint   lightIdx;     // emissive-triangle index; 0xFFFFFFFF = empty / env
+    float3 samplePoint;  // world-space point on the chosen light
+    float3 sampleNormal; // light surface normal at samplePoint
+    float  W;            // unbiased contribution weight = w_sum / (M * p_hat(y))
+    float  w_sum;        // running sum of resampling weights
+    uint   M;            // number of candidates this reservoir has seen
+};
+
+static const uint kReservoirEmpty = 0xFFFFFFFFu;
+
+Reservoir makeEmptyReservoir() {
+    Reservoir r;
+    r.lightIdx     = kReservoirEmpty;
+    r.samplePoint  = float3(0.0);
+    r.sampleNormal = float3(0.0, 1.0, 0.0);
+    r.W            = 0.0;
+    r.w_sum        = 0.0;
+    r.M            = 0u;
+    return r;
+}
+
+// Weighted reservoir sampling update. Returns true when the new candidate is kept.
+bool reservoirUpdate(inout Reservoir r, uint lightIdx, float3 samplePt, float3 sampleN,
+                     float weight, inout RngState rng) {
+    r.w_sum += weight;
+    r.M += 1u;
+    if (weight > 0.0 && randFloat(rng) < (weight / max(r.w_sum, 1.0e-10))) {
+        r.lightIdx     = lightIdx;
+        r.samplePoint  = samplePt;
+        r.sampleNormal = sampleN;
+        return true;
+    }
+    return false;
+}
+
+// Rec.709 luminance for the ReSTIR target function (Bitterli 2020 §5.2). Any
+// positive scalar target keeps the estimator unbiased; the choice only affects
+// variance, so a fixed luminance is used regardless of working colour space.
+float restirTargetLuma(float3 c) {
+    return max(dot(c, float3(0.2126, 0.7152, 0.0722)), 0.0);
+}
+
+// Unshadowed target PDF p_hat(y) = |L_e * bsdf * cos| / dist^2 (scalar, unnormalised).
+float targetPdf(float3 Le, float3 bsdfTimesCos, float dist2) {
+    return restirTargetLuma(Le * bsdfTimesCos) / max(dist2, 1.0e-6);
+}
 
 [[vk::binding(0, 0)]]  RaytracingAccelerationStructure       t_tlas;
 [[vk::binding(1, 0)]]  RWTexture2D<float4>                   hdrImage;
@@ -59,6 +122,12 @@ cbuffer GiPC {
 [[vk::binding(13, 0)]] Sampler2D                             t_bindless[];
 [[vk::binding(14, 0)]] StructuredBuffer<float>              emissiveCdf;        // power-proportional NEE selection CDF
 [[vk::binding(15, 0)]] Texture2D<float2>                    t_gradientVariance; // R=gradient, G=variance (from A-SVGF); 1×1 dummy when unavailable
+
+// A4: ReSTIR DI reservoir ping-pong buffers + motion vectors.
+// Layout: one Reservoir per pixel, indexed [y * screenWidth + x].
+[[vk::binding(16, 0)]] RWStructuredBuffer<Reservoir>       t_reservoirsCur;    // current-frame write (and spatial read)
+[[vk::binding(17, 0)]] StructuredBuffer<Reservoir>         t_reservoirsPrev;   // previous-frame read (temporal reuse)
+[[vk::binding(18, 0)]] Texture2D<float2>                   t_motionVectors;    // screen-space (dx,dy) in pixels; 1×1 dummy → zero motion
 
 // Per-sample firefly clamp on the indirect contribution (display-referred, post-exposure),
 // matching the forward pass kFireflyClampDisplay threshold.
@@ -328,6 +397,223 @@ SurfaceHit makeSurfaceHit(GiHit h, float3 wo) {
     surf.mat = mat;
     surf.wo = wo;
     return surf;
+}
+
+// ── A4: ReSTIR DI evaluation helpers ──────────────────────────────────────────
+
+/// Evaluation of a reservoir's chosen emissive-triangle sample AT a given surface:
+/// re-derives L_e, bsdf·cos, squared distance and the incident direction from the
+/// stored world-space sample point/normal. Used both for the target PDF (p_hat) and
+/// for the final shaded contribution. `valid=false` when the sample is behind the
+/// surface or the emitter's back face (contributes nothing).
+struct RestirSampleEval {
+    float3 Le;        // emitter radiance
+    float3 bsdfCos;   // bsdf(wo,wi) * cos(theta_surface)
+    float  dist2;     // |samplePoint - surf.position|^2
+    float  dist;      // sqrt(dist2)
+    float3 wi;        // normalized surface->light direction
+    bool   valid;
+};
+
+RestirSampleEval evalReservoirSample(SurfaceHit surf, uint lightIdx,
+                                     float3 samplePoint, float3 sampleNormal) {
+    RestirSampleEval e;
+    e.Le = 0.0.xxx; e.bsdfCos = 0.0.xxx; e.dist2 = 0.0; e.dist = 0.0; e.wi = 0.0.xxx; e.valid = false;
+    if (lightIdx >= emissiveTriangleCount) {
+        return e;
+    }
+    GpuEmissiveTriangle tri = emissiveTriangles[lightIdx];
+    float3 Le = float3(tri.edge1_emitR.w, tri.edge2_emitG.w, tri.normal_emitB.w);
+
+    float3 toLight = samplePoint - surf.position;
+    float  dist2   = dot(toLight, toLight);
+    float  dist    = sqrt(max(dist2, 1.0e-12));
+    float3 wi      = toLight / max(dist, 1.0e-6);
+    float  cosI    = dot(wi, surf.normal);
+    float  cosL    = dot(-wi, sampleNormal);
+    if (cosI <= 0.0 || cosL <= 0.0) {
+        return e;
+    }
+    float3 bsdf = evalBSDF(surf.mat, surf.wo, wi,
+        surf.normal, surf.T, surf.B, surf.coatN, surf.coatT, surf.coatB);
+    e.Le      = Le;
+    e.bsdfCos = bsdf * cosI;
+    e.dist2   = dist2;
+    e.dist    = dist;
+    e.wi      = wi;
+    e.valid   = true;
+    return e;
+}
+
+/// Draw one initial light candidate via the power-proportional emissive CDF
+/// (the A0b selection), sample a point on the triangle (Shirley sqrt-folding), and
+/// return its solid-angle source PDF. Mirrors evalEmissiveTriangleNEE's sampling so
+/// the RIS source distribution matches the legacy single-sample estimator.
+struct RestirCandidate {
+    uint   lightIdx;
+    float3 samplePoint;
+    float3 sampleNormal;
+    float  solidPdf;    // solid-angle PDF of drawing this sample (p_source)
+    bool   valid;
+};
+
+RestirCandidate sampleEmissiveCandidate(SurfaceHit surf, inout RngState seed) {
+    RestirCandidate c;
+    c.lightIdx = kReservoirEmpty; c.samplePoint = 0.0.xxx;
+    c.sampleNormal = float3(0.0, 1.0, 0.0); c.solidPdf = 0.0; c.valid = false;
+    if (emissiveTriangleCount == 0u) {
+        return c;
+    }
+
+    // Power-proportional triangle selection (binary search on the prefix-sum CDF).
+    float u  = randFloat(seed);
+    uint  lo = 0u;
+    uint  hi = emissiveTriangleCount - 1u;
+    for (uint step = 0u; step < 20u; ++step) {
+        if (lo >= hi) { break; }
+        uint mid = (lo + hi) / 2u;
+        if (emissiveCdf[mid] < u) { lo = mid + 1u; } else { hi = mid; }
+    }
+    uint triIdx = min(lo, emissiveTriangleCount - 1u);
+    float triPdf = (triIdx == 0u) ? emissiveCdf[0] : (emissiveCdf[triIdx] - emissiveCdf[triIdx - 1u]);
+    if (triPdf <= 0.0) { triPdf = 1.0 / float(emissiveTriangleCount); }
+
+    GpuEmissiveTriangle tri = emissiveTriangles[triIdx];
+    float3 v0    = tri.v0_area.xyz;
+    float  area  = tri.v0_area.w;
+    float3 edge1 = tri.edge1_emitR.xyz;
+    float3 edge2 = tri.edge2_emitG.xyz;
+    float3 lNorm = tri.normal_emitB.xyz;
+
+    float  sqrtU = sqrt(randFloat(seed));
+    float  xi    = randFloat(seed);
+    float3 bary  = float3(1.0 - sqrtU, sqrtU * (1.0 - xi), sqrtU * xi);
+    float3 lPos  = v0 + edge1 * bary.y + edge2 * bary.z;
+
+    float3 toLight = lPos - surf.position;
+    float  dist    = length(toLight);
+    float3 wi      = toLight / max(dist, 1.0e-6);
+    float  cosLight = dot(-wi, lNorm);
+    if (cosLight <= 0.0 || area <= 0.0) {
+        return c;
+    }
+    // Area PDF (power-weighted) → solid-angle PDF.
+    float areaPdf  = triPdf / area;
+    float solidPdf = areaPdf * dist * dist / cosLight;
+
+    c.lightIdx     = triIdx;
+    c.samplePoint  = lPos;
+    c.sampleNormal = lNorm;
+    c.solidPdf     = solidPdf;
+    c.valid        = solidPdf > 0.0;
+    return c;
+}
+
+/// Combine a source reservoir into the destination (Bitterli 2020, Alg. 4). The
+/// source's chosen sample is re-weighted by its target PDF evaluated AT the current
+/// surface (passed in via Le/bsdfCos/dist2) times its stored W and history length M.
+void combineTwoReservoirs(inout Reservoir r_dst, Reservoir r_src,
+                          float3 Le_src, float3 bsdfCos_src, float dist2_src,
+                          inout RngState rng) {
+    float p_hat_at_cur = targetPdf(Le_src, bsdfCos_src, dist2_src);
+    float w = p_hat_at_cur * r_src.W * float(r_src.M);
+    r_dst.M += r_src.M;
+    r_dst.w_sum += w;
+    if (w > 0.0 && randFloat(rng) < w / max(r_dst.w_sum, 1.0e-10)) {
+        r_dst.lightIdx     = r_src.lightIdx;
+        r_dst.samplePoint  = r_src.samplePoint;
+        r_dst.sampleNormal = r_src.sampleNormal;
+    }
+}
+
+/// A4 ReSTIR DI direct-lighting estimate for the primary surface.
+/// Runs initial-candidate RIS (kRestirInitialCandidates) via the power CDF, optional
+/// temporal reuse of the reprojected previous-frame reservoir (M-capped), computes the
+/// unbiased weight W, traces ONE shadow ray, and returns the throughput-free direct
+/// radiance (pre-exposure). The final reservoir is written to t_reservoirsCur[pixelIdx]
+/// for next-frame temporal reuse (kept valid with full M even when this frame's sample
+/// is shadowed, so history survives). Emissive-triangle direct only; env/analytic remain
+/// owned by their existing paths.
+float3 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
+    const uint kRestirInitialCandidates = 8u;
+    const uint kRestirMCap = 20u;
+    const uint pixelIdx = px.y * screenWidth + px.x;
+
+    Reservoir r = makeEmptyReservoir();
+
+    // ── Initial candidates (RIS): draw N unshadowed light samples, weight by
+    //    p_hat/p_source, and stream them through weighted reservoir sampling. ──
+    for (uint i = 0u; i < kRestirInitialCandidates; ++i) {
+        RestirCandidate cand = sampleEmissiveCandidate(primary, rng);
+        if (!cand.valid) {
+            r.M += 1u; // count the attempt to keep M consistent with candidate budget
+            continue;
+        }
+        RestirSampleEval e = evalReservoirSample(primary, cand.lightIdx, cand.samplePoint, cand.sampleNormal);
+        float weight = 0.0;
+        if (e.valid) {
+            float p_hat = targetPdf(e.Le, e.bsdfCos, e.dist2);
+            weight = p_hat / max(cand.solidPdf, 1.0e-10);
+        }
+        reservoirUpdate(r, cand.lightIdx, cand.samplePoint, cand.sampleNormal, weight, rng);
+    }
+
+    // ── Temporal reuse: reproject via motion vectors, merge the previous reservoir. ──
+    {
+        float2 mv = 0.0.xx;
+        if (restirHasMotion != 0u) {
+            mv = t_motionVectors.Load(int3(int(px.x), int(px.y), 0)); // screen-space pixels
+        }
+        int2 prevCoord = int2(int(px.x) - int(round(mv.x)), int(px.y) - int(round(mv.y)));
+        if (prevCoord.x >= 0 && prevCoord.y >= 0 &&
+            prevCoord.x < int(screenWidth) && prevCoord.y < int(screenHeight)) {
+            uint prevIdx = uint(prevCoord.y) * screenWidth + uint(prevCoord.x);
+            Reservoir prev = t_reservoirsPrev[prevIdx];
+            if (prev.lightIdx != kReservoirEmpty && prev.M > 0u) {
+                prev.M = min(prev.M, kRestirMCap); // cap history length to bound temporal bias
+                RestirSampleEval pe = evalReservoirSample(primary, prev.lightIdx, prev.samplePoint, prev.sampleNormal);
+                if (pe.valid) {
+                    combineTwoReservoirs(r, prev, pe.Le, pe.bsdfCos, pe.dist2, rng);
+                } else {
+                    r.M += prev.M; // account for history even if its sample is now invalid
+                }
+            }
+        }
+    }
+
+    // NOTE: M is deliberately NOT re-capped here. The temporal history is bounded by
+    // capping the PREVIOUS reservoir's M (above) before it contributes to w_sum; re-capping
+    // the combined M while w_sum reflects the full candidate count would make W diverge over
+    // accumulated frames. The stored M (kRestirInitialCandidates + capped history) stays
+    // bounded on its own and is re-capped when reused next frame.
+
+    // ── Final unbiased weight W = w_sum / (M * p_hat(y_chosen)). ──
+    float3 contribution = 0.0.xxx;
+    RestirSampleEval fe = evalReservoirSample(primary, r.lightIdx, r.samplePoint, r.sampleNormal);
+    if (r.lightIdx != kReservoirEmpty && fe.valid && r.M > 0u) {
+        float p_hat_final = targetPdf(fe.Le, fe.bsdfCos, fe.dist2);
+        r.W = r.w_sum / max(float(r.M) * p_hat_final, 1.0e-10);
+
+        // Single shadow ray to the chosen sample (unbiased single-shadow-ray scheme):
+        // if occluded, W contributes nothing this frame but the reservoir survives with
+        // full M for next-frame temporal reuse.
+        TheiaTracer tracer;
+        float3 shadowOrigin = primary.position + primary.geoNormal * kRayEpsilon;
+        float  shadowTMax   = max(fe.dist - kRayEpsilon * (1.0 + dot(primary.geoNormal, fe.wi)), 0.0);
+        if (tracer.traceOccluded(shadowOrigin, fe.wi, shadowTMax)) {
+            contribution = fe.Le * fe.bsdfCos * r.W; // f(y) * W, f = Le * bsdf * cos
+        }
+    } else {
+        r.W = 0.0;
+    }
+
+    if (!all(isfinite(contribution)) || any(isnan(contribution))) {
+        contribution = 0.0.xxx;
+    }
+    contribution = max(contribution, 0.0.xxx);
+
+    t_reservoirsCur[pixelIdx] = r;
+    return contribution;
 }
 
 /// One independent GI estimate for a reconstructed primary surface: primary-vertex env NEE +
@@ -634,6 +920,26 @@ void main(uint3 tid : SV_DispatchThreadID) {
         sampleCount = 1u + uint(float(maxSamples - 1u) * t + 0.5);
     }
 
+    // A4: ReSTIR DI direct lighting from emissive triangles at the primary vertex.
+    // Runs ONCE per pixel (independent of c1 adaptive sampling, which only spawns extra
+    // indirect samples) and writes this pixel's reservoir for next-frame temporal reuse.
+    // Gated by restirDiEnabled: when 0 the reservoir buffers are untouched and the direct
+    // term is 0 (the forward pass keeps ownership of emissive direct — bit-identical
+    // fallback). When active the forward pass skips its emissive-derived rect lights so
+    // this contribution replaces (does not double-count) that term.
+    float3 restirDirect = 0.0.xxx;
+    if (restirDiEnabled != 0u && emissiveTriangleCount > 0u) {
+        RngState restirSeed = composeRngSeed(px, frameSampleIndex, 0xA4u, rngBaseSeed);
+        restirDirect = restirDiDirect(primary, px, restirSeed) * exposure;
+        if (!all(isfinite(restirDirect)) || any(isnan(restirDirect))) {
+            restirDirect = 0.0.xxx;
+        }
+        // Hard firefly ceiling matching the indirect path (adaptiveClamp*3). A degenerate
+        // reservoir weight on a near-specular surface can spike W; this removes the outlier
+        // without the soft rescale that would bias the smooth direct term.
+        restirDirect = clamp(restirDirect, 0.0.xxx, (adaptiveClamp * 3.0).xxx);
+    }
+
     float3 sumIndirect = 0.0.xxx;
     float3 sumEnvNee = 0.0.xxx;
     for (uint s = 0u; s < sampleCount; ++s) {
@@ -644,8 +950,12 @@ void main(uint3 tid : SV_DispatchThreadID) {
         float3 sampleEnvNee;
         const bool valid = estimateGiSample(primary, sampleSeed, adaptiveClamp, sampleIndirect, sampleEnvNee);
         // Preserve legacy behaviour on the non-adaptive path: a single invalid sample leaves
-        // the pixel's accumulated value untouched (no write) instead of adding zero.
+        // the pixel's accumulated indirect value untouched. The ReSTIR direct term (computed
+        // and reservoir-persisted above) is still composited so DI keeps converging.
         if (maxSamples == 1u && !valid) {
+            if (restirDiEnabled != 0u) {
+                hdrImage[px] += float4(restirDirect, 0.0);
+            }
             return;
         }
         // Invalid samples on the adaptive path contribute zero (degenerate/non-finite outcome).
@@ -654,5 +964,5 @@ void main(uint3 tid : SV_DispatchThreadID) {
     }
 
     const float invN = 1.0 / float(sampleCount);
-    hdrImage[px] += float4((sumIndirect + sumEnvNee) * invN, 0.0);
+    hdrImage[px] += float4((sumIndirect + sumEnvNee) * invN + restirDirect, 0.0);
 }

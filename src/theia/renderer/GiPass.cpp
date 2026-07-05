@@ -74,6 +74,45 @@ bool GiPass::initialize(const DeviceContext& ctx, const Config& cfg, const char*
     }
     m_dummyGradientVariance = std::move(*dummyGrad);
 
+    // A4: 1×1 R32G32F zero placeholder for the motion-vector binding (18) when no real
+    // motion vectors are wired (static-history temporal reuse).
+    auto dummyMotion = Image::create(ctx,
+                                     {1U, 1U},
+                                     VK_FORMAT_R32G32_SFLOAT,
+                                     VK_IMAGE_USAGE_SAMPLED_BIT,
+                                     VK_IMAGE_ASPECT_COLOR_BIT,
+                                     "theia.gi.dummyMotionVectors");
+    if (!dummyMotion) {
+        Logger::error("GiPass: failed to create dummy motion-vector image: VkResult {}",
+                      static_cast<int>(dummyMotion.error()));
+        return false;
+    }
+    m_dummyMotionVectors = std::move(*dummyMotion);
+
+    // A4: ReSTIR DI reservoir ping-pong buffers. Sized to hold one Reservoir per pixel
+    // at a generous stride (kReservoirStride) covering the Slang struct layout.
+    const VkDeviceSize reservoirBytes =
+        static_cast<VkDeviceSize>(cfg.width) * static_cast<VkDeviceSize>(cfg.height) * kReservoirStride;
+    if (reservoirBytes > 0) {
+        for (int i = 0; i < 2; ++i) {
+            auto buf = Buffer::create(ctx,
+                                      reservoirBytes,
+                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                      VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                      "theia.gi.restirReservoir");
+            if (!buf) {
+                Logger::error("GiPass: failed to create ReSTIR reservoir buffer: VkResult {}",
+                              static_cast<int>(buf.error()));
+                return false;
+            }
+            m_reservoirBuf[i] = std::move(*buf);
+        }
+    }
+    m_reservoirPingPong = 0;
+    m_reservoirsCleared = false;
+    m_dummyMotionReady = false;
+    m_boundMotionVectorView = VK_NULL_HANDLE;
+
     if (!createDescriptors()) {
         return false;
     }
@@ -90,6 +129,13 @@ void GiPass::shutdown() {
     const VkDevice device = m_ctx->device;
     m_dummyGradientVariance = {};
     m_dummyGradientReady = false;
+    m_dummyMotionVectors = {};
+    m_dummyMotionReady = false;
+    m_reservoirBuf[0] = {};
+    m_reservoirBuf[1] = {};
+    m_reservoirsCleared = false;
+    m_reservoirPingPong = 0;
+    m_boundMotionVectorView = VK_NULL_HANDLE;
     if (m_pipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(device, m_pipeline, nullptr);
         m_pipeline = VK_NULL_HANDLE;
@@ -117,7 +163,7 @@ void GiPass::shutdown() {
 }
 
 bool GiPass::createDescriptors() {
-    const std::array<VkDescriptorSetLayoutBinding, 16> bindings{{
+    const std::array<VkDescriptorSetLayoutBinding, 19> bindings{{
         {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // TLAS
         {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // hdr (RW)
         {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // giBuffer
@@ -134,15 +180,19 @@ bool GiPass::createDescriptors() {
         {13, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // textures
         {14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},            // emissive power CDF
         {15, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},             // A3(b) gradient/variance
+        {16, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},            // A4 reservoirs (cur, RW)
+        {17, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},            // A4 reservoirs (prev, RO)
+        {18, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},             // A4 motion vectors
     }};
 
     constexpr VkDescriptorBindingFlags kUpdateAfterBind = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
     constexpr VkDescriptorBindingFlags kTextureFlags =
         VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
-    const std::array<VkDescriptorBindingFlags, 16> bindingFlags{
+    const std::array<VkDescriptorBindingFlags, 19> bindingFlags{
         kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind,
         kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind,
-        kUpdateAfterBind, kTextureFlags, kUpdateAfterBind, kUpdateAfterBind};
+        kUpdateAfterBind, kTextureFlags, kUpdateAfterBind, kUpdateAfterBind,
+        kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = static_cast<uint32_t>(bindingFlags.size()),
@@ -164,9 +214,9 @@ bool GiPass::createDescriptors() {
     const std::array<VkDescriptorPoolSize, 6> poolSizes{{
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
-        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 4},
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 5},   // 2,3,4,15 + 18 (motion)
         {VK_DESCRIPTOR_TYPE_SAMPLER, 1},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 8},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 10}, // 6,7,8,9,10,11,12,14 + 16,17 (reservoirs)
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures},
     }};
     const VkDescriptorPoolCreateInfo poolInfo{
@@ -347,6 +397,37 @@ void GiPass::updateDescriptors(const FrameParams& params) {
     vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(allWrites.size()), allWrites.data(), 0, nullptr);
 }
 
+void GiPass::updateRestirDescriptors(const FrameParams& params) {
+    // A4: bindings 16 (cur reservoir, written this frame), 17 (prev reservoir, read for
+    // temporal reuse) and 18 (motion vectors). Rewritten every frame because the reservoir
+    // ping-pong flips and the motion view can change; all three are UPDATE_AFTER_BIND.
+    if (!m_reservoirBuf[0].isValid() || !m_reservoirBuf[1].isValid()) {
+        return;
+    }
+    const uint32_t cur = m_reservoirPingPong;
+    const uint32_t prev = 1u - m_reservoirPingPong;
+    const VkDescriptorBufferInfo curInfo{m_reservoirBuf[cur].handle(), 0, VK_WHOLE_SIZE};
+    const VkDescriptorBufferInfo prevInfo{m_reservoirBuf[prev].handle(), 0, VK_WHOLE_SIZE};
+
+    const VkImageView motionView =
+        (params.motionVectorView != VK_NULL_HANDLE) ? params.motionVectorView : m_dummyMotionVectors.view();
+    const VkDescriptorImageInfo motionInfo{
+        .imageView = motionView,
+        .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+    };
+
+    const std::array<VkWriteDescriptorSet, 3> writes{{
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 16, 0, 1,
+         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &curInfo, nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 17, 0, 1,
+         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &prevInfo, nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 18, 0, 1,
+         VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &motionInfo, nullptr, nullptr},
+    }};
+    vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    m_boundMotionVectorView = motionView;
+}
+
 bool GiPass::descriptorsDirty(const FrameParams& params) const {
     return m_boundScene != params.scene || m_boundEnvMapView != params.envMapView || m_boundEnvSampler != params.envSampler ||
            m_boundEnvMarginalCdf != params.envMarginalCdf || m_boundEnvConditionalCdf != params.envConditionalCdf ||
@@ -381,6 +462,48 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         m_dummyGradientReady = true;
     }
 
+    // A4: one-time layout transition for the 1×1 dummy motion-vector placeholder.
+    if (!m_dummyMotionReady && m_dummyMotionVectors.isValid()) {
+        m_dummyMotionVectors.transition(cmd,
+                                        VK_IMAGE_LAYOUT_UNDEFINED,
+                                        VK_IMAGE_LAYOUT_GENERAL,
+                                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+                                        VK_ACCESS_2_NONE,
+                                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                        VK_ACCESS_2_SHADER_READ_BIT);
+        m_dummyMotionReady = true;
+    }
+
+    // A4: one-time zero-fill of both reservoir buffers so uninitialized entries read as
+    // empty (M == 0 → skipped by temporal reuse; no garbage samples injected).
+    if (!m_reservoirsCleared && m_reservoirBuf[0].isValid() && m_reservoirBuf[1].isValid()) {
+        vkCmdFillBuffer(cmd, m_reservoirBuf[0].handle(), 0, VK_WHOLE_SIZE, 0u);
+        vkCmdFillBuffer(cmd, m_reservoirBuf[1].handle(), 0, VK_WHOLE_SIZE, 0u);
+        const std::array<VkBufferMemoryBarrier2, 2> fillBarriers{{
+            {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+             .srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT, .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+             .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+             .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
+             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+             .buffer = m_reservoirBuf[0].handle(), .offset = 0, .size = VK_WHOLE_SIZE},
+            {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+             .srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT, .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+             .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+             .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
+             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+             .buffer = m_reservoirBuf[1].handle(), .offset = 0, .size = VK_WHOLE_SIZE},
+        }};
+        const VkDependencyInfo fillDep{
+            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .bufferMemoryBarrierCount = static_cast<uint32_t>(fillBarriers.size()),
+            .pBufferMemoryBarriers = fillBarriers.data(),
+        };
+        vkCmdPipelineBarrier2(cmd, &fillDep);
+        m_reservoirsCleared = true;
+    }
+
+    // A4: rebind the reservoir ping-pong + motion vectors for this frame.
+    updateRestirDescriptors(params);
     // ---- Barriers: forward attachments -> compute inputs/outputs ----
     if (!skipPreBarriers) {
         const std::array<VkImageMemoryBarrier2, 3> preBarriers{{
@@ -434,6 +557,9 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         .a3ChromaticImportanceEnabled = params.useA3ChromaticImportance ? 1u : 0u,
         .hasGradientVariance = (params.gradientVarianceView != VK_NULL_HANDLE) ? 1u : 0u,
         .giAdaptiveMaxSamples = std::max(1u, params.adaptiveMaxSamples),
+        .restirDiEnabled = (params.useRestirDi && m_reservoirBuf[0].isValid()) ? 1u : 0u,
+        .restirDiSpatial = params.useRestirDiSpatial ? 1u : 0u,
+        .restirHasMotion = (params.motionVectorView != VK_NULL_HANDLE) ? 1u : 0u,
     };
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
@@ -443,6 +569,9 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
     const uint32_t gx = (m_cfg.width + 7u) / 8u;
     const uint32_t gy = (m_cfg.height + 7u) / 8u;
     vkCmdDispatch(cmd, gx, gy, 1);
+
+    // A4: flip the reservoir ping-pong so this frame's "current" becomes next frame's "prev".
+    m_reservoirPingPong = 1u - m_reservoirPingPong;
 }
 
 } // namespace theia

@@ -5,6 +5,7 @@
 #include <glm/glm.hpp>
 
 #include "harmonia/DeviceContext.hpp"
+#include "harmonia/core/Buffer.hpp"
 #include "harmonia/core/Image.hpp"
 
 class Scene;
@@ -76,6 +77,20 @@ class GiPass {
         /// Only takes effect when gradientVarianceView is bound; otherwise the shader forces 1
         /// (bit-identical to the legacy single-sample path).
         uint32_t adaptiveMaxSamples = 4;
+
+        /// A4: ReSTIR DI — spatiotemporal reservoir resampling for emissive-triangle
+        /// direct lighting at the primary vertex. When true the shader replaces the
+        /// forward pass's emissive-derived rect-light term (the forward pass must be
+        /// told to skip those lights to avoid double-counting). When false the reservoir
+        /// buffers are untouched and behaviour is bit-identical to the pre-A4 path.
+        bool useRestirDi = true;
+        /// A4: enable the (optional) spatial reuse follow-on. Default off — initial
+        /// candidates + temporal reuse only, which avoids the single-pass spatial race.
+        bool useRestirDiSpatial = false;
+        /// A4: screen-space motion vectors (R32G32F, pixel-space dx/dy) for temporal
+        /// reprojection. VK_NULL_HANDLE → a 1×1 zero dummy is bound (static-history
+        /// reuse: previous reservoir read at the same pixel).
+        VkImageView motionVectorView = VK_NULL_HANDLE;
     };
 
     GiPass() = default;
@@ -117,12 +132,17 @@ class GiPass {
         uint32_t a3ChromaticImportanceEnabled = 1; ///< A3(c): σ_t-weighted hero channel selection
         uint32_t hasGradientVariance = 0;          ///< A3(b): 1 when a real A-SVGF guide is bound
         uint32_t giAdaptiveMaxSamples = 1;         ///< c1: max GI samples/pixel (1 = adaptive sampling off / behavior-preserving)
+        uint32_t restirDiEnabled = 0;              ///< A4: 1 = spatiotemporal reservoir DI; 0 = bit-identical fallback
+        uint32_t restirDiSpatial = 0;              ///< A4: 1 = enable spatial reuse (default 0 = initial+temporal only)
+        uint32_t restirHasMotion = 0;              ///< A4: 1 = real motion image bound; 0 = dummy (skip reprojection)
+        uint32_t _restirPad1 = 0;
     };
-    static_assert(sizeof(GiPushConstants) == 144);
+    static_assert(sizeof(GiPushConstants) == 160);
 
     [[nodiscard]] bool createDescriptors();
     [[nodiscard]] bool createPipeline(const char* giSpv);
     void updateDescriptors(const FrameParams& params);
+    void updateRestirDescriptors(const FrameParams& params); ///< A4: per-frame bindings 16/17/18 (ping-pong + motion)
     [[nodiscard]] bool descriptorsDirty(const FrameParams& params) const;
 
     const DeviceContext* m_ctx = nullptr;
@@ -148,6 +168,18 @@ class GiPass {
     /// shader never reads it.
     Image m_dummyGradientVariance{};
     bool m_dummyGradientReady = false; ///< one-time UNDEFINED → GENERAL transition done
+
+    // A4: ReSTIR DI reservoir ping-pong buffers (binding 16 = current write, 17 = prev
+    // read) and a 1×1 zero motion-vector placeholder (binding 18). The reservoir stride
+    // is allocated generously (kReservoirStride) so it covers whichever std430-ish struct
+    // layout Slang picks — the CPU never indexes the contents.
+    static constexpr VkDeviceSize kReservoirStride = 64; ///< >= Slang Reservoir stride (float3 may be 16-aligned)
+    Buffer m_reservoirBuf[2]{};
+    uint32_t m_reservoirPingPong = 0;  ///< index of the buffer written THIS frame
+    bool m_reservoirsCleared = false;  ///< one-time zero-fill of both reservoir buffers
+    Image m_dummyMotionVectors{};      ///< 1×1 R32G32F zero placeholder for binding 18
+    bool m_dummyMotionReady = false;
+    VkImageView m_boundMotionVectorView = VK_NULL_HANDLE;
 };
 
 } // namespace theia

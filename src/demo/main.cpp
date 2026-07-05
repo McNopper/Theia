@@ -13,10 +13,15 @@ int main(int argc, char* const argv[]) {
     config.sceneFile = "cornell_classic.scene.toml";
 
     bool cameraJitterEnabled = true;
+    bool restirDiEnabled = true;
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
         if (arg == "--no-camera-jitter") {
             cameraJitterEnabled = false;
+            continue;
+        }
+        if (arg == "--no-restir-di") {
+            restirDiEnabled = false;
             continue;
         }
         static_cast<void>(harmonia::App::applyCommonArg(config, i, argc, argv));
@@ -24,5 +29,6 @@ int main(int argc, char* const argv[]) {
 
     theia::Application app;
     app.setCameraJitterEnabled(cameraJitterEnabled);
+    app.setRestirDiEnabled(restirDiEnabled);
     return app.run(std::move(config));
 }

@@ -89,7 +89,16 @@ class ForwardRenderer {
     void setIndirectAmbient(float strength) noexcept { m_indirectAmbientStrength = std::max(0.0f, strength); }
     /// When the ray-query GI compute stage (GiPass) is active it supplies indirect
     /// lighting, so the forward pass must skip its flat-IBL / ambient approximation.
-    void setGiEnabled(bool enabled) noexcept { m_giEnabled = enabled ? 1U : 0U; }
+    /// Encoded as bit 0 of the `giEnabled` push constant (bit 1 = ReSTIR DI active).
+    void setGiEnabled(bool enabled) noexcept {
+        m_giEnabled = (m_giEnabled & ~1U) | (enabled ? 1U : 0U);
+    }
+    /// A4: when ReSTIR DI owns emissive-triangle direct lighting (in GiPass), the forward
+    /// pass must skip its emissive-derived rect/area lights to avoid double-counting.
+    /// Encoded as bit 1 of the `giEnabled` push constant. Punctual lights are unaffected.
+    void setRestirDiActive(bool active) noexcept {
+        m_giEnabled = (m_giEnabled & ~2U) | (active ? 2U : 0U);
+    }
     /// Max transparent gather depth for coverage/transmission rays (scene max_depth).
     void setTransparentMaxDepth(uint32_t depth) noexcept { m_transparentMaxDepth = std::max(1u, depth); }
     /// Per-frame RNG state plumbed into shader push constants.
