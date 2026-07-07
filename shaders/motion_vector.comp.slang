@@ -20,8 +20,9 @@
 
 [[vk::push_constant]]
 cbuffer MotionVectorPC {
-    float4x4 curViewProj;   // row-major (slang-math convention) VP for current frame
-    float4x4 prevViewProj;  // row-major (slang-math convention) VP for previous frame
+    float4x4 curViewProj;     // row-major (slang-math convention) VP for current frame
+    float4x4 prevViewProj;    // row-major (slang-math convention) VP for previous frame
+    float4x4 invCurViewProj;  // row-major inverse of curViewProj (background reprojection)
 };
 
 // GI GBuffer: xyz = world-space primary hit position, w = asfloat(instanceIdx+1); 0 = sky.
@@ -48,7 +49,27 @@ void main(uint3 tid : SV_DispatchThreadID) {
     bool hasHit = (instanceIdxPlus1 > 0u);
 
     if (!hasHit) {
-        t_motionVec[tid.xy] = float2(0.0, 0.0);
+        // Background / sky: no world position, but it is NOT static under camera motion.
+        // Treating it as a zero motion vector (the old behaviour) makes TAA fetch history
+        // from the same pixel, so the background ghosts and jumps whenever the camera moves.
+        // Reproject it as an infinitely-distant point (rotation-only parallax): reconstruct
+        // this pixel's world-space view ray from the current inverse-VP, then project that
+        // direction (w = 0 → point at infinity) through the previous-frame VP.
+        float2 ndc = ((float2(tid.xy) + 0.5) / float2(screenWidth, screenHeight)) * 2.0 - 1.0;
+        float4 farW  = mul(invCurViewProj, float4(ndc, 1.0, 1.0));
+        float4 nearW = mul(invCurViewProj, float4(ndc, 0.0, 1.0));
+        float3 dir = farW.xyz / farW.w - nearW.xyz / nearW.w;
+
+        float4 prevClip = mul(prevViewProj, float4(dir, 0.0));
+        if (prevClip.w <= 1e-6) {
+            // Direction projects to/behind the previous camera plane — no reliable history.
+            t_motionVec[tid.xy] = float2(0.0, 0.0);
+            return;
+        }
+        float2 prevNdc = prevClip.xy / prevClip.w;
+        float2 curPx   = float2(tid.xy) + 0.5;
+        float2 prevPx  = (prevNdc * 0.5 + 0.5) * float2(screenWidth, screenHeight);
+        t_motionVec[tid.xy] = prevPx - curPx;
         return;
     }
 

@@ -34,6 +34,10 @@ class MotionVectorPass {
         sm::float4x4 curViewProj{1.0f};
         /// row-major view-projection matrix for the previous frame.
         sm::float4x4 prevViewProj{1.0f};
+        /// row-major inverse of curViewProj. Used to reproject background/sky pixels
+        /// (which have no world position) as infinitely-distant points so they track
+        /// camera rotation instead of getting a zero motion vector.
+        sm::float4x4 invCurViewProj{1.0f};
         /// Per-instance previous-frame world transforms (one sm::float4x4 per instance).
         /// Must remain valid until record() returns.  May be VK_NULL_HANDLE on the first
         /// frame before the scene is loaded (record() is a no-op in that case).
@@ -68,11 +72,13 @@ class MotionVectorPass {
 
   private:
     struct alignas(16) MotionVectorPC {
-        sm::float4x4 curViewProj{1.0f};   // 64 bytes — row-major view-projection matrix
-        sm::float4x4 prevViewProj{1.0f};  // 64 bytes — row-major view-projection matrix
-        // Total: 128 bytes (Vulkan minimum push-constant size)
+        sm::float4x4 curViewProj{1.0f};     // 64 bytes — row-major view-projection matrix
+        sm::float4x4 prevViewProj{1.0f};    // 64 bytes — row-major view-projection matrix
+        sm::float4x4 invCurViewProj{1.0f};  // 64 bytes — row-major inverse (sky reprojection)
+        // Total: 192 bytes. Theia targets hardware guaranteeing a 256-byte push-constant
+        // range (LightCuller already ships a 160-byte push constant on this target).
     };
-    static_assert(sizeof(MotionVectorPC) == 128);
+    static_assert(sizeof(MotionVectorPC) == 192);
 
     [[nodiscard]] bool createImage() noexcept;
     [[nodiscard]] bool createPipeline(const char* spvName) noexcept;

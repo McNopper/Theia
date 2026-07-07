@@ -395,6 +395,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         gp.motionVectorView = VK_NULL_HANDLE;
         m_pendingMvp.curViewProj  = curViewProj;
         m_pendingMvp.prevViewProj = m_prevViewProjValid ? m_prevViewProj : curViewProj;
+        m_pendingMvp.invCurViewProj = sm::inverse(curViewProj);
         m_pendingMvp.prevInstanceTransformBuffer = m_scene->prevInstanceTransformBuffer().handle();
 
         const uint32_t gfxFamily   = deviceContext().graphicsFamily;
@@ -573,6 +574,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
             MotionVectorPass::FrameParams mvp{};
             mvp.curViewProj  = curViewProj;
             mvp.prevViewProj = m_prevViewProjValid ? m_prevViewProj : curViewProj;
+            mvp.invCurViewProj = sm::inverse(curViewProj);
             mvp.prevInstanceTransformBuffer = m_scene->prevInstanceTransformBuffer().handle();
             m_motionVectorPass.record(cmd, mvp);
         }

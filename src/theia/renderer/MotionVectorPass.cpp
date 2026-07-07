@@ -250,8 +250,9 @@ void MotionVectorPass::record(VkCommandBuffer cmd, const FrameParams& params) no
     };
 
     const MotionVectorPC pc{
-        .curViewProj  = params.curViewProj,
-        .prevViewProj = params.prevViewProj,
+        .curViewProj    = params.curViewProj,
+        .prevViewProj   = params.prevViewProj,
+        .invCurViewProj = params.invCurViewProj,
     };
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
