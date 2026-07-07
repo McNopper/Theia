@@ -57,8 +57,6 @@ IncludeCategories:
     Priority:        1
   - Regex:           '^<SDL3/'
     Priority:        2
-  - Regex:           '^<glm/'
-    Priority:        3
   # Other third-party angle-bracket headers
   - Regex:           '^<'
     Priority:        4

@@ -36,7 +36,6 @@ foreach(_required_dir IN ITEMS "${_vulkansdk_include_dir}" "${_vulkansdk_lib_dir
 endforeach()
 
 foreach(_required_header IN ITEMS
-    "${_vulkansdk_include_dir}/glm/glm.hpp"
     "${_vulkansdk_include_dir}/vma/vk_mem_alloc.h"
     "${_vulkansdk_include_dir}/SDL3/SDL.h"
 )
