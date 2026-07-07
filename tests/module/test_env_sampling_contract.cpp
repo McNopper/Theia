@@ -75,7 +75,7 @@ float evalEnvImportancePdfDir(const std::vector<float>& marginalCdf,
 
     const float pRow = marginalCdf[row + 1U] - marginalCdf[row];
     const float pCol = conditionalCdf[row * (W + 1U) + col + 1U] - conditionalCdf[row * (W + 1U) + col];
-    const float theta = kPi * (static_cast<float>(row) + 0.5F) / static_cast<float>(H);
+    const float theta = kPi * v;                    // exact theta from direction, not bin centre
     const float sinTheta = std::max(std::sin(theta), 1.0e-5F);
     return (pRow * pCol * static_cast<float>(W) * static_cast<float>(H)) / (2.0F * kPi * kPi * sinTheta);
 }
