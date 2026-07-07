@@ -19,19 +19,9 @@
 #include "harmonia/GpuTypes.hpp"
 #include "harmonia/core/Buffer.hpp"
 #include "harmonia/core/Logger.hpp"
+#include "harmonia/scene/EmissiveBuilder.hpp"
 #include "harmonia/scene/Geometry.hpp"
 #include "harmonia/scene/ProceduralGeometry.hpp"
-
-uint32_t Scene::addMaterial(Material&& mat) {
-    m_materials.push_back(std::move(mat));
-    return static_cast<uint32_t>(m_materials.size() - 1);
-}
-
-uint32_t Scene::addTexture(Texture&& texture) {
-    const auto idx = static_cast<uint32_t>(m_textures.size());
-    m_textures.push_back(std::move(texture));
-    return idx;
-}
 
 uint32_t Scene::addMesh(const DeviceContext& ctx,
                         const CommandPool& pool,
@@ -72,12 +62,6 @@ uint32_t Scene::addSphere(const DeviceContext& ctx,
     // (Hyperion keeps the analytic sphere; that divergence lives in each Scene.)
     MeshData mesh = ProceduralGeometry::makeSphere(center, radius);
     return addMesh(ctx, pool, std::move(mesh), materialIdx, "sphere");
-}
-
-uint32_t Scene::addLight(std::unique_ptr<Light> light) {
-    const uint32_t index = static_cast<uint32_t>(m_lights.size());
-    m_lights.push_back(std::move(light));
-    return index;
 }
 
 VkResult Scene::build(const DeviceContext& ctx, const CommandPool& pool) {
@@ -560,74 +544,23 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     }
     m_lightBuffer = std::move(*lightBuf);
 
-    // Emissive triangle buffer — collect one GpuEmissiveTriangle per emissive mesh triangle
-    // for NEE direct area sampling.  Bounding spheres are not used.
-    std::vector<GpuEmissiveTriangle> emissiveTriangles;
-    std::vector<float> emissivePower; // per-triangle power = area × luminance(Le), for the selection CDF
-    for (size_t i = 0; i < m_geometries.size(); ++i) {
-        const GpuInstance& inst = m_instances[i];
-        if (inst.geometryKind != 0U) {
-            continue; // spheres not supported for NEE yet
-        }
-        if (inst.materialIndex >= m_materials.size() || !m_materials[inst.materialIndex].emissiveAsLightSource()) {
-            continue;
-        }
-        const GpuMaterial& gpuMat = gpuMaterials[inst.materialIndex];
-        if (gpuMat.emissionColorLum.w <= 0.0F) { // NOLINT(cppcoreguidelines-pro-type-union-access)
-            continue;
-        }
-        const auto* mesh = dynamic_cast<const TriangleMesh*>(m_geometries[i].get());
-        if (mesh == nullptr) {
-            continue;
-        }
-        const auto& verts = mesh->data().vertices;
-        const auto& idxBuf = mesh->data().indices;
-        if (verts.empty() || idxBuf.empty()) {
-            continue;
-        }
-
-        const sm::float4x4 xformMat = m_geometries[i]->xform.matrix();
-        const sm::float3 emission = static_cast<sm::float3>(gpuMat.emissionColorLum) *
-                                   gpuMat.emissionColorLum.w; // NOLINT(cppcoreguidelines-pro-type-union-access)
-
-        const uint32_t triCount = static_cast<uint32_t>(idxBuf.size() / 3);
-        for (uint32_t t = 0; t < triCount; ++t) {
-            const sm::float3 lv0 = verts[idxBuf[t * 3 + 0]].position;
-            const sm::float3 lv1 = verts[idxBuf[t * 3 + 1]].position;
-            const sm::float3 lv2 = verts[idxBuf[t * 3 + 2]].position;
-
-            const sm::float3 wv0 = static_cast<sm::float3>(xformMat * sm::float4(lv0, 1.0F));
-            const sm::float3 wv1 = static_cast<sm::float3>(xformMat * sm::float4(lv1, 1.0F));
-            const sm::float3 wv2 = static_cast<sm::float3>(xformMat * sm::float4(lv2, 1.0F));
-            const sm::float3 edge1 = wv1 - wv0;
-            const sm::float3 edge2 = wv2 - wv0;
-            const sm::float3 cross = sm::cross(edge1, edge2);
-            const float area = 0.5F * sm::length(cross);
-
-            if (area <= 1.0e-6F) {
-                continue; // skip degenerate triangles
-            }
-            const sm::float3 normal = cross / (2.0F * area); // normalize: cross/|cross|
-
-            emissiveTriangles.push_back(GpuEmissiveTriangle{
-                .v0_area = sm::float4(wv0, area),
-                .edge1_emitR = sm::float4(edge1, emission.r),
-                .edge2_emitG = sm::float4(edge2, emission.g),
-                .normal_emitB = sm::float4(normal, emission.b),
-            });
-            // Power for power-proportional NEE selection: area × luminance(Le) (Rec.2020).
-            const float lumLe = 0.2627F * emission.r + 0.6780F * emission.g + 0.0593F * emission.b;
-            emissivePower.push_back(area * std::max(lumLe, 0.0F));
-        }
+    // Build emissive triangle buffer via the shared harmonia utility.
+    std::vector<harmonia::EmissiveInstanceInfo> emissiveInstances;
+    emissiveInstances.reserve(m_instances.size());
+    for (const GpuInstance& inst : m_instances) {
+        emissiveInstances.push_back({inst.geometryKind, inst.materialIndex});
     }
-    m_emissiveTriangleCount = static_cast<uint32_t>(emissiveTriangles.size());
-    if (emissiveTriangles.empty()) {
-        emissiveTriangles.push_back(GpuEmissiveTriangle{}); // sentinel — keeps the binding valid
+    harmonia::EmissiveData emissiveData =
+        harmonia::buildEmissiveData(m_geometries, emissiveInstances, m_materials, gpuMaterials);
+
+    m_emissiveTriangleCount = static_cast<uint32_t>(emissiveData.triangles.size());
+    if (emissiveData.triangles.empty()) {
+        emissiveData.triangles.push_back(GpuEmissiveTriangle{}); // sentinel — keeps the binding valid
     }
     auto emissiveBuf = Buffer::upload(
         ctx,
         pool,
-        std::as_bytes(std::span<const GpuEmissiveTriangle>(emissiveTriangles.data(), emissiveTriangles.size())),
+        std::as_bytes(std::span<const GpuEmissiveTriangle>(emissiveData.triangles.data(), emissiveData.triangles.size())),
         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
         "scene.emissiveTriangles");
     if (!emissiveBuf) {
@@ -637,6 +570,7 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
 
     // Power-proportional selection CDF: cdf[i] = (Σ_{j≤i} power_j) / totalPower, so cdf[N-1] == 1.
     // Falls back to a uniform CDF when all emitters have zero power (degenerate/black emitters).
+    const std::vector<float>& emissivePower = emissiveData.power;
     std::vector<float> emissiveCdf;
     emissiveCdf.reserve(emissivePower.size());
     double totalPower = 0.0;

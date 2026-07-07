@@ -16,6 +16,7 @@
 #include "harmonia/scene/ISceneBuilder.hpp"
 #include "harmonia/scene/Light.hpp"
 #include "harmonia/scene/Material.hpp"
+#include "harmonia/scene/SceneBase.hpp"
 #include "harmonia/scene/Texture.hpp"
 
 class SceneBuilder;
@@ -51,11 +52,13 @@ struct GpuMeshlet {
 static_assert(std::is_trivially_copyable_v<GpuMeshlet>);
 static_assert(sizeof(GpuMeshlet) == 32);
 
-class Scene : public ISceneBuilder {
+class Scene : public harmonia::SceneBase {
   public:
     using Builder = SceneBuilder;
 
-    [[nodiscard]] uint32_t addMaterial(Material&& mat) override;
+    [[nodiscard]] uint32_t addMaterial(Material&& mat) override { return harmonia::SceneBase::addMaterial(std::move(mat)); }
+    [[nodiscard]] uint32_t addTexture(Texture&& texture) override { return harmonia::SceneBase::addTexture(std::move(texture)); }
+
     [[nodiscard]] uint32_t addMesh(const DeviceContext& ctx,
                                    const CommandPool& pool,
                                    MeshData&& data,
@@ -66,14 +69,6 @@ class Scene : public ISceneBuilder {
                                      sm::float3 center,
                                      float radius,
                                      uint32_t materialIdx) override;
-
-    /// Add a light to the scene. Returns the light index.
-    /// Must be called before build().
-    uint32_t addLight(std::unique_ptr<Light> light);
-
-    /// Add a texture to the scene. Returns the bindless texture index.
-    /// Must be called before build() / updateSceneSet().
-    [[nodiscard]] uint32_t addTexture(Texture&& texture) override;
 
     VkResult build(const DeviceContext& ctx, const CommandPool& pool);
 
@@ -108,7 +103,6 @@ class Scene : public ISceneBuilder {
     /// Light IDs are stable indices [0, lightCount()).
     /// Safe for temporal reservoir indexing — the light array does not
     /// change between frames within a loaded scene.
-    [[nodiscard]] const std::vector<Texture>& textures() const noexcept { return m_textures; }
     [[nodiscard]] uint32_t instanceCount() const noexcept { return static_cast<uint32_t>(m_geometries.size()); }
     /// Total number of meshlets across all instances (size of the per-meshlet visibility buffer).
     [[nodiscard]] uint32_t meshletCount() const noexcept { return m_meshletCount; }
@@ -119,11 +113,7 @@ class Scene : public ISceneBuilder {
     VkResult buildSceneBuffers(const DeviceContext& ctx, const CommandPool& pool);
     VkResult buildTlas(const DeviceContext& ctx, const CommandPool& pool);
 
-    std::vector<Material> m_materials;
     std::vector<GpuInstance> m_instances;
-    std::vector<std::unique_ptr<Geometry>> m_geometries;
-    std::vector<std::unique_ptr<Light>> m_lights;
-    std::vector<Texture> m_textures;
     Buffer m_instanceBuffer{};
     Buffer m_materialBuffer{};
     Buffer m_vertexBuffer{};
