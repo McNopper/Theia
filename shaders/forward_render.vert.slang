@@ -31,7 +31,7 @@ VS_OUT main(uint vertexId : SV_VertexID) {
     GpuVertex v = vertices[vertexId];
     
     // Transform to clip space
-    output.pos = mul(float4(v.position, 1.0), viewProj);
+    output.pos = mul(viewProj, float4(v.position, 1.0));
     
     // Pass world-space data to fragment shader
     output.normal = normalize(v.normal);

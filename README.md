@@ -252,7 +252,7 @@ RT-GI is the single unified indirect + transmission provider and drives both the
 | [volk](https://github.com/zeux/volk) | Vulkan loader |
 | [VMA](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) | GPU memory allocation (via Harmonia) |
 | [SDL3](https://libsdl.org/) | Window management & surface |
-| [GLM](https://github.com/g-truc/glm) | Mathematics |
+| [slang-math](https://github.com/McNopper/slang-math) | Mathematics — via Harmonia (transitive FetchContent) |
 | [meshoptimizer](https://github.com/zeux/meshoptimizer) | Meshlet generation and mesh optimization |
 | [OpenImageIO](https://openimageio.readthedocs.io/) | Image I/O — PNG/JPEG/EXR load and save (via Harmonia; stb and OpenEXR are transitive dependencies) |
 | [Slang](https://shader-slang.com/) | Shader compilation (Slang → SPIR-V) |

@@ -102,15 +102,15 @@ bool hiZOccluded(GpuMeshlet ml) {
     const float3 center = float3(ml.centerX, ml.centerY, ml.centerZ);
     const float  radius = ml.radius;
 
-    // viewProj is row-major VP, so mul(vector, viewProj) = VP * vector = clip space.
-    const float4 clip = mul(float4(center, 1.0), viewProj);
+    // viewProj is row-major VP; mul(M, v) applies VP to a column vector = clip space.
+    const float4 clip = mul(viewProj, float4(center, 1.0));
     if (clip.w <= radius) {
         return false; // sphere straddles / is behind the near plane → keep it.
     }
 
     // Nearest depth of the sphere (project the point closest to the camera).
     const float3 toCam = normalize(cameraPos.xyz - center);
-    const float4 nearClip = mul(float4(center + toCam * radius, 1.0), viewProj);
+    const float4 nearClip = mul(viewProj, float4(center + toCam * radius, 1.0));
     const float  nearDepth = nearClip.z / max(nearClip.w, 1e-6);
 
     // Screen-space AABB of the sphere. Using (w - radius) as the denominator enlarges the
@@ -189,7 +189,7 @@ void main(
     for (uint vi = tig; vi < meshlet.vertexCount; vi += 64) {
         const uint globalVertIdx = meshletVertices[meshlet.vertexOffset + vi];
         const GpuVertex v = vertices[globalVertIdx];
-        verts[vi].pos           = mul(float4(v.position, 1.0), viewProj);
+        verts[vi].pos           = mul(viewProj, float4(v.position, 1.0));
         verts[vi].normal        = v.normal;
         verts[vi].tangent       = float3(v.tangentX, v.tangentY, v.tangentZ);
         verts[vi].bitangentSign = v.bitangentSign;

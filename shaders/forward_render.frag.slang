@@ -780,10 +780,10 @@ FS_OUT main(FS_IN input) {
 
     // --- GBuffer (target 1): view-space normal + base roughness for SSR ---
     // Transform world-space N into view space.
-    // push-constant `view` is row-major V, so extracting rows gives V directly.
-    // mul(worldN, rows_of_V) = worldN * V = viewN in row-vector form.
-    const float3x3 viewRot = float3x3(view[0].xyz, view[1].xyz, view[2].xyz); // rows of V
-    const float3   viewN   = normalize(mul(N, viewRot)); // view-space normal
+    // Row-major push-constant: view[i].xyz is row i of V_cpu (right, up, -fwd).
+    // viewRot = R_cpu directly; mul(viewRot, N) = R_cpu·N = view-space normal. ✓
+    const float3x3 viewRot = float3x3(view[0].xyz, view[1].xyz, view[2].xyz);
+    const float3   viewN   = normalize(mul(viewRot, N)); // R_cpu·N = view-space normal
     const float    roughness = saturate(mat.specularRoughAnisoIor.x);
 
     FS_OUT output;

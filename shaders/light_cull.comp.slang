@@ -81,10 +81,8 @@ void main(uint3 dtid : SV_DispatchThreadID) {
         return;
     }
 
-    // Transform light position to view space.
-    // Matrix convention: `view` is uploaded row-major, so the row-vector form
-    // mul(vec, M) yields V·p directly — matching the mesh shader.
-    const float4 posV4 = mul(float4(light.position, 1.0), view);
+    // Transform light position to view space (row-major; mul(M, v) column-vector convention).
+    const float4 posV4 = mul(view, float4(light.position, 1.0));
     const float3 posV = posV4.xyz;
     const float  radius = (light.range > 0.0) ? light.range : 1e6;
 

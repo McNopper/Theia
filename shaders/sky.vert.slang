@@ -5,7 +5,7 @@
 
 [[vk::push_constant]]
 cbuffer SkyPC {
-    float4x4 invViewProj; // row-major inverse(proj*view) for Slang mul(vec, mat)
+    float4x4 invViewProj; // row-major (VP)^{-1}; mul(M, v) column-vector convention
     float4   cameraPos;    // xyz = world-space camera position
     float    exposure;     // 1 / (1.2 * 2^EV100)
     uint     hasEnv;       // 1 = sample env map, 0 = black
@@ -27,7 +27,7 @@ VSOut main(uint vid : SV_VertexID) {
     o.pos = float4(x, y, 1.0f, 1.0f); // far plane
 
     // Unproject the far-plane NDC point to world space.
-    float4 world = mul(float4(x, y, 1.0f, 1.0f), invViewProj);
+    float4 world = mul(invViewProj, float4(x, y, 1.0f, 1.0f));
     world /= world.w;
     o.viewRay = world.xyz - cameraPos.xyz;
     return o;

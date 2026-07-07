@@ -57,15 +57,12 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // For static scenes (prevT == identity): prevWorldPos == wpos (no-op).
     uint instanceIdx = instanceIdxPlus1 - 1u;
     float4x4 prevT = prevInstanceTransforms[instanceIdx];
-    float3 prevWorldPos = mul(float4(wpos, 1.0), prevT).xyz;
+    float3 prevWorldPos = mul(prevT, float4(wpos, 1.0)).xyz;
 
-    // Clip-space positions (homogeneous).  curViewProj / prevViewProj are
-    // Row-major VP upload: mul(v, M) applies VP directly.
-    // This MUST match the forward mesh shader (forward_render.mesh.slang:
-    // "mul(float4(v.position, 1.0), viewProj)") — using mul(M, v) instead would apply
-    // the wrong matrix convention and yield wrong motion vectors under camera motion.
-    float4 curClip  = mul(float4(wpos, 1.0),         curViewProj);
-    float4 prevClip = mul(float4(prevWorldPos, 1.0), prevViewProj);
+    // Clip-space positions (homogeneous).
+    // Row-major matrices; mul(M, v) column-vector convention — matches the mesh shader.
+    float4 curClip  = mul(curViewProj,  float4(wpos, 1.0));
+    float4 prevClip = mul(prevViewProj, float4(prevWorldPos, 1.0));
 
     // Perspective divide to NDC [-1, 1].
     float2 curNdc  = curClip.xy  / max(curClip.w,  1e-6);

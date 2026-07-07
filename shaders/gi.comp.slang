@@ -23,7 +23,7 @@ import path_integrator; // ITracer, SurfaceHit, PathState, EnvNeeSample, evalEnv
 
 [[vk::push_constant]]
 cbuffer GiPC {
-    float4x4 view;                  // view matrix (row-major, no transpose needed with slang-math)
+    float4x4 view;                  // view matrix (row-major; mul(M, v) convention — matches -matrix-layout-row-major)
     float4   cameraPos;             // xyz = world-space camera position
     float    exposure;              // 1 / (1.2 * 2^EV100) — matches forward pass
     uint     frameSampleIndex;      // per-frame sample counter (drives RNG decorrelation across accumulated frames)
@@ -847,13 +847,14 @@ void main(uint3 tid : SV_DispatchThreadID) {
         primary = makeSurfaceHit(primaryHit, wo);
     } else {
         // Fallback: reconstruct the shading normal from the view-space G-buffer normal.
-        // viewN = mul(N, viewRot) in the forward pass (row-vector); the inverse for an
-        // orthonormal rotation is mul(viewRot, viewN) (column-vector). When the normal
-        // G-buffer is unavailable (zero, e.g. a transparent pixel against the sky), there
-        // is nothing to reconstruct here -> skip the pixel.
+        // viewN = mul(viewRot, N) in the forward pass (R_cpu·N = N_view, column-vector form).
+        // The inverse for an orthonormal rotation is mul(viewN, viewRot) (row-vector form;
+        // computes R_cpu^T·viewN = N_world). When the normal G-buffer is unavailable
+        // (zero, e.g. a transparent pixel against the sky), there is nothing to reconstruct
+        // here → skip the pixel.
         const float3 viewN = t_gbuffer.Load(loadCoord).xyz * 2.0 - 1.0;
         const float3x3 viewRot = float3x3(view[0].xyz, view[1].xyz, view[2].xyz);
-        float3 worldN = mul(viewRot, viewN);
+        float3 worldN = mul(viewN, viewRot);
         if (dot(worldN, worldN) < 1.0e-8) {
             return;
         }
