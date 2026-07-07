@@ -102,7 +102,7 @@ bool hiZOccluded(GpuMeshlet ml) {
     const float3 center = float3(ml.centerX, ml.centerY, ml.centerZ);
     const float  radius = ml.radius;
 
-    // viewProj is glm::transpose(VP), so mul(vector, viewProj) = VP * vector = clip space.
+    // viewProj is row-major VP, so mul(vector, viewProj) = VP * vector = clip space.
     const float4 clip = mul(float4(center, 1.0), viewProj);
     if (clip.w <= radius) {
         return false; // sphere straddles / is behind the near plane → keep it.

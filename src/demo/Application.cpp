@@ -1,7 +1,6 @@
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include "demo/Application.hpp"
 
-#include <glm/gtc/matrix_transform.hpp>
+#include <slang-math/slang-math.hpp>
 
 #include <algorithm>
 #include <array>
@@ -233,22 +232,20 @@ bool Application::onSceneLoaded(const SceneLoader::SceneConfig& sceneConfig) {
     if (sceneConfig.cameraPos && sceneConfig.cameraAt) {
         m_camera.position = *sceneConfig.cameraPos;
         m_camera.target = *sceneConfig.cameraAt;
-        m_camera.up = sceneConfig.cameraUp.value_or(glm::vec3{0.0f, 1.0f, 0.0f});
+        m_camera.up = sceneConfig.cameraUp.value_or(sm::float3{0.0f, 1.0f, 0.0f});
         m_camera.vfovDeg = sceneConfig.cameraVfov.value_or(45.0f);
     }
-    // Physical camera exposure — same pattern as Hyperion (aperture=1, ISO=100).
+    // Physical camera exposure — shared factory from harmonia::Camera.
     {
         const float ev100 = sceneConfig.cameraEv100.value_or(7.0f);
-        m_camera.physical.aperture = 1.0f;
-        m_camera.physical.iso = 100.0f;
-        m_camera.physical.shutterSpeedHz = std::pow(2.0f, ev100);
+        m_camera.physical = Camera::PhysicalCamera::fromEv100(ev100);
     }
     // Reset camera controller orientation to match the new target.
-    const glm::vec3 dir = glm::normalize(m_camera.target - m_camera.position);
+    const sm::float3 dir = sm::normalize(m_camera.target - m_camera.position);
     directionToYawPitch(dir, m_camCtrl.yaw, m_camCtrl.pitch);
 
     // Scene-scale-aware near/far — shared helper from harmonia::Camera.
-    const float camDist = glm::length(m_camera.target - m_camera.position);
+    const float camDist = sm::length(m_camera.target - m_camera.position);
     std::tie(m_camera.nearPlane, m_camera.farPlane) = Camera::nearFarFromDistance(camDist);
     // Camera move speed also scales with the scene.
     m_camCtrl.speed = std::max(0.1f, camDist * 0.5f);
@@ -308,7 +305,7 @@ bool Application::onSceneLoaded(const SceneLoader::SceneConfig& sceneConfig) {
     if (hasEnv) {
         m_renderer->setSunShadow(iblProbe()->sunDirection(), iblProbe()->sunStrength());
     } else {
-        m_renderer->setSunShadow(glm::vec3(0.0f, 1.0f, 0.0f), 0.0f);
+        m_renderer->setSunShadow(sm::float3(0.0f, 1.0f, 0.0f), 0.0f);
     }
     return true;
 }
@@ -317,25 +314,25 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
     m_renderer->setRngState(frameIndex(), config().rngSeed, config().deterministicReplay);
 
     const float aspect = static_cast<float>(target.extent.width) / static_cast<float>(target.extent.height);
-    glm::mat4 proj = glm::perspective(glm::radians(m_camera.vfovDeg), aspect, m_camera.nearPlane, m_camera.farPlane);
+    sm::float4x4 proj = sm::perspective(sm::radians(m_camera.vfovDeg), aspect, m_camera.nearPlane, m_camera.farPlane);
     proj[1][1] *= -1.0f;
     if (m_cameraJitterEnabled) {
         proj = applyProjectionJitter(proj, cameraJitterNdc(frameIndex(), target.extent.width, target.extent.height));
     }
-    const glm::mat4 view = glm::lookAt(m_camera.position, m_camera.target, m_camera.up);
-    // Transposed VP for Slang mul(M, v) convention (used by motion vector shader).
-    const glm::mat4 curViewProjT = glm::transpose(proj * view);
+    const sm::float4x4 view = sm::lookAt(m_camera.position, m_camera.target, m_camera.up);
+    // Row-major VP for Slang mul(v, M) convention (used by the motion vector shader).
+    const sm::float4x4 curViewProj = proj * view;
 
     // Camera-cut detection: disable the Hi-Z occlusion test for one frame after a large view
     // change so newly disoccluded meshlets (whose stale visibility is 0) are drawn instead of
     // wrongly culled. Uses view-direction angle + focus-relative translation (scale-independent).
     {
-        const glm::vec3 curDir = glm::normalize(m_camera.target - m_camera.position);
-        const float focusDist = glm::length(m_camera.target - m_camera.position);
+        const sm::float3 curDir = sm::normalize(m_camera.target - m_camera.position);
+        const float focusDist = sm::length(m_camera.target - m_camera.position);
         bool cut = !m_hiZPrevValid;
         if (m_hiZPrevValid) {
-            const float posDelta = glm::length(m_camera.position - m_hiZPrevPos);
-            const float cosAng = glm::clamp(glm::dot(curDir, m_hiZPrevDir), -1.0f, 1.0f);
+            const float posDelta = sm::length(m_camera.position - m_hiZPrevPos);
+            const float cosAng = sm::clamp(sm::dot(curDir, m_hiZPrevDir), -1.0f, 1.0f);
             const float angle = std::acos(cosAng);
             cut = (angle > 0.1745f /* ~10 deg */) || (posDelta > 0.5f * std::max(focusDist, 1e-3f));
         }
@@ -377,7 +374,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         gp.envImportanceHeight = m_envCdfHeight;
         gp.hasEnvMap = m_hasEnv;
         gp.envLuminanceScale = m_envNits;
-        gp.viewTransposed = glm::transpose(view);
+        gp.view = view;
         gp.cameraPos = m_camera.position;
         gp.exposure = m_camera.physical.exposure();
         gp.frameSampleIndex = frameIndex();
@@ -396,8 +393,8 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         // (static-history temporal reuse; correct for the static offscreen audit).
         gp.useRestirDi = m_useRestirDi;
         gp.motionVectorView = VK_NULL_HANDLE;
-        m_pendingMvp.curViewProj  = curViewProjT;
-        m_pendingMvp.prevViewProj = m_prevViewProjValid ? m_prevViewProj : curViewProjT;
+        m_pendingMvp.curViewProj  = curViewProj;
+        m_pendingMvp.prevViewProj = m_prevViewProjValid ? m_prevViewProj : curViewProj;
         m_pendingMvp.prevInstanceTransformBuffer = m_scene->prevInstanceTransformBuffer().handle();
 
         const uint32_t gfxFamily   = deviceContext().graphicsFamily;
@@ -527,7 +524,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         vkEndCommandBuffer(asyncCmd);
 
         // Store per-frame state; onBeforeSceneStages() handles the submissions.
-        m_prevViewProj      = curViewProjT;
+        m_prevViewProj      = curViewProj;
         m_prevViewProjValid = true;
         return;
     }
@@ -546,7 +543,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         gp.envImportanceHeight = m_envCdfHeight;
         gp.hasEnvMap = m_hasEnv;
         gp.envLuminanceScale = m_envNits;
-        gp.viewTransposed = glm::transpose(view);
+        gp.view = view;
         gp.cameraPos = m_camera.position;
         gp.exposure = m_camera.physical.exposure();
         gp.frameSampleIndex = frameIndex();
@@ -574,8 +571,8 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         // Compute motion vectors for temporal reprojection in the denoiser.
         if (m_motionVectorPass.isInitialized()) {
             MotionVectorPass::FrameParams mvp{};
-            mvp.curViewProj  = curViewProjT;
-            mvp.prevViewProj = m_prevViewProjValid ? m_prevViewProj : curViewProjT;
+            mvp.curViewProj  = curViewProj;
+            mvp.prevViewProj = m_prevViewProjValid ? m_prevViewProj : curViewProj;
             mvp.prevInstanceTransformBuffer = m_scene->prevInstanceTransformBuffer().handle();
             m_motionVectorPass.record(cmd, mvp);
         }
@@ -594,7 +591,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
     }
 
     // Store current VP for use as prevViewProj next frame.
-    m_prevViewProj      = curViewProjT;
+    m_prevViewProj      = curViewProj;
     m_prevViewProjValid = true;
 
     // No compute pass wrote HDR this frame: leave HDR in GENERAL for host tonemap.
@@ -993,16 +990,16 @@ bool Application::onEvent(const SDL_Event& event) {
 
 void Application::onUpdate(float dtSeconds) {
     // Rebuild forward direction from yaw/pitch
-    const float yawRad = glm::radians(m_camCtrl.yaw);
-    const float pitchRad = glm::radians(m_camCtrl.pitch);
-    const glm::vec3 forward{
+    const float yawRad = sm::radians(m_camCtrl.yaw);
+    const float pitchRad = sm::radians(m_camCtrl.pitch);
+    const sm::float3 forward{
         std::cos(yawRad) * std::cos(pitchRad),
         std::sin(pitchRad),
         std::sin(yawRad) * std::cos(pitchRad),
     };
-    const glm::vec3 worldUp{0.0f, 1.0f, 0.0f};
-    const glm::vec3 right = glm::normalize(glm::cross(forward, worldUp));
-    const glm::vec3 up = glm::normalize(glm::cross(right, forward));
+    const sm::float3 worldUp{0.0f, 1.0f, 0.0f};
+    const sm::float3 right = sm::normalize(sm::cross(forward, worldUp));
+    const sm::float3 up = sm::normalize(sm::cross(right, forward));
 
     if (m_camCtrl.wDown)
         m_camera.position += forward * m_camCtrl.speed * dtSeconds;
@@ -1059,10 +1056,10 @@ void Application::onUpdate(float dtSeconds) {
     }
 }
 
-void Application::directionToYawPitch(const glm::vec3& dir, float& yaw, float& pitch) {
-    const glm::vec3 d = glm::normalize(dir);
-    pitch = glm::degrees(std::asin(d.y));
-    yaw = glm::degrees(std::atan2(d.z, d.x));
+void Application::directionToYawPitch(const sm::float3& dir, float& yaw, float& pitch) {
+    const sm::float3 d = sm::normalize(dir);
+    pitch = sm::degrees(std::asin(d.y));
+    yaw = sm::degrees(std::atan2(d.z, d.x));
 }
 
 } // namespace theia

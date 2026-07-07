@@ -1,6 +1,6 @@
 #include "theia/renderer/LightCuller.hpp"
 
-#include <glm/gtc/type_ptr.hpp>
+#include <slang-math/slang-math.hpp>
 
 #include <array>
 #include <cmath>
@@ -268,8 +268,8 @@ void LightCuller::shutdown() {
 void LightCuller::dispatch(VkCommandBuffer cmd,
                            VkBuffer lightBuffer,
                            uint32_t lightCount,
-                           const glm::mat4& proj,
-                           const glm::mat4& view,
+                           const sm::float4x4& proj,
+                           const sm::float4x4& view,
                            float nearZ,
                            float farZ) {
     if (!m_ctx || m_pipeline == VK_NULL_HANDLE || lightBuffer == VK_NULL_HANDLE)
@@ -318,10 +318,10 @@ void LightCuller::dispatch(VkCommandBuffer cmd,
     // Push constant layout must match LightCullPC in light_cull.comp.slang:
     //   proj (64), view (64), tilesXY (8), screenSize (8), lightCount (4), nearZ (4), farZ (4), _pad (4) = 160 bytes
     struct LightCullPC {
-        glm::mat4 proj;
-        glm::mat4 view;
-        glm::uvec2 tilesXY;
-        glm::uvec2 screenSize;
+        sm::float4x4 proj;
+        sm::float4x4 view;
+        sm::uint2 tilesXY;
+        sm::uint2 screenSize;
         uint32_t lightCount;
         float nearZ;
         float farZ;
@@ -330,8 +330,8 @@ void LightCuller::dispatch(VkCommandBuffer cmd,
     static_assert(sizeof(LightCullPC) == 160);
 
     const LightCullPC pc{
-        .proj = glm::transpose(proj), // row-major for Slang
-        .view = glm::transpose(view),
+        .proj = proj, // row-major for Slang
+        .view = view,
         .tilesXY = {m_tilesX, m_tilesY},
         .screenSize = {m_screenWidth, m_screenHeight},
         .lightCount = lightCount,

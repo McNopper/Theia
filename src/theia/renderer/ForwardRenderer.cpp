@@ -1,7 +1,6 @@
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include "theia/renderer/ForwardRenderer.hpp"
 
-#include <glm/gtc/matrix_transform.hpp>
+#include <slang-math/slang-math.hpp>
 
 #include <algorithm>
 #include <array>
@@ -1318,7 +1317,7 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
 
     // Camera matrices + push constants (needed before rendering so the two Hi-Z passes and
     // the Hi-Z occlusion test share the same projection).
-    glm::mat4 proj = glm::perspective(glm::radians(m_camera.vfovDeg),
+    sm::float4x4 proj = sm::perspective(sm::radians(m_camera.vfovDeg),
                                       static_cast<float>(m_config.width) / static_cast<float>(m_config.height),
                                       m_camera.nearPlane,
                                       m_camera.farPlane);
@@ -1326,8 +1325,8 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
     if (m_cameraJitterEnabled) {
         proj = applyProjectionJitter(proj, cameraJitterNdc(m_frameSampleIndex, m_config.width, m_config.height));
     }
-    const glm::mat4 view = glm::lookAt(m_camera.position, m_camera.target, m_camera.up);
-    const glm::mat4 viewProj = proj * view;
+    const sm::float4x4 view = sm::lookAt(m_camera.position, m_camera.target, m_camera.up);
+    const sm::float4x4 viewProj = proj * view;
     // exposure = 1 / (1.2 * 2^EV100) — matches Hyperion's PhysicalCamera calc
     const float exposure = m_camera.physical.exposure();
     // NDC projection scales for the mesh-shader Hi-Z bounding-sphere footprint estimate.
@@ -1335,9 +1334,9 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
     const float projScaleY = std::abs(proj[1][1]);
 
     const ForwardRenderer::MeshPushConstants pcBase{
-        .viewProj = glm::transpose(viewProj), // transposed for Slang mul(pos, mat)
-        .view = glm::transpose(view),
-        .cameraPos = glm::vec4(m_camera.position, 1.0f),
+        .viewProj = viewProj,
+        .view = view,
+        .cameraPos = sm::float4(m_camera.position, 1.0f),
         .exposure = exposure,
         .lightCount = m_scene ? m_scene->lightCount() : 0u,
         .emissiveTriangleCount = m_scene ? m_scene->emissiveTriangleCount() : 0u,
@@ -1357,10 +1356,10 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         // Ray-traced sun shadow: direction toward the dominant IBL light + strength.
         // shadowParams: x = ray tMin (scene-scale bias from camera near plane), y = sky ambient
         // floor, z = env_unit_nits, w = |proj[0][0]| (Hi-Z footprint x scale).
-        .sunDirection = glm::vec4(m_sunDir, m_hasEnv ? m_sunStrength : 0.0f),
-        .shadowParams = glm::vec4(std::max(m_camera.nearPlane, 1e-4f), 0.35f, m_envUnitNits, projScaleX),
+        .sunDirection = sm::float4(m_sunDir, m_hasEnv ? m_sunStrength : 0.0f),
+        .shadowParams = sm::float4(std::max(m_camera.nearPlane, 1e-4f), 0.35f, m_envUnitNits, projScaleX),
         // presentationParams.w = |proj[1][1]| (Hi-Z footprint y scale).
-        .presentationParams = glm::vec4(m_indirectAmbientStrength, 0.0f, m_debugRayHitMode, projScaleY),
+        .presentationParams = sm::float4(m_indirectAmbientStrength, 0.0f, m_debugRayHitMode, projScaleY),
     };
 
     // Attachment builders — CLEAR for the first pass, LOAD for the second (preserving pass-1
@@ -1409,7 +1408,7 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         if (!m_hasEnv || m_skyPipeline == VK_NULL_HANDLE) {
             return;
         }
-        glm::mat4 skyProj = glm::perspective(glm::radians(m_camera.vfovDeg),
+        sm::float4x4 skyProj = sm::perspective(sm::radians(m_camera.vfovDeg),
                                              static_cast<float>(m_config.width) / static_cast<float>(m_config.height),
                                              m_camera.nearPlane,
                                              m_camera.farPlane);
@@ -1417,11 +1416,11 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         if (m_cameraJitterEnabled) {
             skyProj = applyProjectionJitter(skyProj, cameraJitterNdc(m_frameSampleIndex, m_config.width, m_config.height));
         }
-        const glm::mat4 skyView = glm::lookAt(m_camera.position, m_camera.target, m_camera.up);
-        const glm::mat4 skyViewProj = skyProj * skyView;
+        const sm::float4x4 skyView = sm::lookAt(m_camera.position, m_camera.target, m_camera.up);
+        const sm::float4x4 skyViewProj = skyProj * skyView;
         const SkyPushConstants skyPc{
-            .invViewProj = glm::transpose(glm::inverse(skyViewProj)),
-            .cameraPos = glm::vec4(m_camera.position, 1.0f),
+            .invViewProj = sm::inverse(skyViewProj),
+            .cameraPos = sm::float4(m_camera.position, 1.0f),
             .exposure = m_camera.physical.exposure(),
             .hasEnv = 1u,
             .envScale = m_envUnitNits,

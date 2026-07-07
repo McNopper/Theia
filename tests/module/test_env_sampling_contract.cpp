@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include <glm/glm.hpp>
+#include <slang-math/slang-math.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -27,11 +27,11 @@ uint32_t sampleCdf1D(const std::vector<float>& cdf, uint32_t base, uint32_t n, f
     return lo;
 }
 
-glm::vec3 sampleEnvImportanceDir(const std::vector<float>& marginalCdf,
+sm::float3 sampleEnvImportanceDir(const std::vector<float>& marginalCdf,
                                  const std::vector<float>& conditionalCdf,
                                  uint32_t W,
                                  uint32_t H,
-                                 glm::vec2 xi,
+                                 sm::float2 xi,
                                  float& pdfOmega) {
     const uint32_t row = sampleCdf1D(marginalCdf, 0U, H, xi.x);
     const uint32_t col = sampleCdf1D(conditionalCdf, row * (W + 1U), W, xi.y);
@@ -54,19 +54,19 @@ glm::vec3 sampleEnvImportanceDir(const std::vector<float>& marginalCdf,
     pdfOmega = (pRow * pCol * static_cast<float>(W) * static_cast<float>(H)) / (2.0F * kPi * kPi * sinTheta);
 
     const float phi = 2.0F * kPi * (uFrac - 0.5F);
-    glm::vec3 dir;
+    sm::float3 dir;
     dir.y = std::cos(theta);
     dir.x = sinTheta * std::cos(phi);
     dir.z = sinTheta * std::sin(phi);
-    return glm::normalize(dir);
+    return sm::normalize(dir);
 }
 
 float evalEnvImportancePdfDir(const std::vector<float>& marginalCdf,
                               const std::vector<float>& conditionalCdf,
                               uint32_t W,
                               uint32_t H,
-                              glm::vec3 dir) {
-    const glm::vec3 d = glm::normalize(dir);
+                              sm::float3 dir) {
+    const sm::float3 d = sm::normalize(dir);
     const float u = std::atan2(d.z, d.x) * (0.5F * kInvPi) + 0.5F;
     const float v = std::acos(std::clamp(d.y, -1.0F, 1.0F)) * kInvPi;
 
@@ -104,8 +104,8 @@ TEST(TheiaEnvSamplingContract, DeterministicReplayProducesStableSequence) {
     for (int i = 0; i < 32; ++i) {
         float p0 = 0.0F;
         float p1 = 0.0F;
-        const glm::vec3 d0 = sampleEnvImportanceDir(marginal, conditional, W, H, Rng::nextFloat2(s0), p0);
-        const glm::vec3 d1 = sampleEnvImportanceDir(marginal, conditional, W, H, Rng::nextFloat2(s1), p1);
+        const sm::float3 d0 = sampleEnvImportanceDir(marginal, conditional, W, H, Rng::nextFloat2(s0), p0);
+        const sm::float3 d1 = sampleEnvImportanceDir(marginal, conditional, W, H, Rng::nextFloat2(s1), p1);
         EXPECT_NEAR(d0.x, d1.x, 1.0e-6F);
         EXPECT_NEAR(d0.y, d1.y, 1.0e-6F);
         EXPECT_NEAR(d0.z, d1.z, 1.0e-6F);
@@ -131,7 +131,7 @@ TEST(TheiaEnvSamplingContract, PdfEvaluationMatchesSampledDirections) {
     uint32_t state = Rng::composeSeed({3U, 5U}, 2U, 1U, 77U);
     for (int i = 0; i < 64; ++i) {
         float sampledPdf = 0.0F;
-        const glm::vec3 dir = sampleEnvImportanceDir(marginal, conditional, W, H, Rng::nextFloat2(state), sampledPdf);
+        const sm::float3 dir = sampleEnvImportanceDir(marginal, conditional, W, H, Rng::nextFloat2(state), sampledPdf);
         const float evalPdf = evalEnvImportancePdfDir(marginal, conditional, W, H, dir);
         EXPECT_TRUE(std::isfinite(sampledPdf));
         EXPECT_TRUE(std::isfinite(evalPdf));
@@ -153,3 +153,4 @@ TEST(TheiaEnvSamplingContract, BalanceHeuristicIsBoundedAndSymmetric) {
     EXPECT_NEAR(a + b, 1.0F, 1.0e-6F);
     EXPECT_FLOAT_EQ(balanceHeuristic(0.0F, 0.0F), 0.0F);
 }
+

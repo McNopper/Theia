@@ -55,15 +55,15 @@ class Scene : public ISceneBuilder {
   public:
     using Builder = SceneBuilder;
 
-    [[nodiscard]] uint32_t addMaterial(Material mat) override;
+    [[nodiscard]] uint32_t addMaterial(Material&& mat) override;
     [[nodiscard]] uint32_t addMesh(const DeviceContext& ctx,
                                    const CommandPool& pool,
-                                   MeshData data,
+                                   MeshData&& data,
                                    uint32_t materialIdx,
                                    std::string_view name = "") override;
     [[nodiscard]] uint32_t addSphere(const DeviceContext& ctx,
                                      const CommandPool& pool,
-                                     glm::vec3 center,
+                                     sm::float3 center,
                                      float radius,
                                      uint32_t materialIdx) override;
 
@@ -73,7 +73,7 @@ class Scene : public ISceneBuilder {
 
     /// Add a texture to the scene. Returns the bindless texture index.
     /// Must be called before build() / updateSceneSet().
-    [[nodiscard]] uint32_t addTexture(Texture texture) override;
+    [[nodiscard]] uint32_t addTexture(Texture&& texture) override;
 
     VkResult build(const DeviceContext& ctx, const CommandPool& pool);
 
@@ -90,7 +90,7 @@ class Scene : public ISceneBuilder {
     [[nodiscard]] const Buffer& emissiveTriangleBuffer() const noexcept { return m_emissiveTriangleBuffer; }
     [[nodiscard]] const Buffer& emissiveCdfBuffer() const noexcept { return m_emissiveCdfBuffer; }
 
-    /// Per-instance world transforms (one glm::mat4 per instance, column-major).
+    /// Per-instance world transforms (one sm::float4x4 per instance, row-major).
     /// For the current frame.  In the present static-scene model, transforms are
     /// baked into vertex positions at load time so these matrices are always identity.
     [[nodiscard]] const Buffer& instanceTransformBuffer() const noexcept { return m_instanceTransformBuffer; }

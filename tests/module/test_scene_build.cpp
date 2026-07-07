@@ -1,7 +1,6 @@
 // Module tests: Scene build path (meshlets + BLAS/TLAS + light/emissive buffers).
 
-#include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
+#include <slang-math/slang-math.hpp>
 
 #include <gtest/gtest.h>
 #include <limits>
@@ -13,15 +12,15 @@
 
 TEST_F(RtFixture, Scene_BuildWithMeshAndSphere) {
     Scene scene;
-    const uint32_t matDiffuse = scene.addMaterial(Material::diffuse(glm::vec3(0.8F), 1.0F));
-    const uint32_t matMetal = scene.addMaterial(Material::metal(glm::vec3(0.9F, 0.3F, 0.2F), 0.15F));
+    const uint32_t matDiffuse = scene.addMaterial(Material::diffuse(sm::float3(0.8F), 1.0F));
+    const uint32_t matMetal = scene.addMaterial(Material::metal(sm::float3(0.9F, 0.3F, 0.2F), 0.15F));
 
-    MeshData floor = ProceduralGeometry::makeBox(glm::vec3(2.0F, 0.1F, 2.0F), glm::mat4(1.0F));
+    MeshData floor = ProceduralGeometry::makeBox(sm::float3(2.0F, 0.1F, 2.0F), sm::float4x4(1.0F));
     const uint32_t meshInst = scene.addMesh(deviceCtx(), commandPool(), std::move(floor), matDiffuse, "test.floor");
     ASSERT_NE(meshInst, std::numeric_limits<uint32_t>::max());
 
     const uint32_t sphereInst =
-        scene.addSphere(deviceCtx(), commandPool(), glm::vec3(0.0F, 0.5F, 0.0F), 0.5F, matMetal);
+        scene.addSphere(deviceCtx(), commandPool(), sm::float3(0.0F, 0.5F, 0.0F), 0.5F, matMetal);
     ASSERT_NE(sphereInst, std::numeric_limits<uint32_t>::max());
 
     const VkResult result = scene.build(deviceCtx(), commandPool());
@@ -37,9 +36,9 @@ TEST_F(RtFixture, Scene_BuildWithMeshAndSphere) {
 
 TEST_F(RtFixture, Scene_SynthesizesLightFromEmissiveMesh) {
     Scene scene;
-    const uint32_t matEmitter = scene.addMaterial(Material::emissive(glm::vec3(1.0F), 1000.0F));
+    const uint32_t matEmitter = scene.addMaterial(Material::emissive(sm::float3(1.0F), 1000.0F));
 
-    MeshData quad = ProceduralGeometry::makeBox(glm::vec3(1.0F, 0.01F, 1.0F), glm::mat4(1.0F));
+    MeshData quad = ProceduralGeometry::makeBox(sm::float3(1.0F, 0.01F, 1.0F), sm::float4x4(1.0F));
     const uint32_t emitterInst = scene.addMesh(deviceCtx(), commandPool(), std::move(quad), matEmitter, "test.emitter");
     ASSERT_NE(emitterInst, std::numeric_limits<uint32_t>::max());
 
@@ -58,9 +57,9 @@ TEST_F(RtFixture, Scene_BuildEmptyFails) {
 
 TEST_F(RtFixture, Scene_DoesNotSynthesizeLightsForNonEmissiveGeometry) {
     Scene scene;
-    const uint32_t matDiffuse = scene.addMaterial(Material::diffuse(glm::vec3(0.7F), 1.0F));
+    const uint32_t matDiffuse = scene.addMaterial(Material::diffuse(sm::float3(0.7F), 1.0F));
 
-    MeshData floor = ProceduralGeometry::makeBox(glm::vec3(1.0F, 0.1F, 1.0F), glm::mat4(1.0F));
+    MeshData floor = ProceduralGeometry::makeBox(sm::float3(1.0F, 0.1F, 1.0F), sm::float4x4(1.0F));
     const uint32_t meshInst = scene.addMesh(deviceCtx(), commandPool(), std::move(floor), matDiffuse, "test.floor");
     ASSERT_NE(meshInst, std::numeric_limits<uint32_t>::max());
 
@@ -70,3 +69,4 @@ TEST_F(RtFixture, Scene_DoesNotSynthesizeLightsForNonEmissiveGeometry) {
     EXPECT_TRUE(scene.lightBuffer().isValid());
     EXPECT_TRUE(scene.emissiveTriangleBuffer().isValid());
 }
+

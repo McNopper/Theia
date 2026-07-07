@@ -780,9 +780,9 @@ FS_OUT main(FS_IN input) {
 
     // --- GBuffer (target 1): view-space normal + base roughness for SSR ---
     // Transform world-space N into view space.
-    // push-constant `view` = glm::transpose(V), so extracting rows gives V's columns.
-    // mul(worldN, rows_of_V^T) = worldN * V^T = (V * worldN^T)^T = viewN^T.
-    const float3x3 viewRot = float3x3(view[0].xyz, view[1].xyz, view[2].xyz); // rows of V^T
+    // push-constant `view` is row-major V, so extracting rows gives V directly.
+    // mul(worldN, rows_of_V) = worldN * V = viewN in row-vector form.
+    const float3x3 viewRot = float3x3(view[0].xyz, view[1].xyz, view[2].xyz); // rows of V
     const float3   viewN   = normalize(mul(N, viewRot)); // view-space normal
     const float    roughness = saturate(mat.specularRoughAnisoIor.x);
 

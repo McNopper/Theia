@@ -2,7 +2,7 @@
 
 #include <volk/volk.h>
 
-#include <glm/glm.hpp>
+#include <slang-math/slang-math.hpp>
 
 #include "harmonia/DeviceContext.hpp"
 #include "harmonia/core/Buffer.hpp"
@@ -42,8 +42,8 @@ class LightCuller {
     void dispatch(VkCommandBuffer cmd,
                   VkBuffer lightBuffer,
                   uint32_t lightCount,
-                  const glm::mat4& proj,
-                  const glm::mat4& view,
+                  const sm::float4x4& proj,
+                  const sm::float4x4& view,
                   float nearZ,
                   float farZ);
 

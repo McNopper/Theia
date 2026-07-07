@@ -2,7 +2,7 @@
 
 #include <volk/volk.h>
 
-#include <glm/glm.hpp>
+#include <slang-math/slang-math.hpp>
 
 #include <algorithm>
 
@@ -81,7 +81,7 @@ class ForwardRenderer {
     /// Configure ray-traced directional ("sun") shadows from the dominant IBL light.
     /// dirToSun is the world-space direction pointing toward the sun; strength in [0,1]
     /// scales how dark the cast shadow is (0 disables sun shadows entirely).
-    void setSunShadow(const glm::vec3& dirToSun, float strength) noexcept {
+    void setSunShadow(const sm::float3& dirToSun, float strength) noexcept {
         m_sunDir = dirToSun;
         m_sunStrength = strength;
     }
@@ -133,9 +133,9 @@ class ForwardRenderer {
 
   private:
     struct alignas(16) MeshPushConstants {
-        glm::mat4 viewProj; ///< transposed for Slang mul(pos, mat) convention
-        glm::mat4 view;
-        glm::vec4 cameraPos;               ///< xyz = world-space camera position
+        sm::float4x4 viewProj; ///< row-major — mul(pos, viewProj) = VP * pos directly
+        sm::float4x4 view;
+        sm::float4 cameraPos;               ///< xyz = world-space camera position
         float     exposure             = 0.0f; ///< 1 / (1.2 * 2^EV100) — same as Hyperion
         uint32_t  lightCount           = 0;
         uint32_t  emissiveTriangleCount = 0;
@@ -152,9 +152,9 @@ class ForwardRenderer {
         uint32_t  envImportanceHeight  = 0; ///< CDF height
         uint32_t  hiZMipCount          = 0; ///< Hi-Z mip levels; 0 disables the occlusion test
         uint32_t  giEnabled            = 0; ///< 1 when GiPass supplies indirect; disables forward IBL/ambient
-        glm::vec4 sunDirection; ///< xyz = world dir toward sun, w = shadow strength (0 disables)
-        glm::vec4 shadowParams; ///< x = ray tMin, y = sky ambient floor, z = env_unit_nits, w = |proj[0][0]|
-        glm::vec4 presentationParams; ///< x = indirect ambient, y = pass flag, z = debug ray-hit, w = |proj[1][1]|
+        sm::float4 sunDirection; ///< xyz = world dir toward sun, w = shadow strength (0 disables)
+        sm::float4 shadowParams; ///< x = ray tMin, y = sky ambient floor, z = env_unit_nits, w = |proj[0][0]|
+        sm::float4 presentationParams; ///< x = indirect ambient, y = pass flag, z = debug ray-hit, w = |proj[1][1]|
     };
     static_assert(sizeof(MeshPushConstants) == 256);
     bool createDepthTarget();
@@ -184,8 +184,8 @@ class ForwardRenderer {
 
     // Sky/background fullscreen pipeline (samples env panorama, or black).
     struct SkyPushConstants {
-        glm::mat4 invViewProj;
-        glm::vec4 cameraPos;
+        sm::float4x4 invViewProj;
+        sm::float4 cameraPos;
         float    exposure  = 0.0f;
         uint32_t hasEnv    = 0;
         float    envScale  = 0.0f; ///< env_unit_nits — physical cd/m² per raw EXR unit
@@ -195,7 +195,7 @@ class ForwardRenderer {
     VkPipelineLayout m_skyPipelineLayout = VK_NULL_HANDLE;
     VkPipeline m_skyPipeline = VK_NULL_HANDLE;
     bool m_hasEnv = false;
-    glm::vec3 m_sunDir{0.0f, 1.0f, 0.0f}; ///< world dir toward dominant IBL light
+    sm::float3 m_sunDir{0.0f, 1.0f, 0.0f}; ///< world dir toward dominant IBL light
     float m_sunStrength = 0.0f;           ///< [0,1] ray-traced sun shadow strength
     float m_indirectAmbientStrength = 0.0f;
     uint32_t m_giEnabled = 0; ///< 1 when GiPass is active (forward skips IBL/ambient)

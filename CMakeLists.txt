@@ -167,3 +167,4 @@ target_link_libraries(theia PRIVATE theia_demo)
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
+

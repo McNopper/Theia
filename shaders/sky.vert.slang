@@ -5,7 +5,7 @@
 
 [[vk::push_constant]]
 cbuffer SkyPC {
-    float4x4 invViewProj; // transpose(inverse(proj*view)) for Slang mul(vec, mat)
+    float4x4 invViewProj; // row-major inverse(proj*view) for Slang mul(vec, mat)
     float4   cameraPos;    // xyz = world-space camera position
     float    exposure;     // 1 / (1.2 * 2^EV100)
     uint     hasEnv;       // 1 = sample env map, 0 = black

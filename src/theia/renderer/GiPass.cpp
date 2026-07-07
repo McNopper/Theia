@@ -1,4 +1,3 @@
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include "theia/renderer/GiPass.hpp"
 
 #include <algorithm>
@@ -8,6 +7,7 @@
 #include <harmonia/core/ShaderModule.hpp>
 #include <theia/renderer/ShaderPath.hpp>
 #include <theia/scene/Scene.hpp>
+#include <slang-math/slang-math.hpp>
 
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -539,8 +539,8 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
     m_hdrFirstUse = false;
 
     const GiPushConstants pc{
-        .view = params.viewTransposed,
-        .cameraPos = glm::vec4(params.cameraPos, 1.0f),
+        .view = params.view,
+        .cameraPos = sm::float4(params.cameraPos, 1.0f),
         .exposure = params.exposure,
         .frameSampleIndex = params.frameSampleIndex,
         .rngBaseSeed = params.rngBaseSeed,

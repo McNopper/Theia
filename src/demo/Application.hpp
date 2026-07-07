@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <volk/volk.h>
 
-#include <glm/glm.hpp>
+#include <slang-math/slang-math.hpp>
 
 #include <memory>
 
@@ -89,7 +89,7 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     };
 
     /// Compute initial yaw/pitch from a camera direction vector.
-    static void directionToYawPitch(const glm::vec3& dir, float& yaw, float& pitch);
+    static void directionToYawPitch(const sm::float3& dir, float& yaw, float& pitch);
 
     /// True in offscreen capture mode (--output set). Offscreen rendering integrates many
     /// jittered/stochastic samples via progressive accumulation, which is incompatible with
@@ -130,8 +130,8 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     bool m_useTaa      = true;
     uint32_t m_sceneMaxDepth = 3u;
 
-    /// Previous frame's transposed view-projection matrix for motion vector computation.
-    glm::mat4 m_prevViewProj{1.0f};
+    /// Previous frame's row-major view-projection matrix for motion vector computation.
+    sm::float4x4 m_prevViewProj{1.0f};
     bool m_prevViewProjValid = false;
 
     /// True when the camera view changed this frame (fresh, non-accumulated sample). Gates the
@@ -139,17 +139,17 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     bool m_cameraMoving = false;
 
     // Previous view signature, used to reset progressive accumulation on change.
-    glm::vec3 m_prevCamPos{0.0f};
-    glm::vec3 m_prevCamTarget{0.0f};
-    glm::vec3 m_prevCamUp{0.0f};
+    sm::float3 m_prevCamPos{0.0f, 0.0f, 0.0f};
+    sm::float3 m_prevCamTarget{0.0f, 0.0f, 0.0f};
+    sm::float3 m_prevCamUp{0.0f, 0.0f, 0.0f};
     float m_prevEv100 = 0.0f;
     bool m_viewSigValid = false;
 
     // Camera-cut detection for two-pass Hi-Z occlusion culling: on a large view change the
     // previous-frame visibility set is stale, so the Hi-Z test is disabled for that frame and
     // all remaining meshlets are drawn conservatively (prevents culling disoccluded geometry).
-    glm::vec3 m_hiZPrevPos{0.0f};
-    glm::vec3 m_hiZPrevDir{0.0f, 0.0f, -1.0f};
+    sm::float3 m_hiZPrevPos{0.0f, 0.0f, 0.0f};
+    sm::float3 m_hiZPrevDir{0.0f, 0.0f, -1.0f};
     bool m_hiZPrevValid = false;
 
     // ── Async compute resources ──────────────────────────────────────────────

@@ -24,3 +24,4 @@ TEST(TheiaRngContract, DeterministicReplayReproducesSequence) {
         EXPECT_FLOAT_EQ(Rng::nextFloat(s0), Rng::nextFloat(s1));
     }
 }
+

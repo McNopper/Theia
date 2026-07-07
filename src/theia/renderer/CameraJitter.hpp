@@ -1,6 +1,6 @@
 #pragma once
 
-#include <glm/glm.hpp>
+#include <slang-math/slang-math.hpp>
 
 #include <cstdint>
 
@@ -21,35 +21,35 @@ inline float radicalInverse(uint32_t index, uint32_t base) noexcept {
 }
 
 /// Deterministic Halton(2,3) sample in [0,1)^2 driven by sample index.
-inline glm::vec2 halton23(uint32_t sampleIndex) noexcept {
+inline sm::float2 halton23(uint32_t sampleIndex) noexcept {
     const uint32_t seqIndex = sampleIndex + 1U; // avoid (0,0)
-    return glm::vec2{
+    return sm::float2{
         radicalInverse(seqIndex, 2U),
         radicalInverse(seqIndex, 3U),
     };
 }
 
 /// Sub-pixel jitter in pixel footprint units ([-0.5, 0.5) per axis).
-inline glm::vec2 cameraJitterPixels(uint32_t sampleIndex) noexcept {
-    return halton23(sampleIndex) - glm::vec2(0.5f);
+inline sm::float2 cameraJitterPixels(uint32_t sampleIndex) noexcept {
+    return halton23(sampleIndex) - sm::float2{0.5f, 0.5f};
 }
 
 /// Convert pixel-footprint jitter to NDC offsets.
-inline glm::vec2 cameraJitterNdc(uint32_t sampleIndex, uint32_t width, uint32_t height) noexcept {
+inline sm::float2 cameraJitterNdc(uint32_t sampleIndex, uint32_t width, uint32_t height) noexcept {
     if (width == 0U || height == 0U) {
-        return glm::vec2(0.0f);
+        return sm::float2{0.0f, 0.0f};
     }
-    const glm::vec2 px = cameraJitterPixels(sampleIndex);
-    return glm::vec2{
+    const sm::float2 px = cameraJitterPixels(sampleIndex);
+    return sm::float2{
         (2.0f * px.x) / static_cast<float>(width),
         (2.0f * px.y) / static_cast<float>(height),
     };
 }
 
 /// Apply NDC jitter as a projection-center offset.
-inline glm::mat4 applyProjectionJitter(glm::mat4 projection, const glm::vec2& jitterNdc) noexcept {
-    projection[2][0] += jitterNdc.x;
-    projection[2][1] += jitterNdc.y;
+inline sm::float4x4 applyProjectionJitter(sm::float4x4 projection, const sm::float2& jitterNdc) noexcept {
+    projection[0][2] += jitterNdc.x;
+    projection[1][2] += jitterNdc.y;
     return projection;
 }
 

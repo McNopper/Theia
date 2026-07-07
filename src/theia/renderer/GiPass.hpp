@@ -2,7 +2,7 @@
 
 #include <volk/volk.h>
 
-#include <glm/glm.hpp>
+#include <slang-math/slang-math.hpp>
 
 #include "harmonia/DeviceContext.hpp"
 #include "harmonia/core/Buffer.hpp"
@@ -52,8 +52,8 @@ class GiPass {
         bool hasEnvMap = false;
         float envLuminanceScale = 1.0f;
 
-        glm::mat4 viewTransposed{1.0f}; ///< glm::transpose(view) — same convention as ForwardPC
-        glm::vec3 cameraPos{0.0f};
+        sm::float4x4 view{1.0f}; ///< view matrix
+        sm::float3 cameraPos{0.0f};
         float exposure = 1.0f;
         uint32_t frameSampleIndex = 0;
         uint32_t rngBaseSeed = 0;
@@ -114,8 +114,8 @@ class GiPass {
 
   private:
     struct GiPushConstants {
-        glm::mat4 view{1.0f};
-        glm::vec4 cameraPos{0.0f};
+        sm::float4x4 view{1.0f};
+        sm::float4 cameraPos{0.0f};
         float exposure = 1.0f;
         uint32_t frameSampleIndex = 0;
         uint32_t rngBaseSeed = 0;

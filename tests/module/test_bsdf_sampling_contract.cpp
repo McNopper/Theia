@@ -74,3 +74,4 @@ TEST(TheiaBsdfSamplingContract, FresnelStaysFiniteAcrossAnglesAndIor) {
         }
     }
 }
+

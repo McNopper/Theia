@@ -2,7 +2,7 @@
 
 #include <volk/volk.h>
 
-#include <glm/glm.hpp>
+#include <slang-math/slang-math.hpp>
 
 #include "harmonia/DeviceContext.hpp"
 #include "harmonia/core/Image.hpp"
@@ -30,11 +30,11 @@ class MotionVectorPass {
 
     /// Per-frame matrices and buffer handles passed each frame.
     struct FrameParams {
-        /// glm::transpose(proj * view) for the current frame — Slang mul(M,v) convention.
-        glm::mat4 curViewProj{1.0f};
-        /// glm::transpose(proj * view) for the previous frame.
-        glm::mat4 prevViewProj{1.0f};
-        /// Per-instance previous-frame world transforms (one glm::mat4 per instance).
+        /// row-major view-projection matrix for the current frame.
+        sm::float4x4 curViewProj{1.0f};
+        /// row-major view-projection matrix for the previous frame.
+        sm::float4x4 prevViewProj{1.0f};
+        /// Per-instance previous-frame world transforms (one sm::float4x4 per instance).
         /// Must remain valid until record() returns.  May be VK_NULL_HANDLE on the first
         /// frame before the scene is loaded (record() is a no-op in that case).
         VkBuffer prevInstanceTransformBuffer = VK_NULL_HANDLE;
@@ -68,8 +68,8 @@ class MotionVectorPass {
 
   private:
     struct alignas(16) MotionVectorPC {
-        glm::mat4 curViewProj{1.0f};   // 64 bytes — glm::transpose(proj * view)
-        glm::mat4 prevViewProj{1.0f};  // 64 bytes — glm::transpose(proj * view)
+        sm::float4x4 curViewProj{1.0f};   // 64 bytes — row-major view-projection matrix
+        sm::float4x4 prevViewProj{1.0f};  // 64 bytes — row-major view-projection matrix
         // Total: 128 bytes (Vulkan minimum push-constant size)
     };
     static_assert(sizeof(MotionVectorPC) == 128);

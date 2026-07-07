@@ -20,15 +20,15 @@
 
 [[vk::push_constant]]
 cbuffer MotionVectorPC {
-    float4x4 curViewProj;   // glm::transpose(proj * view) for current frame
-    float4x4 prevViewProj;  // glm::transpose(proj * view) for previous frame
+    float4x4 curViewProj;   // row-major (slang-math convention) VP for current frame
+    float4x4 prevViewProj;  // row-major (slang-math convention) VP for previous frame
 };
 
 // GI GBuffer: xyz = world-space primary hit position, w = asfloat(instanceIdx+1); 0 = sky.
 [[vk::binding(0, 0)]] Texture2D<float4>   t_giBuffer;
 // Output: pixel-space (dx, dy) motion vector.
 [[vk::binding(1, 0)]] [vk::image_format("rg32f")] RWTexture2D<float2> t_motionVec;
-// Per-instance previous-frame world transforms (one float4x4 per instance, column-major).
+// Per-instance previous-frame world transforms (one float4x4 per instance, row-major (slang-math convention)).
 // Identity for static scenes (current Theia default: transforms baked into vertex positions).
 [[vk::binding(2, 0)]] StructuredBuffer<float4x4> prevInstanceTransforms;
 
@@ -57,13 +57,13 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // For static scenes (prevT == identity): prevWorldPos == wpos (no-op).
     uint instanceIdx = instanceIdxPlus1 - 1u;
     float4x4 prevT = prevInstanceTransforms[instanceIdx];
-    float3 prevWorldPos = mul(prevT, float4(wpos, 1.0)).xyz;
+    float3 prevWorldPos = mul(float4(wpos, 1.0), prevT).xyz;
 
     // Clip-space positions (homogeneous).  curViewProj / prevViewProj are
-    // glm::transpose(VP), so the row-vector product mul(v, M) = (VP^T)^T * v = VP * v.
+    // Row-major VP upload: mul(v, M) applies VP directly.
     // This MUST match the forward mesh shader (forward_render.mesh.slang:
     // "mul(float4(v.position, 1.0), viewProj)") — using mul(M, v) instead would apply
-    // the transposed projection and yield wrong motion vectors under camera motion.
+    // the wrong matrix convention and yield wrong motion vectors under camera motion.
     float4 curClip  = mul(float4(wpos, 1.0),         curViewProj);
     float4 prevClip = mul(float4(prevWorldPos, 1.0), prevViewProj);
 

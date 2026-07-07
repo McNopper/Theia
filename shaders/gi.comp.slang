@@ -23,7 +23,7 @@ import path_integrator; // ITracer, SurfaceHit, PathState, EnvNeeSample, evalEnv
 
 [[vk::push_constant]]
 cbuffer GiPC {
-    float4x4 view;                  // glm::transpose(view) — same upload convention as ForwardPC
+    float4x4 view;                  // view matrix (row-major, no transpose needed with slang-math)
     float4   cameraPos;             // xyz = world-space camera position
     float    exposure;              // 1 / (1.2 * 2^EV100) — matches forward pass
     uint     frameSampleIndex;      // per-frame sample counter (drives RNG decorrelation across accumulated frames)

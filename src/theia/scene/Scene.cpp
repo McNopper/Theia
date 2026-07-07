@@ -1,9 +1,7 @@
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include "theia/scene/Scene.hpp"
 
+#include <slang-math/slang-math.hpp>
 #include <volk/volk.h>
-
-#include <glm/glm.hpp>
 
 #include <algorithm>
 #include <bit>
@@ -24,12 +22,12 @@
 #include "harmonia/scene/Geometry.hpp"
 #include "harmonia/scene/ProceduralGeometry.hpp"
 
-uint32_t Scene::addMaterial(Material mat) {
+uint32_t Scene::addMaterial(Material&& mat) {
     m_materials.push_back(std::move(mat));
     return static_cast<uint32_t>(m_materials.size() - 1);
 }
 
-uint32_t Scene::addTexture(Texture texture) {
+uint32_t Scene::addTexture(Texture&& texture) {
     const auto idx = static_cast<uint32_t>(m_textures.size());
     m_textures.push_back(std::move(texture));
     return idx;
@@ -37,7 +35,7 @@ uint32_t Scene::addTexture(Texture texture) {
 
 uint32_t Scene::addMesh(const DeviceContext& ctx,
                         const CommandPool& pool,
-                        MeshData data,
+                        MeshData&& data,
                         uint32_t materialIdx,
                         std::string_view name) {
     const uint32_t instanceIndex = static_cast<uint32_t>(m_geometries.size());
@@ -66,7 +64,7 @@ uint32_t Scene::addMesh(const DeviceContext& ctx,
 
 uint32_t Scene::addSphere(const DeviceContext& ctx,
                           const CommandPool& pool,
-                          glm::vec3 center,
+                          sm::float3 center,
                           float radius,
                           uint32_t materialIdx) {
     // Theia is a rasterizer (mesh-shader pipeline), so an analytic sphere cannot
@@ -214,9 +212,9 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
             vertices.push_back(GpuVertex{
                 .position = sphere->center(),
                 .tangentX = 0.0f,
-                .normal = glm::vec3(0.0f),
+                .normal = sm::float3{0.0f, 0.0f, 0.0f},
                 .tangentY = 0.0f,
-                .uv = glm::vec2(0.0f),
+                .uv = sm::float2{0.0f, 0.0f},
                 .tangentZ = 0.0f,
                 .bitangentSign = 1.0f,
             });
@@ -327,7 +325,7 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     // m_instanceTransformBuffer and shift the old value into
     // m_prevInstanceTransformBuffer before each frame.
     const size_t instCount = std::max<size_t>(m_geometries.size(), 1);
-    std::vector<glm::mat4> instanceTransforms(instCount, glm::mat4(1.0f));
+    std::vector<sm::float4x4> instanceTransforms(instCount, sm::float4x4(1.0f));
     for (size_t i = 0; i < m_geometries.size(); ++i) {
         instanceTransforms[i] = m_geometries[i]->xform.matrix();
     }
@@ -335,7 +333,7 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     auto transformBuf =
         Buffer::upload(ctx,
                        pool,
-                       std::as_bytes(std::span<const glm::mat4>(instanceTransforms.data(), instanceTransforms.size())),
+                       std::as_bytes(std::span<const sm::float4x4>(instanceTransforms.data(), instanceTransforms.size())),
                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                        "scene.instanceTransforms");
     if (!transformBuf) {
@@ -345,7 +343,7 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     auto prevTransformBuf =
         Buffer::upload(ctx,
                        pool,
-                       std::as_bytes(std::span<const glm::mat4>(instanceTransforms.data(), instanceTransforms.size())),
+                       std::as_bytes(std::span<const sm::float4x4>(instanceTransforms.data(), instanceTransforms.size())),
                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                        "scene.prevInstanceTransforms");
     if (!prevTransformBuf) {
@@ -402,14 +400,14 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
                 const auto* sph = dynamic_cast<const Sphere*>(m_geometries[i].get());
                 if (!sph)
                     continue;
-                const glm::vec3 sc = glm::vec3(m_geometries[i]->xform.matrix() * glm::vec4(sph->center(), 1.0F));
+                const sm::float3 sc = static_cast<sm::float3>(m_geometries[i]->xform.matrix() * sm::float4(sph->center(), 1.0F));
                 const float sr = std::max(sph->radius(), 0.01F);
                 GpuLight gl{};
                 gl.position = sc;
                 gl.type = std::bit_cast<float>(static_cast<uint32_t>(LightType::Point));
-                gl.direction = glm::vec3(0.0F, -1.0F, 0.0F);
+                gl.direction = sm::float3(0.0F, -1.0F, 0.0F);
                 gl.range = 0.0F;
-                gl.color = glm::vec3(gpuMat.emissionColorLum);
+                gl.color = static_cast<sm::float3>(gpuMat.emissionColorLum);
                 gl.intensity = luminance * kPiLight * sr * sr;
                 gl.halfWidth = sr;
                 gl.halfHeight = sr;
@@ -434,28 +432,28 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
             if (verts.empty() || idxBuf.empty())
                 continue;
 
-            const glm::mat4 xform = m_geometries[i]->xform.matrix();
+            const sm::float4x4 xform = m_geometries[i]->xform.matrix();
 
             // Compute world-space vertices and centroid.
-            std::vector<glm::vec3> wverts;
+            std::vector<sm::float3> wverts;
             wverts.reserve(verts.size());
-            glm::vec3 centroid{0.0f};
+            sm::float3 centroid{0.0f};
             for (const auto& v : verts) {
-                wverts.push_back(glm::vec3(xform * glm::vec4(v.position, 1.0F)));
+                wverts.push_back(static_cast<sm::float3>(xform * sm::float4(v.position, 1.0F)));
                 centroid += wverts.back();
             }
             centroid /= static_cast<float>(wverts.size());
 
             // Compute area-weighted average normal.  normalSum accumulates 2·area·n̂
             // per triangle; its magnitude relative to total area measures planarity.
-            glm::vec3 normalSum{0.0f};
+            sm::float3 normalSum{0.0f};
             float totalArea = 0.0f;
             const uint32_t triCount = static_cast<uint32_t>(idxBuf.size() / 3);
             for (uint32_t t = 0; t < triCount; ++t) {
-                const glm::vec3 e1 = wverts[idxBuf[t * 3 + 1]] - wverts[idxBuf[t * 3 + 0]];
-                const glm::vec3 e2 = wverts[idxBuf[t * 3 + 2]] - wverts[idxBuf[t * 3 + 0]];
-                const glm::vec3 c = glm::cross(e1, e2);
-                const float area = 0.5F * glm::length(c);
+                const sm::float3 e1 = wverts[idxBuf[t * 3 + 1]] - wverts[idxBuf[t * 3 + 0]];
+                const sm::float3 e2 = wverts[idxBuf[t * 3 + 2]] - wverts[idxBuf[t * 3 + 0]];
+                const sm::float3 c = sm::cross(e1, e2);
+                const float area = 0.5F * sm::length(c);
                 if (area > 1e-6F) {
                     normalSum += c;
                     totalArea += area;
@@ -468,7 +466,7 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
             // closed/curved emitter (sphere) whose face normals cancel.  A degenerate
             // average normal cannot form a meaningful rect frame, so those emitters are
             // synthesized as omnidirectional point lights instead.
-            const float planarity = glm::length(normalSum) / (2.0F * totalArea);
+            const float planarity = sm::length(normalSum) / (2.0F * totalArea);
 
             constexpr float kPi = 3.14159265358979323846F;
             if (planarity < 0.5F) {
@@ -477,16 +475,16 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
                 // point-light intensity so Li = color · (L·π r²) / d² matches the rect form.
                 float radius = 0.0F;
                 for (const auto& wv : wverts) {
-                    radius = std::max(radius, glm::length(wv - centroid));
+                    radius = std::max(radius, sm::length(wv - centroid));
                 }
                 radius = std::max(radius, 0.01F);
 
                 GpuLight gl{};
                 gl.position = centroid;
                 gl.type = std::bit_cast<float>(static_cast<uint32_t>(LightType::Point));
-                gl.direction = glm::vec3(0.0F, -1.0F, 0.0F); // unused for point lights
+                gl.direction = sm::float3(0.0F, -1.0F, 0.0F); // unused for point lights
                 gl.range = 0.0F;
-                gl.color = glm::vec3(gpuMat.emissionColorLum);
+                gl.color = static_cast<sm::float3>(gpuMat.emissionColorLum);
                 gl.intensity = luminance * kPi * radius * radius;
                 gl.halfWidth = radius;
                 gl.halfHeight = radius;
@@ -501,20 +499,20 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
                 continue;
             }
 
-            const glm::vec3 avgNormal = glm::normalize(normalSum);
+            const sm::float3 avgNormal = sm::normalize(normalSum);
 
             // Build tangent frame and project vertices to find half-extents.
-            const glm::vec3 up = (std::abs(avgNormal.y) < 0.99F) ? glm::vec3(0, 1, 0) : glm::vec3(1, 0, 0);
-            const glm::vec3 tangX = glm::normalize(glm::cross(up, avgNormal));
-            const glm::vec3 tangY = glm::cross(avgNormal, tangX);
+            const sm::float3 up = (std::abs(avgNormal.y) < 0.99F) ? sm::float3{0.0f, 1.0f, 0.0f} : sm::float3{1.0f, 0.0f, 0.0f};
+            const sm::float3 tangX = sm::normalize(sm::cross(up, avgNormal));
+            const sm::float3 tangY = sm::cross(avgNormal, tangX);
             float minX = std::numeric_limits<float>::max(), maxX = std::numeric_limits<float>::lowest();
             float minY = std::numeric_limits<float>::max(), maxY = std::numeric_limits<float>::lowest();
             for (const auto& wv : wverts) {
-                const glm::vec3 rel = wv - centroid;
-                minX = std::min(minX, glm::dot(rel, tangX));
-                maxX = std::max(maxX, glm::dot(rel, tangX));
-                minY = std::min(minY, glm::dot(rel, tangY));
-                maxY = std::max(maxY, glm::dot(rel, tangY));
+                const sm::float3 rel = wv - centroid;
+                minX = std::min(minX, sm::dot(rel, tangX));
+                maxX = std::max(maxX, sm::dot(rel, tangX));
+                minY = std::min(minY, sm::dot(rel, tangY));
+                maxY = std::max(maxY, sm::dot(rel, tangY));
             }
             const float halfW = std::max((maxX - minX) * 0.5F, 0.01F);
             const float halfH = std::max((maxY - minY) * 0.5F, 0.01F);
@@ -524,7 +522,7 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
             gl.type = std::bit_cast<float>(static_cast<uint32_t>(LightType::Rect));
             gl.direction = avgNormal; // emission direction (toward scene)
             gl.range = 0.0F;
-            gl.color = glm::vec3(gpuMat.emissionColorLum);
+            gl.color = static_cast<sm::float3>(gpuMat.emissionColorLum);
             // Raw emissive radiance — matches Hyperion's emissive-mesh NEE, which
             // illuminates with the unmodified Le = emissionColor * luminance
             // (closesthit.slang:233,258, no /683). The /683 luminous-efficacy divide is
@@ -588,34 +586,34 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
             continue;
         }
 
-        const glm::mat4 xformMat = m_geometries[i]->xform.matrix();
-        const glm::vec3 emission = glm::vec3(gpuMat.emissionColorLum) *
+        const sm::float4x4 xformMat = m_geometries[i]->xform.matrix();
+        const sm::float3 emission = static_cast<sm::float3>(gpuMat.emissionColorLum) *
                                    gpuMat.emissionColorLum.w; // NOLINT(cppcoreguidelines-pro-type-union-access)
 
         const uint32_t triCount = static_cast<uint32_t>(idxBuf.size() / 3);
         for (uint32_t t = 0; t < triCount; ++t) {
-            const glm::vec3 lv0 = verts[idxBuf[t * 3 + 0]].position;
-            const glm::vec3 lv1 = verts[idxBuf[t * 3 + 1]].position;
-            const glm::vec3 lv2 = verts[idxBuf[t * 3 + 2]].position;
+            const sm::float3 lv0 = verts[idxBuf[t * 3 + 0]].position;
+            const sm::float3 lv1 = verts[idxBuf[t * 3 + 1]].position;
+            const sm::float3 lv2 = verts[idxBuf[t * 3 + 2]].position;
 
-            const glm::vec3 wv0 = glm::vec3(xformMat * glm::vec4(lv0, 1.0F));
-            const glm::vec3 wv1 = glm::vec3(xformMat * glm::vec4(lv1, 1.0F));
-            const glm::vec3 wv2 = glm::vec3(xformMat * glm::vec4(lv2, 1.0F));
-            const glm::vec3 edge1 = wv1 - wv0;
-            const glm::vec3 edge2 = wv2 - wv0;
-            const glm::vec3 cross = glm::cross(edge1, edge2);
-            const float area = 0.5F * glm::length(cross);
+            const sm::float3 wv0 = static_cast<sm::float3>(xformMat * sm::float4(lv0, 1.0F));
+            const sm::float3 wv1 = static_cast<sm::float3>(xformMat * sm::float4(lv1, 1.0F));
+            const sm::float3 wv2 = static_cast<sm::float3>(xformMat * sm::float4(lv2, 1.0F));
+            const sm::float3 edge1 = wv1 - wv0;
+            const sm::float3 edge2 = wv2 - wv0;
+            const sm::float3 cross = sm::cross(edge1, edge2);
+            const float area = 0.5F * sm::length(cross);
 
             if (area <= 1.0e-6F) {
                 continue; // skip degenerate triangles
             }
-            const glm::vec3 normal = cross / (2.0F * area); // normalize: cross/|cross|
+            const sm::float3 normal = cross / (2.0F * area); // normalize: cross/|cross|
 
             emissiveTriangles.push_back(GpuEmissiveTriangle{
-                .v0_area = glm::vec4(wv0, area),
-                .edge1_emitR = glm::vec4(edge1, emission.r),
-                .edge2_emitG = glm::vec4(edge2, emission.g),
-                .normal_emitB = glm::vec4(normal, emission.b),
+                .v0_area = sm::float4(wv0, area),
+                .edge1_emitR = sm::float4(edge1, emission.r),
+                .edge2_emitG = sm::float4(edge2, emission.g),
+                .normal_emitB = sm::float4(normal, emission.b),
             });
             // Power for power-proportional NEE selection: area × luminance(Le) (Rec.2020).
             const float lumLe = 0.2627F * emission.r + 0.6780F * emission.g + 0.0593F * emission.b;
