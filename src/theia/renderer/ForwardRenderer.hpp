@@ -277,6 +277,7 @@ class ForwardRenderer {
     bool m_hiZTestEnabled = true;         ///< set false for one frame on a camera cut
     bool m_visClearPrev = false;          ///< clear PREV visibility next frame (freshly (re)built)
     bool m_hiZDebugDisabled = false;      ///< THEIA_DISABLE_HIZ: draw all meshlets (A-B debug)
+    bool m_forceSinglePass = false;       ///< THEIA_SINGLE_PASS: bypass two-pass Hi-Z (A-B debug)
 };
 
 } // namespace theia

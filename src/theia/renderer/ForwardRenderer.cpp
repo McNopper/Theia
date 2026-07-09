@@ -50,10 +50,25 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
         Logger::warn("GpuCullPass: initialization failed — falling back to CPU-count draw");
     }
 
+    // Debug/A-B toggle: set THEIA_FORCE_GD3 to skip DGC layout creation and force the
+    // vkCmdDrawMeshTasksIndirectEXT (GD3) draw path. Used to isolate DGC-specific regressions.
+    bool forceGd3 = false;
+    {
+        char* forceGd3Raw = nullptr;
+        size_t forceGd3Len = 0;
+        if (_dupenv_s(&forceGd3Raw, &forceGd3Len, "THEIA_FORCE_GD3") == 0 && forceGd3Raw != nullptr) {
+            forceGd3 = (forceGd3Raw[0] != '\0' && forceGd3Raw[0] != '0');
+            std::free(forceGd3Raw);
+            if (forceGd3) {
+                Logger::info("THEIA_FORCE_GD3 set — DGC disabled, using indirect draw fallback");
+            }
+        }
+    }
+
     // GD6: create DGC indirect commands layout when VK_EXT_device_generated_commands is available.
     // One token: DRAW_MESH_TASKS_EXT (stride=12 = VkDrawMeshTasksIndirectCommandEXT).
     // sequenceCountAddress will point to indirectDrawBuf[0..3] (visible instance count).
-    if (ctx.dgcSupported && m_gpuCullPass.isInitialized()) {
+    if (ctx.dgcSupported && m_gpuCullPass.isInitialized() && !forceGd3) {
         const VkIndirectCommandsLayoutTokenEXT dgcToken{
             .sType  = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_TOKEN_EXT,
             .type   = VK_INDIRECT_COMMANDS_TOKEN_TYPE_DRAW_MESH_TASKS_EXT,
@@ -93,7 +108,7 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
             .pNext                  = &memReqPipelineInfo,
             .indirectExecutionSet   = VK_NULL_HANDLE,
             .indirectCommandsLayout = m_dgcLayout,
-            .maxSequenceCount       = GpuCullPass::kMaxInstances,
+            .maxSequenceCount       = 1u,   // single GPU-generated draw (see drawOpaque/drawTransparent)
             .maxDrawCount           = 1,
         };
         VkMemoryRequirements2 memReq{.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2};
@@ -154,6 +169,16 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
         std::free(hiZDisableRaw);
         if (m_hiZDebugDisabled) {
             Logger::info("THEIA_DISABLE_HIZ set — Hi-Z occlusion test disabled");
+        }
+    }
+
+    char* singlePassRaw = nullptr;
+    size_t singlePassLen = 0;
+    if (_dupenv_s(&singlePassRaw, &singlePassLen, "THEIA_SINGLE_PASS") == 0 && singlePassRaw != nullptr) {
+        m_forceSinglePass = (singlePassRaw[0] != '\0' && singlePassRaw[0] != '0');
+        std::free(singlePassRaw);
+        if (m_forceSinglePass) {
+            Logger::info("THEIA_SINGLE_PASS set — two-pass Hi-Z bypassed (single draw pass)");
         }
     }
 
@@ -507,9 +532,11 @@ void ForwardRenderer::drawOpaque(VkCommandBuffer cmd,
                        sizeof(MeshPushConstants),
                        &pc);
     if (m_gpuCullPass.isInitialized() && m_dgcLayout != VK_NULL_HANDLE) {
-        // GD6 DGC path: N per-instance draws via VK_EXT_device_generated_commands.
-        // sequenceCountAddress = indirectDrawBuf[0..3] = visible instance count.
-        // Task shader DrawIndex (SV_DrawIndex) = sequence index → compactInstanceList[DrawIndex].
+        // GD6 DGC path: one GPU-generated DRAW_MESH_TASKS command via VK_EXT_device_generated_commands.
+        // indirectAddress points at indirectDrawBuf = {visibleCount, 1, 1} (written by GpuCullPass),
+        // so a single sequence dispatches `visibleCount` task workgroups. The task shader indexes
+        // compactInstanceList[gid.x] — identical semantics to the GD3 fallback, but the command
+        // itself is GPU-resident and consumed through the modern device-generated-commands path.
         const VkGeneratedCommandsPipelineInfoEXT dgcPipelineInfo{
             .sType    = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_PIPELINE_INFO_EXT,
             .pipeline = m_graphicsPipeline,
@@ -521,13 +548,13 @@ void ForwardRenderer::drawOpaque(VkCommandBuffer cmd,
                                     | VK_SHADER_STAGE_FRAGMENT_BIT,
             .indirectExecutionSet   = VK_NULL_HANDLE,
             .indirectCommandsLayout = m_dgcLayout,
-            .indirectAddress        = m_gpuCullPass.dgcAddress(),
-            .indirectAddressSize    = GpuCullPass::kMaxInstances * 12u,
+            .indirectAddress        = m_gpuCullPass.indirectDrawAddress(),
+            .indirectAddressSize    = 12u,   // one VkDrawMeshTasksIndirectCommandEXT
             .preprocessAddress      = m_dgcPreprocessAddr,
             .preprocessSize         = m_dgcPreprocessSize,
-            .maxSequenceCount       = GpuCullPass::kMaxInstances,
-            .sequenceCountAddress   = m_gpuCullPass.indirectDrawAddress(),
-            .maxDrawCount           = 1,   // no DRAW_COUNT token
+            .maxSequenceCount       = 1u,    // single GPU-generated draw
+            .sequenceCountAddress   = 0,     // fixed count of 1
+            .maxDrawCount           = 1,
         };
         vkCmdExecuteGeneratedCommandsEXT(cmd, VK_FALSE, &dgcInfo);
     } else if (m_gpuCullPass.isInitialized() && vkCmdDrawMeshTasksIndirectEXT != nullptr) {
@@ -1642,12 +1669,12 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
                                         | VK_SHADER_STAGE_FRAGMENT_BIT,
                 .indirectExecutionSet   = VK_NULL_HANDLE,
                 .indirectCommandsLayout = m_dgcLayout,
-                .indirectAddress        = m_gpuCullPass.dgcAddress(),
-                .indirectAddressSize    = GpuCullPass::kMaxInstances * 12u,
+                .indirectAddress        = m_gpuCullPass.indirectDrawAddress(),
+                .indirectAddressSize    = 12u,   // one VkDrawMeshTasksIndirectCommandEXT
                 .preprocessAddress      = m_dgcPreprocessAddr,
                 .preprocessSize         = m_dgcPreprocessSize,
-                .maxSequenceCount       = GpuCullPass::kMaxInstances,
-                .sequenceCountAddress   = m_gpuCullPass.indirectDrawAddress(),
+                .maxSequenceCount       = 1u,    // single GPU-generated draw
+                .sequenceCountAddress   = 0,     // fixed count of 1
                 .maxDrawCount           = 1,
             };
             vkCmdExecuteGeneratedCommandsEXT(c, VK_FALSE, &dgcInfo);
@@ -1687,6 +1714,12 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
                                viewProj);
         // Barrier: compute writes → task shader reads (compactInstanceList) +
         //          indirect command reads (indirectDrawBuf).
+        // The indirectDrawBuf doubles as the DGC sequenceCountAddress, which is consumed at
+        // the COMMAND_PREPROCESS stage by vkCmdExecuteGeneratedCommandsEXT (implicit
+        // preprocessing) — not at DRAW_INDIRECT. Cover both stages so the count is fully
+        // written by the cull compute before DGC preprocessing reads it; omitting
+        // COMMAND_PREPROCESS lets the driver read a partial sequence count, dropping the
+        // instances near the tail of the compact list (far geometry) non-obviously.
         const std::array cullBarriers{
             VkBufferMemoryBarrier2{
                 .sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
@@ -1702,8 +1735,10 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
                 .sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
                 .srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                .dstStageMask  = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
-                .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
+                .dstStageMask  = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT
+                               | VK_PIPELINE_STAGE_2_COMMAND_PREPROCESS_BIT_EXT,
+                .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT
+                               | VK_ACCESS_2_COMMAND_PREPROCESS_READ_BIT_EXT,
                 .buffer        = m_gpuCullPass.indirectDrawBuffer(),
                 .offset        = 0,
                 .size          = VK_WHOLE_SIZE,
@@ -1717,7 +1752,7 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         vkCmdPipelineBarrier2(cmd, &cullDep);
     }
 
-    const bool twoPass = canDraw && visReady;
+    const bool twoPass = canDraw && visReady && !m_forceSinglePass;
     const uint32_t hiZMip =
         (twoPass && m_hiZPass.isInitialized() && m_hiZTestEnabled && !m_hiZDebugDisabled)
             ? m_hiZPass.mipLevels()

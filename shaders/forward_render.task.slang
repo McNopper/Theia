@@ -74,11 +74,12 @@ struct TaskPayload {
 
 [numthreads(1, 1, 1)]
 [shader("amplification")]
-void main(uint3 gid : SV_GroupID, uint drawIdx : SV_DrawIndex) {
-    // gid.x + drawIdx selects the right compact-list entry in both paths:
-    //   GD3 (single indirect draw):     drawIdx = 0,        gid.x  = visible-instance position
-    //   DGC (N per-instance draws):     drawIdx = sequence, gid.x  = 0
-    const uint instIdx = compactInstanceList[gid.x + drawIdx];
+void main(uint3 gid : SV_GroupID) {
+    // Single GPU-generated draw dispatches `visibleCount` task workgroups (GD3/GD6 share this):
+    //   gid.x = 0..visibleCount-1 → compactInstanceList[gid.x] = actual scene instance index.
+    // The visible count comes from GpuCullPass (indirectDrawBuf {visibleCount,1,1}), so both
+    // vkCmdDrawMeshTasksIndirectEXT (GD3) and vkCmdExecuteGeneratedCommandsEXT (GD6) work here.
+    const uint instIdx = compactInstanceList[gid.x];
     const GpuInstance inst = instances[instIdx];
     const GpuMaterial mat = materials[inst.materialIndex];
 

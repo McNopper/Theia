@@ -15,25 +15,22 @@ namespace theia {
 ///   - compactInstanceList: uint[] of visible instance indices (STORAGE)
 ///   - indirectDrawBuf:     single VkDrawMeshTasksIndirectCommandEXT = {visibleCount, 1, 1}
 ///                          (STORAGE + INDIRECT + DEVICE_ADDRESS)
-///   - dgcBuf:              kMaxInstances × {1,1,1} DGC records (pre-filled, never modified)
-///                          (INDIRECT + DEVICE_ADDRESS)
 ///
 /// Two draw paths (selected by ForwardRenderer based on DeviceContext::dgcSupported):
 ///
 ///   DGC path (preferred when VK_EXT_device_generated_commands is available):
-///     - vkCmdExecuteGeneratedCommandsEXT with:
-///         indirectAddress     = dgcAddress()         (pre-filled DGC records)
-///         sequenceCountAddress = indirectDrawAddress() (visibleCount in first 4 bytes)
-///     - Task shader uses SV_DrawIndex as compact-list index (DrawIndex = sequence index)
+///     - vkCmdExecuteGeneratedCommandsEXT with a single sequence whose command is
+///       indirectDrawBuf = {visibleCount, 1, 1} (indirectAddress = indirectDrawAddress()).
+///       One GPU-generated draw dispatches `visibleCount` task workgroups.
 ///
 ///   GD3 fallback (single indirect draw):
 ///     - vkCmdDrawMeshTasksIndirectEXT(cmd, indirectDrawBuffer(), 0, 1, 12)
-///     - Task shader uses gid.x as compact-list index
 ///
-/// In the task shader, compactInstanceList[gid.x + drawIdx] handles both paths:
-///   GD3: drawIdx = 0, gid.x = 0..N-1   |   DGC: drawIdx = 0..N-1, gid.x = 0
+/// Both paths share the same task-shader semantics: gid.x = 0..visibleCount-1 indexes
+/// compactInstanceList to recover the actual scene instance index.
 ///
-/// GPU-driven design: no CPU readback; the CPU only records the indirect dispatch.
+/// GPU-driven design: no CPU readback; the CPU only records the indirect dispatch, and the
+/// draw command / count are GPU-resident (written by the cull compute shader).
 ///
 /// Ref: Gribb & Hartmann — "Fast Extraction of Viewing Frustum Planes from the
 ///      World-View-Projection Matrix" (2001)
@@ -82,20 +79,15 @@ class GpuCullPass {
     }
 
     /// Single VkDrawMeshTasksIndirectCommandEXT entry: {visibleCount, 1, 1}.
-    /// GD3 fallback: pass to vkCmdDrawMeshTasksIndirectEXT (drawCount=1, stride=12).
-    /// DGC path: first 4 bytes (groupCountX = visibleCount) used as sequenceCountAddress.
+    /// GD3: pass to vkCmdDrawMeshTasksIndirectEXT (drawCount=1, stride=12).
+    /// GD6 DGC: used as the single sequence's indirect command (indirectAddress).
     [[nodiscard]] VkBuffer indirectDrawBuffer() const noexcept { return m_indirectDrawBuf.handle(); }
 
-    /// Device address of indirectDrawBuf[0..3] = visible instance count.
-    /// Used as VkGeneratedCommandsInfoEXT::sequenceCountAddress in the DGC path.
+    /// Device address of indirectDrawBuf = {visibleCount, 1, 1}.
+    /// GD6 DGC path: VkGeneratedCommandsInfoEXT::indirectAddress (single-sequence command).
     [[nodiscard]] VkDeviceAddress indirectDrawAddress() const noexcept {
         return m_indirectDrawBuf.deviceAddress();
     }
-
-    /// DGC records buffer: kMaxInstances × {1,1,1} (VkDrawMeshTasksIndirectCommandEXT).
-    /// Pre-filled at init; never modified per frame.
-    /// Used as VkGeneratedCommandsInfoEXT::indirectAddress in the DGC path.
-    [[nodiscard]] VkDeviceAddress dgcAddress() const noexcept { return m_dgcBuf.deviceAddress(); }
 
   private:
     const DeviceContext* m_ctx = nullptr;
@@ -108,7 +100,6 @@ class GpuCullPass {
 
     Buffer m_compactInstanceListBuf; ///< uint[kMaxInstances]  STORAGE
     Buffer m_indirectDrawBuf;        ///< single VkDrawMeshTasksIndirectCommandEXT  STORAGE | INDIRECT | DEVICE_ADDR
-    Buffer m_dgcBuf;                 ///< kMaxInstances × {1,1,1}  INDIRECT | DEVICE_ADDR  (pre-filled, read-only)
 };
 
 } // namespace theia
