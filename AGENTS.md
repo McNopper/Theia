@@ -138,33 +138,44 @@ SDL3, slangc and volk come from the Vulkan SDK (not vcpkg). vcpkg provides opene
 instance indices) are GPU-resident and GPU-written. The CPU records commands only; it never reads
 back GPU-side state to determine draw counts or parameters.
 
-**Implemented architecture (GD2/GD3):**
+**Implemented architecture (GD2/GD3/GD6):**
 
 ```mermaid
 flowchart TD
     A["GpuCullPass.dispatch()"] --> B["compactInstanceList[]<br/>visible instance indices"]
     A --> C["indirectDrawBuf<br/>{visibleCount, 1, 1}"]
-    B --> D["ForwardRenderer binding 10"]
-    C --> E["vkCmdDrawMeshTasksIndirectEXT<br/>drawCount=1, stride=12"]
-    D --> F["task shader: instIdx = compactInstanceList[gid.x]"]
-    E --> F
-    F --> G["DispatchMesh(meshletCount, 1, 1)"]
+    A --> D["dgcBuf<br/>kMaxInstances × {1,1,1}"]
+    B --> E["ForwardRenderer binding 10"]
+    C --> F["sequenceCountAddress<br/>= indirectDrawBuf[0..3]"]
+    D --> G["vkCmdExecuteGeneratedCommandsEXT<br/>N sequences, 1 task WG each"]
+    E --> H["task shader: instIdx = compactInstanceList[gid.x + SV_DrawIndex]"]
+    F --> G
+    G --> H
+    H --> I["DispatchMesh(meshletCount, 1, 1)"]
 ```
+
+**GD6 `gid.x + SV_DrawIndex` trick:** enables a single task shader entry point for both paths:
+- **GD3 fallback** (`vkCmdDrawMeshTasksIndirectEXT`, single draw): `SV_DrawIndex=0`,
+  `gid.x=0..N-1` → `compactInstanceList[gid.x]`.
+- **DGC path** (`vkCmdExecuteGeneratedCommandsEXT`, N sequences of `{1,1,1}`): `gid.x=0`,
+  `SV_DrawIndex=0..N-1` → `compactInstanceList[SV_DrawIndex]`.
+  No push-constant layout changes required.
 
 - `forward_cull.comp.slang`: 64-thread compute; Gribb-Hartmann 5-plane frustum cull; atomic
   `InterlockedAdd` on `indirectDrawBuf` byte-offset 0 accumulates `groupCountX` = visible count;
   thread 0 restores `groupCountY=1` / `groupCountZ=1` after per-frame `vkCmdFillBuffer` reset.
-- Single `VkDrawMeshTasksIndirectCommandEXT` entry `{visibleCount, 1, 1}` — **not** per-instance.
-- Task shader indexes `compactInstanceList[gid.x]` (not `SV_DrawID`).
+- `dgcBuf`: kMaxInstances × `VkDrawMeshTasksIndirectCommandEXT{1,1,1}`, pre-filled at init,
+  never modified per frame. `sequenceCountAddress` = `indirectDrawBuf[0..3]` (dual-use).
+- `VkIndirectCommandsLayoutEXT`: one `DRAW_MESH_TASKS_EXT` token, stride=12.
+- DGC preprocess buffer: allocated with `VK_BUFFER_USAGE_2_PREPROCESS_BUFFER_BIT_EXT`
+  (64-bit flag via `VkBufferUsageFlags2CreateInfo`; requires `maintenance5` + `VMA_ALLOCATOR_CREATE_KHR_MAINTENANCE5_BIT`).
+- Three-way dispatch per pass: DGC (preferred) → GD3 indirect → CPU-count fallback.
 - GD4: Both Hi-Z passes (`cullPhase=1` and `cullPhase=2`) use the same GPU-indirect path;
   per-meshlet Hi-Z occlusion is handled by the mesh shader using `cullPhase` push constant.
 
 **Active extensions for GPU-driven draws:**
 - `VK_EXT_mesh_shader`: `vkCmdDrawMeshTasksIndirectEXT` for GPU-count indirect draws ✅
-- `VK_EXT_device_generated_commands` (`dgcSupported`): full DGC with per-draw push constants (GD6) ✅ (enabled, not yet wired)
-
-**[Future GD6]** `vkCmdExecuteGeneratedCommandsEXT` (`VK_EXT_device_generated_commands`):
-per-draw push constant carries `instanceIdx` from GPU — `compactInstanceList` removed.
+- `VK_EXT_device_generated_commands` (`dgcSupported`): full DGC with N-per-instance sequences ✅
 
 **Acceleration structure builds — device-side only (Khronos deprecation compliant):**
 - BLAS builds: `vkCmdBuildAccelerationStructuresKHR` (`Geometry::buildBlas`).
