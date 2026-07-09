@@ -131,3 +131,37 @@ SDL3, slangc and volk come from the Vulkan SDK (not vcpkg). vcpkg provides opene
   OpenPBR parameter naming and use MaterialX as the cross-check. Parameters are identical to
   Hyperion — the goal is the best real-time approximation of the same OpenPBR inputs, not
   different parameters. The shared OpenPBR BSDF lives in Harmonia (`bsdf_shared.slang`).
+
+## GPU-driven design (Theia)
+
+**Principle:** GPU-driven by design — all draw submission parameters (dispatch counts, per-draw
+instance indices) are GPU-resident and GPU-written. The CPU records commands only; it never reads
+back GPU-side state to determine draw counts or parameters.
+
+**Target architecture (GD block):**
+
+```
+GpuCullPass compute shader
+  ├─ Input:  instanceBuffer, camera frustum planes, prev-frame Hi-Z depth pyramid
+  ├─ Output: compactInstanceList[] (visible instance indices)
+  ├─ Output: drawCount (uint32_t, atomic counter)
+  └─ Output: indirectDrawBuf (VkDrawMeshTasksIndirectCommandEXT[], one {1,1,1} per visible)
+
+ForwardRenderer::drawOpaque
+  └─ vkCmdDrawMeshTasksIndirectCountEXT(indirectDrawBuf, drawCount, maxInstances)
+       └─ task shader: instanceIdx = compactInstanceList[SV_DrawID]
+
+[Future GD6] vkCmdExecuteGeneratedCommandsEXT (VK_EXT_device_generated_commands)
+  └─ Per-draw push constant carries instanceIdx from GPU — compactInstanceList removed
+```
+
+**Active extensions for GPU-driven draws:**
+- `VK_EXT_mesh_shader`: `vkCmdDrawMeshTasksIndirectCountEXT` for variable-count GPU draws ✅
+- `VK_EXT_device_generated_commands` (`dgcSupported`): full DGC with per-draw push constants (GD6) ✅ (enabled, not yet wired)
+- `VK_KHR_draw_indirect_count`: variable indirect draw count buffer (Vulkan 1.2 core) ✅
+
+**Acceleration structure builds — device-side only (Khronos deprecation compliant):**
+- BLAS builds: `vkCmdBuildAccelerationStructuresKHR` (`Geometry::buildBlas`).
+- TLAS builds: `vkCmdBuildAccelerationStructuresKHR` (`Scene::buildTlas`).
+- `vkBuildAccelerationStructuresKHR` (host-side) is **never used** — deprecated per the
+  [Khronos RT AS deprecation blog](https://www.khronos.org/blog/vulkan-ray-tracing-deprecating-host-side-acceleration-structure-builds).
