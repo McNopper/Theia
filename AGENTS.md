@@ -138,27 +138,33 @@ SDL3, slangc and volk come from the Vulkan SDK (not vcpkg). vcpkg provides opene
 instance indices) are GPU-resident and GPU-written. The CPU records commands only; it never reads
 back GPU-side state to determine draw counts or parameters.
 
-**Target architecture (GD block):**
+**Implemented architecture (GD2/GD3):**
 
+```mermaid
+flowchart TD
+    A["GpuCullPass.dispatch()"] --> B["compactInstanceList[]<br/>visible instance indices"]
+    A --> C["indirectDrawBuf<br/>{visibleCount, 1, 1}"]
+    B --> D["ForwardRenderer binding 10"]
+    C --> E["vkCmdDrawMeshTasksIndirectEXT<br/>drawCount=1, stride=12"]
+    D --> F["task shader: instIdx = compactInstanceList[gid.x]"]
+    E --> F
+    F --> G["DispatchMesh(meshletCount, 1, 1)"]
 ```
-GpuCullPass compute shader
-  ├─ Input:  instanceBuffer, camera frustum planes, prev-frame Hi-Z depth pyramid
-  ├─ Output: compactInstanceList[] (visible instance indices)
-  ├─ Output: drawCount (uint32_t, atomic counter)
-  └─ Output: indirectDrawBuf (VkDrawMeshTasksIndirectCommandEXT[], one {1,1,1} per visible)
 
-ForwardRenderer::drawOpaque
-  └─ vkCmdDrawMeshTasksIndirectCountEXT(indirectDrawBuf, drawCount, maxInstances)
-       └─ task shader: instanceIdx = compactInstanceList[SV_DrawID]
-
-[Future GD6] vkCmdExecuteGeneratedCommandsEXT (VK_EXT_device_generated_commands)
-  └─ Per-draw push constant carries instanceIdx from GPU — compactInstanceList removed
-```
+- `forward_cull.comp.slang`: 64-thread compute; Gribb-Hartmann 5-plane frustum cull; atomic
+  `InterlockedAdd` on `indirectDrawBuf` byte-offset 0 accumulates `groupCountX` = visible count;
+  thread 0 restores `groupCountY=1` / `groupCountZ=1` after per-frame `vkCmdFillBuffer` reset.
+- Single `VkDrawMeshTasksIndirectCommandEXT` entry `{visibleCount, 1, 1}` — **not** per-instance.
+- Task shader indexes `compactInstanceList[gid.x]` (not `SV_DrawID`).
+- GD4: Both Hi-Z passes (`cullPhase=1` and `cullPhase=2`) use the same GPU-indirect path;
+  per-meshlet Hi-Z occlusion is handled by the mesh shader using `cullPhase` push constant.
 
 **Active extensions for GPU-driven draws:**
-- `VK_EXT_mesh_shader`: `vkCmdDrawMeshTasksIndirectCountEXT` for variable-count GPU draws ✅
+- `VK_EXT_mesh_shader`: `vkCmdDrawMeshTasksIndirectEXT` for GPU-count indirect draws ✅
 - `VK_EXT_device_generated_commands` (`dgcSupported`): full DGC with per-draw push constants (GD6) ✅ (enabled, not yet wired)
-- `VK_KHR_draw_indirect_count`: variable indirect draw count buffer (Vulkan 1.2 core) ✅
+
+**[Future GD6]** `vkCmdExecuteGeneratedCommandsEXT` (`VK_EXT_device_generated_commands`):
+per-draw push constant carries `instanceIdx` from GPU — `compactInstanceList` removed.
 
 **Acceleration structure builds — device-side only (Khronos deprecation compliant):**
 - BLAS builds: `vkCmdBuildAccelerationStructuresKHR` (`Geometry::buildBlas`).

@@ -46,7 +46,7 @@ It implements the [OpenPBR Surface v1.1.1](https://academysoftwarefoundation.git
 
 ### Rendering
 - **Vulkan 1.4 dynamic rendering** — `vkCmdBeginRendering` (no render passes; modern efficient rendering)
-- **GPU-driven forward rendering** — compute-based culling, indirect command generation, and dispatch
+- **GPU-driven forward rendering** — `GpuCullPass` compute shader frustum-culls all instances each frame (Gribb-Hartmann 5-plane sphere test); outputs a single `VkDrawMeshTasksIndirectCommandEXT {visibleCount, 1, 1}`; `vkCmdDrawMeshTasksIndirectEXT` dispatches exactly `visibleCount` task workgroups; task shader indexes `compactInstanceList[gid.x]` — CPU records only, no readback
 - **Direct lighting** — 1-2 directional lights + Forward+ tile-based point light culling (16×16 px tiles, up to 128 lights/tile)
 - **Image-based lighting (IBL)** — equirectangular HDR panorama; diffuse irradiance pre-convolution + per-roughness GGX prefiltered specular map; MaterialX analytic GGX directional albedo (no BRDF LUT)
 - **Ray-traced global illumination (RT-GI)** *(enabled by default; disable with `--no-rt-gi`)* — inline `VK_KHR_ray_query` compute stage; shared unidirectional path-integrator core (NEE + MIS + Russian Roulette) in Harmonia; output feeds the accumulation → denoiser chain for convergence to Hyperion ground truth. This is the single indirect/reflection/occlusion path
