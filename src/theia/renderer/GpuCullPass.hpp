@@ -11,14 +11,27 @@ namespace theia {
 
 /// GPU-driven per-instance frustum cull pass.
 /// Runs a compute shader each frame that tests every scene instance's bounding sphere
-/// against the view frustum and writes the results to two GPU buffers:
+/// against the view frustum and writes the results to GPU buffers:
 ///   - compactInstanceList: uint[] of visible instance indices (STORAGE)
 ///   - indirectDrawBuf:     single VkDrawMeshTasksIndirectCommandEXT = {visibleCount, 1, 1}
-///                          (STORAGE + INDIRECT)
+///                          (STORAGE + INDIRECT + DEVICE_ADDRESS)
+///   - dgcBuf:              kMaxInstances × {1,1,1} DGC records (pre-filled, never modified)
+///                          (INDIRECT + DEVICE_ADDRESS)
 ///
-/// ForwardRenderer reads compactInstanceList via descriptor set 0, binding 10.
-/// indirectDrawBuf is passed directly to vkCmdDrawMeshTasksIndirectEXT (one draw call).
-/// The task shader uses gid.x to index into compactInstanceList.
+/// Two draw paths (selected by ForwardRenderer based on DeviceContext::dgcSupported):
+///
+///   DGC path (preferred when VK_EXT_device_generated_commands is available):
+///     - vkCmdExecuteGeneratedCommandsEXT with:
+///         indirectAddress     = dgcAddress()         (pre-filled DGC records)
+///         sequenceCountAddress = indirectDrawAddress() (visibleCount in first 4 bytes)
+///     - Task shader uses SV_DrawIndex as compact-list index (DrawIndex = sequence index)
+///
+///   GD3 fallback (single indirect draw):
+///     - vkCmdDrawMeshTasksIndirectEXT(cmd, indirectDrawBuffer(), 0, 1, 12)
+///     - Task shader uses gid.x as compact-list index
+///
+/// In the task shader, compactInstanceList[gid.x + drawIdx] handles both paths:
+///   GD3: drawIdx = 0, gid.x = 0..N-1   |   DGC: drawIdx = 0..N-1, gid.x = 0
 ///
 /// GPU-driven design: no CPU readback; the CPU only records the indirect dispatch.
 ///
@@ -69,8 +82,20 @@ class GpuCullPass {
     }
 
     /// Single VkDrawMeshTasksIndirectCommandEXT entry: {visibleCount, 1, 1}.
-    /// Pass as buffer to vkCmdDrawMeshTasksIndirectEXT (drawCount=1, stride=12).
+    /// GD3 fallback: pass to vkCmdDrawMeshTasksIndirectEXT (drawCount=1, stride=12).
+    /// DGC path: first 4 bytes (groupCountX = visibleCount) used as sequenceCountAddress.
     [[nodiscard]] VkBuffer indirectDrawBuffer() const noexcept { return m_indirectDrawBuf.handle(); }
+
+    /// Device address of indirectDrawBuf[0..3] = visible instance count.
+    /// Used as VkGeneratedCommandsInfoEXT::sequenceCountAddress in the DGC path.
+    [[nodiscard]] VkDeviceAddress indirectDrawAddress() const noexcept {
+        return m_indirectDrawBuf.deviceAddress();
+    }
+
+    /// DGC records buffer: kMaxInstances × {1,1,1} (VkDrawMeshTasksIndirectCommandEXT).
+    /// Pre-filled at init; never modified per frame.
+    /// Used as VkGeneratedCommandsInfoEXT::indirectAddress in the DGC path.
+    [[nodiscard]] VkDeviceAddress dgcAddress() const noexcept { return m_dgcBuf.deviceAddress(); }
 
   private:
     const DeviceContext* m_ctx = nullptr;
@@ -82,7 +107,8 @@ class GpuCullPass {
     VkDescriptorSet       m_set            = VK_NULL_HANDLE;
 
     Buffer m_compactInstanceListBuf; ///< uint[kMaxInstances]  STORAGE
-    Buffer m_indirectDrawBuf;        ///< single VkDrawMeshTasksIndirectCommandEXT  STORAGE | INDIRECT
+    Buffer m_indirectDrawBuf;        ///< single VkDrawMeshTasksIndirectCommandEXT  STORAGE | INDIRECT | DEVICE_ADDR
+    Buffer m_dgcBuf;                 ///< kMaxInstances × {1,1,1}  INDIRECT | DEVICE_ADDR  (pre-filled, read-only)
 };
 
 } // namespace theia

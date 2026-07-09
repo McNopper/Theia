@@ -35,7 +35,8 @@ GpuCullPass::GpuCullPass(GpuCullPass&& o) noexcept
       m_pool(std::exchange(o.m_pool, VK_NULL_HANDLE)),
       m_set(std::exchange(o.m_set, VK_NULL_HANDLE)),
       m_compactInstanceListBuf(std::move(o.m_compactInstanceListBuf)),
-      m_indirectDrawBuf(std::move(o.m_indirectDrawBuf)) {
+      m_indirectDrawBuf(std::move(o.m_indirectDrawBuf)),
+      m_dgcBuf(std::move(o.m_dgcBuf)) {
     o.m_ctx = nullptr;
 }
 
@@ -50,6 +51,7 @@ GpuCullPass& GpuCullPass::operator=(GpuCullPass&& o) noexcept {
         m_set            = std::exchange(o.m_set, VK_NULL_HANDLE);
         m_compactInstanceListBuf = std::move(o.m_compactInstanceListBuf);
         m_indirectDrawBuf        = std::move(o.m_indirectDrawBuf);
+        m_dgcBuf                 = std::move(o.m_dgcBuf);
         o.m_ctx = nullptr;
     }
     return *this;
@@ -74,15 +76,36 @@ bool GpuCullPass::initialize(const DeviceContext& ctx, const char* spvFilename) 
     auto indirectBuf = Buffer::create(ctx,
                                       kIndirectBufSize,
                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
-                                        | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+                                        | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT
+                                        | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                       VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
                                       "theia.gpuCull.indirectDrawBuf");
-    if (!compactBuf || !indirectBuf) {
+
+    // Pre-filled DGC records buffer: kMaxInstances × {1,1,1} (one task workgroup per sequence).
+    // Written once at init via mapped CPU access; GPU reads it every frame as indirect commands.
+    // sequenceCountAddress points into indirectDrawBuf[0..3] (= visible instance count),
+    // so only DGC sequences [0..visibleCount-1] are processed.
+    constexpr VkDeviceSize kDgcBufSize = static_cast<VkDeviceSize>(kMaxInstances) * 3u * sizeof(uint32_t);
+    auto dgcBuf = Buffer::create(ctx,
+                                 kDgcBufSize,
+                                 VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT
+                                   | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                 VMA_MEMORY_USAGE_CPU_TO_GPU,
+                                 "theia.gpuCull.dgcBuf");
+    if (!compactBuf || !indirectBuf || !dgcBuf) {
         Logger::error("GpuCullPass: failed to allocate output buffers");
         return false;
     }
     m_compactInstanceListBuf = std::move(*compactBuf);
     m_indirectDrawBuf        = std::move(*indirectBuf);
+    m_dgcBuf                 = std::move(*dgcBuf);
+
+    // Pre-fill DGC records with {1,1,1} (groupCountX=groupCountY=groupCountZ=1).
+    // Each entry is a VkDrawMeshTasksIndirectCommandEXT dispatching one task workgroup.
+    auto* dgcData = static_cast<uint32_t*>(m_dgcBuf.mappedData());
+    for (uint32_t i = 0; i < kMaxInstances * 3u; ++i) {
+        dgcData[i] = 1u;
+    }
 
     // --- Descriptor set layout ---
     // binding 0: instances          (STORAGE, read)
@@ -210,6 +233,7 @@ void GpuCullPass::shutdown() {
 
     m_compactInstanceListBuf = {};
     m_indirectDrawBuf        = {};
+    m_dgcBuf                 = {};
 
     if (m_pool != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(m_ctx->device, m_pool, nullptr);

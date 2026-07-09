@@ -252,11 +252,21 @@ class ForwardRenderer {
     bool m_initialized = false;
     bool m_hdrFirstUse = true; ///< tracks whether HDR image is still in UNDEFINED layout
 
-    // GPU-driven frustum cull pass (GD2/GD3). Writes compactInstanceList + a single
-    // indirect draw command; ForwardRenderer uses vkCmdDrawMeshTasksIndirectEXT.
+    // GPU-driven frustum cull pass (GD2/GD3/GD6). Writes compactInstanceList + a single
+    // indirect draw command; ForwardRenderer uses vkCmdDrawMeshTasksIndirectEXT (GD3) or
+    // vkCmdExecuteGeneratedCommandsEXT (GD6 DGC path).
     GpuCullPass m_gpuCullPass;
     /// Identity list [0,1,...,kMaxInstances-1] for binding 10 when GpuCullPass is unavailable.
     Buffer m_identityInstanceList;
+    /// DGC commands layout: one DRAW_MESH_TASKS_EXT token, stride=12.
+    /// Non-null when VK_EXT_device_generated_commands is available (ctx.dgcSupported).
+    VkIndirectCommandsLayoutEXT m_dgcLayout = VK_NULL_HANDLE;
+    /// Preprocess buffer required by vkCmdExecuteGeneratedCommandsEXT (driver scratch space).
+    /// Allocated with VK_BUFFER_USAGE_2_PREPROCESS_BUFFER_BIT_EXT (64-bit usage flag).
+    VkBuffer      m_dgcPreprocessBuf     = VK_NULL_HANDLE;
+    VmaAllocation m_dgcPreprocessAlloc   = VK_NULL_HANDLE;
+    VkDeviceAddress m_dgcPreprocessAddr  = 0;
+    VkDeviceSize    m_dgcPreprocessSize  = 0;
 
     // Two-pass Hi-Z occlusion culling (B4).
     HiZPass m_hiZPass;                    ///< current-frame depth pyramid builder

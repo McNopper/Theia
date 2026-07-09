@@ -50,9 +50,89 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
         Logger::warn("GpuCullPass: initialization failed — falling back to CPU-count draw");
     }
 
+    // GD6: create DGC indirect commands layout when VK_EXT_device_generated_commands is available.
+    // One token: DRAW_MESH_TASKS_EXT (stride=12 = VkDrawMeshTasksIndirectCommandEXT).
+    // sequenceCountAddress will point to indirectDrawBuf[0..3] (visible instance count).
+    if (ctx.dgcSupported && m_gpuCullPass.isInitialized()) {
+        const VkIndirectCommandsLayoutTokenEXT dgcToken{
+            .sType  = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_TOKEN_EXT,
+            .type   = VK_INDIRECT_COMMANDS_TOKEN_TYPE_DRAW_MESH_TASKS_EXT,
+            .offset = 0,
+        };
+        const VkIndirectCommandsLayoutCreateInfoEXT dgcLayoutCI{
+            .sType          = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_CREATE_INFO_EXT,
+            .flags          = 0,
+            .shaderStages   = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT
+                            | VK_SHADER_STAGE_FRAGMENT_BIT,
+            .indirectStride = 12u, // sizeof(VkDrawMeshTasksIndirectCommandEXT)
+            .pipelineLayout = VK_NULL_HANDLE, // no push-constant token
+            .tokenCount     = 1,
+            .pTokens        = &dgcToken,
+        };
+        if (vkCreateIndirectCommandsLayoutEXT(ctx.device, &dgcLayoutCI, nullptr, &m_dgcLayout) != VK_SUCCESS) {
+            Logger::warn("ForwardRenderer: vkCreateIndirectCommandsLayoutEXT failed — GD3 fallback");
+            m_dgcLayout = VK_NULL_HANDLE;
+        }
+    }
+
     if (!createPipeline()) {
         Logger::error("Failed to create pipeline");
         return false;
+    }
+
+    // GD6: query and allocate preprocess buffer after pipeline creation (requires pipeline handle).
+    // VkBufferUsageFlags2CreateInfo is needed because VK_BUFFER_USAGE_2_PREPROCESS_BUFFER_BIT_EXT
+    // is a 64-bit flag not representable in the 32-bit VkBufferUsageFlags enum.
+    if (m_dgcLayout != VK_NULL_HANDLE) {
+        const VkGeneratedCommandsPipelineInfoEXT memReqPipelineInfo{
+            .sType    = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_PIPELINE_INFO_EXT,
+            .pipeline = m_graphicsPipeline,
+        };
+        const VkGeneratedCommandsMemoryRequirementsInfoEXT memReqInfo{
+            .sType                  = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_MEMORY_REQUIREMENTS_INFO_EXT,
+            .pNext                  = &memReqPipelineInfo,
+            .indirectExecutionSet   = VK_NULL_HANDLE,
+            .indirectCommandsLayout = m_dgcLayout,
+            .maxSequenceCount       = GpuCullPass::kMaxInstances,
+            .maxDrawCount           = 1,
+        };
+        VkMemoryRequirements2 memReq{.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2};
+        vkGetGeneratedCommandsMemoryRequirementsEXT(ctx.device, &memReqInfo, &memReq);
+        m_dgcPreprocessSize = memReq.memoryRequirements.size;
+
+        if (m_dgcPreprocessSize > 0) {
+            constexpr VkBufferUsageFlags2KHR kPreprocessUsage =
+                VK_BUFFER_USAGE_2_PREPROCESS_BUFFER_BIT_EXT
+                | VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT_KHR;
+            const VkBufferUsageFlags2CreateInfo usageFlags2{
+                .sType = VK_STRUCTURE_TYPE_BUFFER_USAGE_FLAGS_2_CREATE_INFO,
+                .usage = kPreprocessUsage,
+            };
+            const VkBufferCreateInfo ppBufCI{
+                .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+                .pNext = &usageFlags2,
+                .size  = m_dgcPreprocessSize,
+                .usage = 0, // usage provided via VkBufferUsageFlags2CreateInfo
+                .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            };
+            const VmaAllocationCreateInfo ppAllocCI{
+                .flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT,
+                .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+            };
+            if (vmaCreateBuffer(ctx.allocator, &ppBufCI, &ppAllocCI,
+                                &m_dgcPreprocessBuf, &m_dgcPreprocessAlloc, nullptr) == VK_SUCCESS) {
+                const VkBufferDeviceAddressInfo addrInfo{
+                    .sType  = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
+                    .buffer = m_dgcPreprocessBuf,
+                };
+                m_dgcPreprocessAddr = vkGetBufferDeviceAddress(ctx.device, &addrInfo);
+            } else {
+                Logger::warn("ForwardRenderer: failed to allocate DGC preprocess buffer — GD3 fallback");
+                vkDestroyIndirectCommandsLayoutEXT(ctx.device, m_dgcLayout, nullptr);
+                m_dgcLayout         = VK_NULL_HANDLE;
+                m_dgcPreprocessSize = 0;
+            }
+        }
     }
 
     char* debugModeRaw = nullptr;
@@ -113,7 +193,10 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
 
     m_initialized = true;
     m_hdrFirstUse = true;
-    Logger::info("GPU-driven forward renderer initialized ({}x{})", config.width, config.height);
+    const char* drawPath = m_dgcLayout != VK_NULL_HANDLE ? "DGC" :
+                           m_gpuCullPass.isInitialized()  ? "indirect" : "CPU-count";
+    Logger::info("GPU-driven forward renderer initialized ({}x{}) [{}]",
+                 config.width, config.height, drawPath);
     return true;
 }
 
@@ -179,6 +262,19 @@ void ForwardRenderer::shutdown() {
     m_dummyTileCounts = {};
     m_dummyTileIndices = {};
     m_identityInstanceList = {};
+
+    if (m_dgcPreprocessBuf != VK_NULL_HANDLE) {
+        vmaDestroyBuffer(m_ctx->allocator, m_dgcPreprocessBuf, m_dgcPreprocessAlloc);
+        m_dgcPreprocessBuf   = VK_NULL_HANDLE;
+        m_dgcPreprocessAlloc = VK_NULL_HANDLE;
+        m_dgcPreprocessAddr  = 0;
+        m_dgcPreprocessSize  = 0;
+    }
+
+    if (m_dgcLayout != VK_NULL_HANDLE) {
+        vkDestroyIndirectCommandsLayoutEXT(m_ctx->device, m_dgcLayout, nullptr);
+        m_dgcLayout = VK_NULL_HANDLE;
+    }
 
     m_meshSet = VK_NULL_HANDLE;
     m_matSet = VK_NULL_HANDLE;
@@ -410,9 +506,32 @@ void ForwardRenderer::drawOpaque(VkCommandBuffer cmd,
                        0,
                        sizeof(MeshPushConstants),
                        &pc);
-    if (m_gpuCullPass.isInitialized() && vkCmdDrawMeshTasksIndirectEXT != nullptr) {
-        // GPU-driven: the cull compute shader wrote {visibleCount, 1, 1} into indirectDrawBuf.
-        // One draw call; task shader workgroup count = visible instance count.
+    if (m_gpuCullPass.isInitialized() && m_dgcLayout != VK_NULL_HANDLE) {
+        // GD6 DGC path: N per-instance draws via VK_EXT_device_generated_commands.
+        // sequenceCountAddress = indirectDrawBuf[0..3] = visible instance count.
+        // Task shader DrawIndex (SV_DrawIndex) = sequence index → compactInstanceList[DrawIndex].
+        const VkGeneratedCommandsPipelineInfoEXT dgcPipelineInfo{
+            .sType    = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_PIPELINE_INFO_EXT,
+            .pipeline = m_graphicsPipeline,
+        };
+        const VkGeneratedCommandsInfoEXT dgcInfo{
+            .sType                  = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_INFO_EXT,
+            .pNext                  = &dgcPipelineInfo,
+            .shaderStages           = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT
+                                    | VK_SHADER_STAGE_FRAGMENT_BIT,
+            .indirectExecutionSet   = VK_NULL_HANDLE,
+            .indirectCommandsLayout = m_dgcLayout,
+            .indirectAddress        = m_gpuCullPass.dgcAddress(),
+            .indirectAddressSize    = GpuCullPass::kMaxInstances * 12u,
+            .preprocessAddress      = m_dgcPreprocessAddr,
+            .preprocessSize         = m_dgcPreprocessSize,
+            .maxSequenceCount       = GpuCullPass::kMaxInstances,
+            .sequenceCountAddress   = m_gpuCullPass.indirectDrawAddress(),
+            .maxDrawCount           = 1,   // no DRAW_COUNT token
+        };
+        vkCmdExecuteGeneratedCommandsEXT(cmd, VK_FALSE, &dgcInfo);
+    } else if (m_gpuCullPass.isInitialized() && vkCmdDrawMeshTasksIndirectEXT != nullptr) {
+        // GD3 fallback: single indirect draw; task shader gid.x = visible instance position.
         vkCmdDrawMeshTasksIndirectEXT(cmd,
                                       m_gpuCullPass.indirectDrawBuffer(), 0,
                                       1,    // exactly one indirect command entry
@@ -1511,7 +1630,28 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
                            sizeof(MeshPushConstants),
                            &pc);
         const uint32_t instCnt = m_scene->instanceCount();
-        if (m_gpuCullPass.isInitialized() && vkCmdDrawMeshTasksIndirectEXT != nullptr) {
+        if (m_gpuCullPass.isInitialized() && m_dgcLayout != VK_NULL_HANDLE) {
+            const VkGeneratedCommandsPipelineInfoEXT dgcPipelineInfo{
+                .sType    = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_PIPELINE_INFO_EXT,
+                .pipeline = m_graphicsPipelineTransparent,
+            };
+            const VkGeneratedCommandsInfoEXT dgcInfo{
+                .sType                  = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_INFO_EXT,
+                .pNext                  = &dgcPipelineInfo,
+                .shaderStages           = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT
+                                        | VK_SHADER_STAGE_FRAGMENT_BIT,
+                .indirectExecutionSet   = VK_NULL_HANDLE,
+                .indirectCommandsLayout = m_dgcLayout,
+                .indirectAddress        = m_gpuCullPass.dgcAddress(),
+                .indirectAddressSize    = GpuCullPass::kMaxInstances * 12u,
+                .preprocessAddress      = m_dgcPreprocessAddr,
+                .preprocessSize         = m_dgcPreprocessSize,
+                .maxSequenceCount       = GpuCullPass::kMaxInstances,
+                .sequenceCountAddress   = m_gpuCullPass.indirectDrawAddress(),
+                .maxDrawCount           = 1,
+            };
+            vkCmdExecuteGeneratedCommandsEXT(c, VK_FALSE, &dgcInfo);
+        } else if (m_gpuCullPass.isInitialized() && vkCmdDrawMeshTasksIndirectEXT != nullptr) {
             vkCmdDrawMeshTasksIndirectEXT(c,
                                           m_gpuCullPass.indirectDrawBuffer(), 0,
                                           1,

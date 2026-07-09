@@ -74,8 +74,11 @@ struct TaskPayload {
 
 [numthreads(1, 1, 1)]
 [shader("amplification")]
-void main(uint3 gid : SV_GroupID) {
-    const uint instIdx = compactInstanceList[gid.x];
+void main(uint3 gid : SV_GroupID, uint drawIdx : SV_DrawIndex) {
+    // gid.x + drawIdx selects the right compact-list entry in both paths:
+    //   GD3 (single indirect draw):     drawIdx = 0,        gid.x  = visible-instance position
+    //   DGC (N per-instance draws):     drawIdx = sequence, gid.x  = 0
+    const uint instIdx = compactInstanceList[gid.x + drawIdx];
     const GpuInstance inst = instances[instIdx];
     const GpuMaterial mat = materials[inst.materialIndex];
 
