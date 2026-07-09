@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <cstdlib>
+#include <numeric>
 #include <harmonia/core/Logger.hpp>
 #include <harmonia/core/ShaderModule.hpp>
 #include <theia/renderer/ShaderPath.hpp>
@@ -41,6 +42,12 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
     if (m_hiZPass.sampledView() == VK_NULL_HANDLE) {
         Logger::error("Failed to create Hi-Z image");
         return false;
+    }
+
+    // GPU-driven frustum cull pass (GD2/GD3). Non-fatal on failure: renderer falls back to
+    // vkCmdDrawMeshTasksEXT with the CPU-known instance count.
+    if (!m_gpuCullPass.initialize(ctx)) {
+        Logger::warn("GpuCullPass: initialization failed — falling back to CPU-count draw");
     }
 
     if (!createPipeline()) {
@@ -85,6 +92,23 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
     if (dummyCounts && dummyIndices) {
         m_dummyTileCounts = std::move(*dummyCounts);
         m_dummyTileIndices = std::move(*dummyIndices);
+    }
+
+    // Identity instance list [0,1,...,kMaxInstances-1] for binding 10 fallback when
+    // GpuCullPass fails to initialize. Written once; GPU reads it as a pass-through index map.
+    {
+        const uint32_t kIdCount = GpuCullPass::kMaxInstances;
+        std::vector<uint32_t> identity(kIdCount);
+        std::iota(identity.begin(), identity.end(), 0u);
+        auto identBuf = Buffer::create(ctx,
+                                       static_cast<VkDeviceSize>(kIdCount) * sizeof(uint32_t),
+                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                       VMA_MEMORY_USAGE_CPU_TO_GPU,
+                                       "theia.identityInstanceList");
+        if (identBuf) {
+            identBuf->uploadData(identity.data(), static_cast<VkDeviceSize>(kIdCount) * sizeof(uint32_t), 0);
+            m_identityInstanceList = std::move(*identBuf);
+        }
     }
 
     m_initialized = true;
@@ -154,6 +178,7 @@ void ForwardRenderer::shutdown() {
 
     m_dummyTileCounts = {};
     m_dummyTileIndices = {};
+    m_identityInstanceList = {};
 
     m_meshSet = VK_NULL_HANDLE;
     m_matSet = VK_NULL_HANDLE;
@@ -161,6 +186,7 @@ void ForwardRenderer::shutdown() {
     m_textureSet = VK_NULL_HANDLE;
     m_texturesBoundFor = nullptr;
     m_hiZPass.shutdown();
+    m_gpuCullPass.shutdown();
     m_meshletVisibility[0] = {};
     m_meshletVisibility[1] = {};
     m_visBuiltFor = nullptr;
@@ -384,7 +410,16 @@ void ForwardRenderer::drawOpaque(VkCommandBuffer cmd,
                        0,
                        sizeof(MeshPushConstants),
                        &pc);
-    vkCmdDrawMeshTasksEXT(cmd, instanceCount, 1, 1);
+    if (m_gpuCullPass.isInitialized() && vkCmdDrawMeshTasksIndirectEXT != nullptr) {
+        // GPU-driven: the cull compute shader wrote {visibleCount, 1, 1} into indirectDrawBuf.
+        // One draw call; task shader workgroup count = visible instance count.
+        vkCmdDrawMeshTasksIndirectEXT(cmd,
+                                      m_gpuCullPass.indirectDrawBuffer(), 0,
+                                      1,    // exactly one indirect command entry
+                                      12u); // stride = sizeof(VkDrawMeshTasksIndirectCommandEXT)
+    } else {
+        vkCmdDrawMeshTasksEXT(cmd, instanceCount, 1, 1);
+    }
 }
 
 bool ForwardRenderer::createPipeline() {
@@ -426,21 +461,25 @@ bool ForwardRenderer::createPipeline() {
     // Bindings 7-9 drive two-pass Hi-Z occlusion culling in the mesh shader:
     //   7 = previous-frame per-meshlet visibility (read), 8 = current-frame visibility
     //   (written), 9 = current-frame Hi-Z max-depth pyramid (sampled).
-    const std::array<VkDescriptorSetLayoutBinding, 10> meshBindings{
+    // Binding 10: compactInstanceList from GpuCullPass — written by the cull compute
+    //   shader each frame; task shader reads it via SV_DrawID to get the instance index.
+    constexpr VkShaderStageFlags kTaskStage = VK_SHADER_STAGE_TASK_BIT_EXT;
+    const std::array<VkDescriptorSetLayoutBinding, 11> meshBindings{
         VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTaskMeshFragStages, nullptr},
         VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTaskMeshFragStages, nullptr},
         VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTaskAndMeshStages, nullptr},
         VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
         VkDescriptorSetLayoutBinding{5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
-        VkDescriptorSetLayoutBinding{6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_TASK_BIT_EXT, nullptr},
+        VkDescriptorSetLayoutBinding{6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTaskStage, nullptr},
         VkDescriptorSetLayoutBinding{7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
         VkDescriptorSetLayoutBinding{8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
         VkDescriptorSetLayoutBinding{9, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
+        VkDescriptorSetLayoutBinding{10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTaskStage, nullptr},
     };
     constexpr VkDescriptorBindingFlags kUAB = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
-    const std::array<VkDescriptorBindingFlags, 10> meshBindingFlags{
-        kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB};
+    const std::array<VkDescriptorBindingFlags, 11> meshBindingFlags{
+        kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo meshBindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = static_cast<uint32_t>(meshBindingFlags.size()),
@@ -569,7 +608,7 @@ bool ForwardRenderer::createPipeline() {
 
     // Single pool for all four sets.
     const std::array<VkDescriptorPoolSize, 5> poolSizes{
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 16},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 17},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 6},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLER, 1},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures},
@@ -1126,7 +1165,18 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
     };
 
-    std::array<VkWriteDescriptorSet, 18> writes{
+    // Compact instance list from GpuCullPass. When GpuCullPass is not initialized the
+    // identity list [0,1,...,N-1] is bound so the task shader's compactInstanceList[gid.x]
+    // returns gid.x — equivalent to the CPU-count direct draw path.
+    const VkBuffer identFallback = m_identityInstanceList.isValid()
+                                       ? m_identityInstanceList.handle()
+                                       : m_scene->instanceBuffer().handle();
+    const VkBuffer compactInstBuf = m_gpuCullPass.isInitialized()
+                                        ? m_gpuCullPass.compactInstanceListBuffer()
+                                        : identFallback;
+    VkDescriptorBufferInfo compactInstInfo{compactInstBuf, 0, VK_WHOLE_SIZE};
+
+    std::array<VkWriteDescriptorSet, 19> writes{
         VkWriteDescriptorSet{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .dstSet = m_meshSet,
@@ -1274,6 +1324,16 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
             .pImageInfo = &hiZInfo,
+        },
+        // Set 0, binding 10: compact visible instance list (GpuCullPass output).
+        // Task shader reads compactInstanceList[gid.x] to get the instance index.
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_meshSet,
+            .dstBinding = 10,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &compactInstInfo,
         },
     };
     vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
@@ -1450,7 +1510,15 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
                            0,
                            sizeof(MeshPushConstants),
                            &pc);
-        vkCmdDrawMeshTasksEXT(c, m_scene->instanceCount(), 1, 1);
+        const uint32_t instCnt = m_scene->instanceCount();
+        if (m_gpuCullPass.isInitialized() && vkCmdDrawMeshTasksIndirectEXT != nullptr) {
+            vkCmdDrawMeshTasksIndirectEXT(c,
+                                          m_gpuCullPass.indirectDrawBuffer(), 0,
+                                          1,
+                                          12u);
+        } else {
+            vkCmdDrawMeshTasksEXT(c, instCnt, 1, 1);
+        }
     };
 
     // Set dynamic state (shared by both passes).
@@ -1468,6 +1536,47 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
 
     const uint32_t instanceCount = m_scene->instanceCount();
     const bool canDraw = (instanceCount > 0) && (vkCmdDrawMeshTasksEXT != nullptr);
+
+    // GPU-driven frustum cull (must run outside dynamic rendering — compute cannot run
+    // inside a render pass). Dispatch before the Hi-Z passes and barrier results.
+    if (canDraw && m_gpuCullPass.isInitialized()) {
+        m_gpuCullPass.dispatch(cmd,
+                               m_scene->instanceBuffer().handle(),
+                               m_scene->instanceBoundsBuffer().handle(),
+                               instanceCount,
+                               viewProj);
+        // Barrier: compute writes → task shader reads (compactInstanceList) +
+        //          indirect command reads (indirectDrawBuf).
+        const std::array cullBarriers{
+            VkBufferMemoryBarrier2{
+                .sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                .srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                .dstStageMask  = VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT,
+                .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+                .buffer        = m_gpuCullPass.compactInstanceListBuffer(),
+                .offset        = 0,
+                .size          = VK_WHOLE_SIZE,
+            },
+            VkBufferMemoryBarrier2{
+                .sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                .srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                .dstStageMask  = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+                .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT,
+                .buffer        = m_gpuCullPass.indirectDrawBuffer(),
+                .offset        = 0,
+                .size          = VK_WHOLE_SIZE,
+            },
+        };
+        const VkDependencyInfo cullDep{
+            .sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .bufferMemoryBarrierCount = static_cast<uint32_t>(cullBarriers.size()),
+            .pBufferMemoryBarriers    = cullBarriers.data(),
+        };
+        vkCmdPipelineBarrier2(cmd, &cullDep);
+    }
+
     const bool twoPass = canDraw && visReady;
     const uint32_t hiZMip =
         (twoPass && m_hiZPass.isInitialized() && m_hiZTestEnabled && !m_hiZDebugDisabled)

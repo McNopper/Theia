@@ -50,6 +50,7 @@ set(THEIA_ENTRY_SHADERS
     ibl_diffuse.comp.slang
     ibl_specular.comp.slang
     light_cull.comp.slang
+    forward_cull.comp.slang
     gi.comp.slang
     motion_vector.comp.slang
     hiz_build.comp.slang
@@ -61,6 +62,7 @@ set(THEIA_ENTRY_SHADERS
 set(THEIA_LIBRARY_SOURCES
     # Theia forward rendering
     src/theia/renderer/ForwardRenderer.cpp
+    src/theia/renderer/GpuCullPass.cpp
     src/theia/renderer/IblPrecompute.cpp
     src/theia/renderer/LightCuller.cpp
     src/theia/renderer/GiPass.cpp

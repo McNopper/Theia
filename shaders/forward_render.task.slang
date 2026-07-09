@@ -68,11 +68,14 @@ struct TaskPayload {
 
 [[vk::binding(1, 0)]] StructuredBuffer<GpuInstance> instances;
 [[vk::binding(6, 0)]] StructuredBuffer<GpuMaterial> materials;
+/// Compact visible instance list written by GpuCullPass each frame.
+/// gid.x indexes into this list to get the actual scene instance index.
+[[vk::binding(10, 0)]] StructuredBuffer<uint> compactInstanceList;
 
 [numthreads(1, 1, 1)]
 [shader("amplification")]
 void main(uint3 gid : SV_GroupID) {
-    const uint instIdx = gid.x;
+    const uint instIdx = compactInstanceList[gid.x];
     const GpuInstance inst = instances[instIdx];
     const GpuMaterial mat = materials[inst.materialIndex];
 

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <bit>
 #include <cassert>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -186,6 +187,28 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
                     .radius = bounds.radius,
                 });
             }
+
+            // Bounding sphere: centroid method — average vertex position + max-distance radius.
+            // World-space (vertices are already in world space).
+            {
+                const auto& mverts = mesh->data().vertices;
+                const float invN = 1.0f / std::max<float>(static_cast<float>(mverts.size()), 1.0f);
+                float cx = 0.0f, cy = 0.0f, cz = 0.0f;
+                for (const auto& v : mverts) {
+                    cx += v.position.x;
+                    cy += v.position.y;
+                    cz += v.position.z;
+                }
+                cx *= invN; cy *= invN; cz *= invN;
+                float bs = 0.0f;
+                for (const auto& v : mverts) {
+                    const float dx = v.position.x - cx;
+                    const float dy = v.position.y - cy;
+                    const float dz = v.position.z - cz;
+                    bs = std::max(bs, std::sqrt(dx*dx + dy*dy + dz*dz));
+                }
+                m_instanceBounds.push_back(GpuInstanceBounds{cx, cy, cz, bs});
+            }
         } else if (const auto* sphere = dynamic_cast<const Sphere*>(m_geometries[i].get())) {
             instance.vertexOffset = static_cast<uint32_t>(vertices.size());
             instance.indexOffset = 0;
@@ -201,6 +224,10 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
                 .uv = sm::float2{0.0f, 0.0f},
                 .tangentZ = 0.0f,
                 .bitangentSign = 1.0f,
+            });
+            // Sphere primitives: bounds come directly from the analytical sphere params.
+            m_instanceBounds.push_back(GpuInstanceBounds{
+                sphere->center().x, sphere->center().y, sphere->center().z, sphere->radius()
             });
         }
     }
@@ -233,6 +260,18 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
                        "scene.instances");
     if (!instanceBuf) {
         return instanceBuf.error();
+    }
+
+    // Ensure m_instanceBounds is the same size as m_instances (guard against missing push_back).
+    m_instanceBounds.resize(m_instances.size());
+    auto instanceBoundsBuf =
+        Buffer::upload(ctx,
+                       pool,
+                       std::as_bytes(std::span<const GpuInstanceBounds>(m_instanceBounds.data(), m_instanceBounds.size())),
+                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                       "scene.instanceBounds");
+    if (!instanceBoundsBuf) {
+        return instanceBoundsBuf.error();
     }
 
     auto materialBuf =
@@ -293,6 +332,7 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     }
 
     m_instanceBuffer = std::move(*instanceBuf);
+    m_instanceBoundsBuffer = std::move(*instanceBoundsBuf);
     m_materialBuffer = std::move(*materialBuf);
     m_vertexBuffer = std::move(*vertexBuf);
     m_indexBuffer = std::move(*indexBuf);

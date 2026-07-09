@@ -38,6 +38,18 @@ struct GpuInstance {
 static_assert(std::is_trivially_copyable_v<GpuInstance>);
 static_assert(sizeof(GpuInstance) == 36);
 
+/// Per-instance bounding sphere for GPU-driven frustum culling (GpuCullPass).
+/// Separate from GpuInstance so culling reads a compact, cache-friendly layout.
+/// std430, 16 bytes — stored world-space; vertices are baked into world space at load time.
+struct GpuInstanceBounds {
+    float centerX = 0.0f; ///< world-space bounding sphere centre x
+    float centerY = 0.0f; ///< world-space bounding sphere centre y
+    float centerZ = 0.0f; ///< world-space bounding sphere centre z
+    float radius  = 0.0f; ///< bounding sphere radius; 0 = empty / never drawn
+};
+static_assert(std::is_trivially_copyable_v<GpuInstanceBounds>);
+static_assert(sizeof(GpuInstanceBounds) == 16);
+
 /// Per-meshlet descriptor uploaded to GPU (std430, 32 bytes).
 struct GpuMeshlet {
     uint32_t vertexOffset   = 0; ///< first entry in meshletVertices[]
@@ -75,6 +87,7 @@ class Scene : public harmonia::SceneBase {
     [[nodiscard]] VkAccelerationStructureKHR tlas() const noexcept { return m_tlas.handle(); }
     [[nodiscard]] VkDeviceAddress tlasAddress() const noexcept { return m_tlasAddress; }
     [[nodiscard]] const Buffer& instanceBuffer() const noexcept { return m_instanceBuffer; }
+    [[nodiscard]] const Buffer& instanceBoundsBuffer() const noexcept { return m_instanceBoundsBuffer; }
     [[nodiscard]] const Buffer& materialBuffer() const noexcept { return m_materialBuffer; }
     [[nodiscard]] const Buffer& vertexBuffer() const noexcept { return m_vertexBuffer; }
     [[nodiscard]] const Buffer& indexBuffer() const noexcept { return m_indexBuffer; }
@@ -114,7 +127,9 @@ class Scene : public harmonia::SceneBase {
     VkResult buildTlas(const DeviceContext& ctx, const CommandPool& pool);
 
     std::vector<GpuInstance> m_instances;
+    std::vector<GpuInstanceBounds> m_instanceBounds;
     Buffer m_instanceBuffer{};
+    Buffer m_instanceBoundsBuffer{};
     Buffer m_materialBuffer{};
     Buffer m_vertexBuffer{};
     Buffer m_indexBuffer{};

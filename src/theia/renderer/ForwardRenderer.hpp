@@ -11,6 +11,7 @@
 #include "harmonia/core/CommandPool.hpp"
 #include "harmonia/core/Image.hpp"
 #include "harmonia/renderer/Camera.hpp"
+#include "theia/renderer/GpuCullPass.hpp"
 #include "theia/renderer/HiZPass.hpp"
 #include "theia/renderer/IblPrecompute.hpp"
 
@@ -250,6 +251,12 @@ class ForwardRenderer {
 
     bool m_initialized = false;
     bool m_hdrFirstUse = true; ///< tracks whether HDR image is still in UNDEFINED layout
+
+    // GPU-driven frustum cull pass (GD2/GD3). Writes compactInstanceList + a single
+    // indirect draw command; ForwardRenderer uses vkCmdDrawMeshTasksIndirectEXT.
+    GpuCullPass m_gpuCullPass;
+    /// Identity list [0,1,...,kMaxInstances-1] for binding 10 when GpuCullPass is unavailable.
+    Buffer m_identityInstanceList;
 
     // Two-pass Hi-Z occlusion culling (B4).
     HiZPass m_hiZPass;                    ///< current-frame depth pyramid builder
