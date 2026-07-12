@@ -1,20 +1,20 @@
 # Theia
 
-GPU-driven real-time renderer for OpenPBR materials.
+GPU-driven accumulation path-traced renderer for OpenPBR materials.
 
 > *[Theia](https://en.wikipedia.org/wiki/Theia_(mythology)) — Titaness of heavenly light, mother of Helios, Selene and Eos.*
 
-Theia is a modern Vulkan 1.4 renderer built on GPU-driven forward rendering techniques.  
-It implements the [OpenPBR Surface v1.1.1](https://academysoftwarefoundation.github.io/OpenPBR/) material model in real-time and targets visual parity with [Hyperion](https://github.com/McNopper/Hyperion)'s path-traced output on identical test scenes. A **unified HW ray-traced GI pass** (sharing Hyperion's `path_integrator`) provides multi-bounce indirect light *and* transmission/refraction, and is the single indirect/reflection/occlusion path. See *Indirect lighting and GI architecture* below.
+Theia is a modern Vulkan 1.4 renderer built on GPU-driven rendering techniques.  
+It implements the [OpenPBR Surface v1.1.1](https://academysoftwarefoundation.github.io/OpenPBR/) material model and converges to [Hyperion](https://github.com/McNopper/Hyperion)'s path-traced output on identical test scenes through frame accumulation. A **unified HW ray-traced GI pass** (sharing Hyperion's `path_integrator`) provides multi-bounce indirect light *and* transmission/refraction. See *Indirect lighting and GI architecture* below.
 
-**Interactive real-time rendering** — explore complex materials, dynamic lighting, and HDR output in real-time.  
+**Converges to the ground truth** — accumulates jittered path-traced samples and resolves to the Hyperion reference.  
 **Architecture driven by [GPU-Driven Rendering](https://vkguide.dev/docs/gpudriven)** — compute-based culling, indirect dispatch, and clustered lighting.
 
 ---
 
 ## Screenshots
 
-*Same test scenes as [Hyperion](https://github.com/McNopper/Hyperion) — rendered in real-time with visual parity.*
+*Same test scenes as [Hyperion](https://github.com/McNopper/Hyperion) — converged to visual parity through accumulation.*
 
 | Cornell Box | Spheres | Suzanne |
 |:-----------:|:-------:|:-------:|
@@ -52,7 +52,7 @@ It implements the [OpenPBR Surface v1.1.1](https://academysoftwarefoundation.git
 - **Ray-traced global illumination (RT-GI)** *(enabled by default; disable with `--no-rt-gi`)* — inline `VK_KHR_ray_query` compute stage; shared unidirectional path-integrator core (NEE + MIS + Russian Roulette) in Harmonia; output feeds the accumulation → denoiser chain for convergence to Hyperion ground truth. This is the single indirect/reflection/occlusion path
 - **ReSTIR DI** — spatiotemporal reservoir resampling for direct illumination: 8-candidate RIS via power-weighted emissive CDF, temporal reuse (M-cap=20, motion-vector reprojection, normal+depth validation), unbiased W = w_sum/(M·p̂), single shadow ray per pixel; feature-gated (`--no-restir-di`); bias audit: `cornell_classic` mean_diff 2.0 vs Hyperion ground truth
 - **Temporal Anti-Aliasing (TAA)** — cross-vendor YCoCg 3×3 neighbourhood AABB clamping + 90/10 history blend; motion-vector reprojection from A1b; `vkCmdCopyImage` ping-pong history; runs after MotionVectorPass, before denoiser; `--no-taa` opt-out
-- **Real-time performance** — GPU-tier dependent: 1080p/HDR/30fps on mid-range (RTX 4050 class); 4K/HDR/60fps on high-end (RTX 4090/5090 class); development reference: RTX 4050 at 1080p HDR
+- **A-SVGF denoiser + frame accumulation** — spatiotemporal variance-guided denoise feeding progressive accumulation (64/256 frames) that resolves to the Hyperion ground truth
 - **Sub-pixel camera jitter (Halton 2,3)** — deterministic raster AA sampling for accumulation-friendly opaque edge anti-aliasing
 - **Interactive camera control** — WASD movement, mouse look, EV100 physical exposure adjustment
 
@@ -130,13 +130,13 @@ format reference.
 
 ## Architecture
 
-Theia is the **real-time** renderer in a family of four repositories:
+Theia is the **accumulation path-traced** renderer in a family of four repositories:
 
 ```mermaid
 flowchart LR
     A["Aether<br/>file format"] --> H["Harmonia<br/>shared Vulkan lib"]
     H --> Hy["Hyperion<br/>path tracer · ground truth"]
-    H --> T["<b>Theia</b><br/>real-time renderer"]
+    H --> T["<b>Theia</b><br/>accumulation renderer"]
 ```
 
 | Repository | Role |
@@ -144,7 +144,7 @@ flowchart LR
 | [Aether](https://github.com/McNopper/Aether) | GPU-agnostic file formats & scene data (`.scene.toml` / `.materials.toml` / OBJ → plain CPU structs); no Vulkan |
 | [Harmonia](https://github.com/McNopper/Harmonia) | Shared Vulkan foundation reused **1:1** by both renderers — `harmonia::App` host, core/context, presentation, color management, tonemapping, bindless textures, shared GPU types, Slang shader build |
 | [Hyperion](https://github.com/McNopper/Hyperion) | Offline path tracer (ground truth) |
-| **Theia** | This repo — real-time GPU-driven forward renderer |
+| **Theia** | This repo — GPU-driven accumulation path-traced renderer |
 
 Theia consumes Aether and Harmonia via CMake `FetchContent`. The demo application is a
 thin subclass of the shared **`harmonia::App`** host: Harmonia owns the window, swapchain,
@@ -204,21 +204,18 @@ build/theia.exe --scene cornell_classic --output out.exr
 | `--validation` / `--no-validation` | disabled | Enable / disable Vulkan validation layers |
 | `--taa` / `--no-taa` | on | Interactive-window temporal anti-aliasing during camera motion. `--taa` is **incompatible with `--output`** (offscreen uses progressive accumulation); the two must not be combined |
 | `--no-restir-di` | off (ReSTIR DI on) | Disable ReSTIR direct-light importance resampling (debug/baseline) |
-| `--no-postfx` | off | No-op, accepted for CLI compatibility |
 | `--rt-gi` / `--no-rt-gi` | on | Enable / disable the ray-query GI compute stage (use `--no-rt-gi` for debugging baselines) |
-| `--indirect-ambient <x>` | `0.0` | No-op, accepted for CLI compatibility |
-| `--ssgi-strength <x>` | `0.0` | No-op, accepted for CLI compatibility |
+| `--indirect-ambient <x>` | `0.0` | Presentation-only indirect ambient boost (scene-referred linear) |
 | `--no-camera-jitter` | off | Disable sub-pixel camera jitter (debug/baseline comparison only) |
 
 ### Indirect lighting and GI architecture
 
-Theia uses a **staged, replaceable pipeline** for indirect lighting:
+Theia uses a **staged pipeline** for indirect lighting:
 
 | Stage | Status | Notes |
 |-------|--------|-------|
-| **RT-GI compute stage** | Default-on | `VK_KHR_ray_query` multibounce; shared integrator core with Hyperion; also drives transmission/refraction; feeds accumulation → denoiser. The single indirect/reflection/occlusion path. Disable with `--no-rt-gi` for debugging baselines |
+| **RT-GI compute stage** | Default-on | `VK_KHR_ray_query` multibounce; shared integrator core with Hyperion; also drives transmission/refraction; feeds accumulation → denoiser. Disable with `--no-rt-gi` for debugging baselines |
 | Split-sum `evalIBL` | Fallback | First-hit IBL used only on the `--no-rt-gi` debug path |
-| **ReSTIR DI + GI** | Planned | Spatiotemporal reservoir resampling for real-time convergence |
 
 RT-GI is the single unified indirect + transmission provider and drives both the parity and interactive paths.
 

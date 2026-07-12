@@ -4,12 +4,13 @@ Quick-start context for AI agents so basic facts don't have to be rediscovered e
 
 ## What this repo is
 
-**Theia** is the **real-time** renderer: a Vulkan mesh-shader rasterizer (meshlets) being
-aligned to match **Hyperion** (the path-traced ground truth). Indirect light (diffuse +
-specular + env-NEE) and transmission/refraction are provided by a **HW ray-traced GI pass**
-that drives Harmonia's shared `path_integrator` — the single best-quality real-time approach.
-Legacy screen-space post effects (SSR/SSAO/bloom/SSGI) were removed from the runtime path;
-RT-GI is the only indirect/reflection/occlusion path now.
+**Theia** is a **lean accumulation path-traced renderer**: a GPU-driven Vulkan renderer that
+converges to the **Hyperion** path-traced ground truth through frame accumulation. Multi-bounce
+global illumination — diffuse, specular, environment NEE, transmission and refraction — is
+**hardware ray-traced** through Harmonia's shared OpenPBR `path_integrator`, the same estimator
+and BSDF Hyperion uses. **ReSTIR DI** provides spatiotemporal reservoir resampling for direct
+illumination from emissive triangles. An **A-SVGF denoiser** and **TAA** stabilize the image,
+and progressive accumulation resolves it to the reference.
 
 Pipeline (dependency direction):
 
@@ -17,7 +18,7 @@ Pipeline (dependency direction):
 flowchart LR
     A["Aether<br/>file format"] --> H["Harmonia<br/>shared Vulkan lib"]
     H --> Hy["Hyperion<br/>path tracer · ground truth"]
-    H --> T["<b>Theia</b><br/>real-time renderer (this repo)"]
+    H --> T["<b>Theia</b><br/>accumulation renderer (this repo)"]
 ```
 
 Consumes Aether + Harmonia via CMake FetchContent. The demo is a thin `harmonia::App`
@@ -26,25 +27,21 @@ Theia-specific (not in Harmonia).
 
 ## Algorithm strategy (drives every technique decision)
 
-- **Best quality, future hardware, ONE approach.** Theia targets future hardware, so pick the
-  single best-quality real-time algorithm that matches the Hyperion path-traced ground truth —
-  **no cheap fallbacks, no dual-track.** Heavy-but-correct is fine; it scales with hardware.
-- **Still almost real-time on current hardware.** The chosen technique must stay near-interactive
-  on today's dev machine (bounded work + denoise), not offline brute force. For local testing the
-  technique still runs here — just **lower the render resolution** (e.g. the 320x240 parity size)
-  rather than swapping in a cheaper algorithm. Resolution is the performance knob; the approach
-  never forks.
+- **One best-quality approach that matches the ground truth.** Theia picks the single
+  path-traced estimator that converges to Hyperion — the shared OpenPBR BSDF with environment
+  NEE and multi-bounce transport — and scales it with frame accumulation.
+- **Scales by resolution and frame count.** Accumulation is the quality/performance knob:
+  lower the render resolution or frame count for fast iteration (e.g. the 320x240 parity size),
+  raise them for final deliverables. The approach itself stays single.
 - **Target hardware (capability, not a brand):** a high-end GPU class with **hardware ray
   tracing**, a **large (~100GB-class) unified memory** pool, and AI-based denoising/upscaling.
-  HW ray tracing is first-class and memory is abundant → favor ray-traced techniques;
-  low-memory approximations (e.g. WBOIT) have no advantage here. It must also run on **other
-  hardware**, so keep the technique single and scale it by resolution (below), not by branching.
+  HW ray tracing is first-class and memory is abundant → ray-traced techniques are favored.
+  It also runs on **other hardware**, kept portable by scaling resolution and frames.
 - **Transparency/refraction (shipped v0.4.0+):** transmission/refraction is **HW ray-traced**
   via the scene TLAS and runs through Harmonia's shared `path_integrator` — the same estimator
-  and OpenPBR BSDF Hyperion uses. Order-independent, refraction-native, best parity. WBOIT and
-  the old bespoke `traceTransparentPath` are superseded/removed.
+  and OpenPBR BSDF Hyperion uses. Order-independent, refraction-native, best parity.
 
-- **GPU-driven, latest standard Vulkan, no vendor extensions.** Prefer GPU-driven rendering
+- **GPU-driven, latest standard Vulkan, cross-vendor.** Prefer GPU-driven rendering
   (indirect/mesh-shader draws, GPU-side culling, bindless) using the latest Vulkan features
   available, but **cross-vendor only** — core + `KHR`/`EXT`. **Never** vendor-specific
   extensions (`VK_NV_*`, `VK_AMD_*`, `VK_INTEL_*`). E.g. ray tracing uses
@@ -58,18 +55,17 @@ build/theia.exe --scene cornell_classic --output out.exr               # headles
 build/theia.exe --scene fixture_ibl                                    # interactive window
 ```
 
-CLI flags = the common Harmonia set: `--scene/-s`, `--output/-o` (headless EXR+PNG),
-`--width`, `--height`, `--validation`/`--no-validation`, `--rt-gi`/`--no-rt-gi` (default on).
-**Deprecated/no-op** (legacy postfx removed, kept only for CLI compatibility): `--no-postfx`,
-`--indirect-ambient <f>`, `--ssgi-strength <f>`. Theia has no `--spp` (it is not stochastic;
-it accumulates frames — see `--offscreen-frames`).
+CLI flags: `--scene/-s`, `--output/-o` (headless EXR+PNG), `--width`, `--height`,
+`--offscreen-frames <n>` (accumulation count), `--validation`/`--no-validation`,
+`--rt-gi`/`--no-rt-gi` (GI on/off, default on), `--no-restir-di` (ReSTIR DI off),
+`--taa`/`--no-taa`, `--no-camera-jitter`, `--indirect-ambient <f>`.
+Theia accumulates frames — use `--offscreen-frames` for convergence quality.
 
 ⚠️ No `--offscreen` flag — headless is triggered by `--output`.
 
 ## Parity & screenshots: unified RT path
 
-Parity vs Hyperion and showcase screenshots use the same unified RT path. `--no-postfx`
-is retained for CLI compatibility and should be treated as a no-op in current Theia builds.
+Parity vs Hyperion and showcase screenshots use the unified accumulation RT path.
 
 Compare with `Harmonia/tools/compare_renders.py ref.exr cand.exr` (pass = mean_diff <= 4.0,
 pre-tonemap EXR, same color space).
