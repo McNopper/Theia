@@ -34,7 +34,7 @@ It implements the [OpenPBR Surface v1.1.1](https://academysoftwarefoundation.git
 
 | Textured Cube | Dragon & Teapot (IBL) | Advanced Transmission |
 |:-------------:|:---------------------:|:---------------------:|
-| ![textured_cube](screenshots/textured_cube.png) | ![dragon_teapot](screenshots/dragon_teapot.png) | ![openpbr_advanced](screenshots/openpbr_advanced.png) |
+| ![cornell_textured_cube](screenshots/cornell_textured_cube.png) | ![dragon_teapot](screenshots/dragon_teapot.png) | ![openpbr_advanced](screenshots/openpbr_advanced.png) |
 
 | A Beautiful Game (IBL) | Bunny + ShaderBall (IBL) | Blender Export |
 |:----------------------:|:------------------------:|:------------------------:|
