@@ -76,9 +76,8 @@ pre-tonemap EXR, same color space).
   Aether tree. Editing `C:\Development\GitHub\Aether\assets` does nothing unless you update the
   `_deps` copy or build with `-DFETCHCONTENT_SOURCE_DIR_AETHER=...`. Symptom: two "different"
   renders give byte-identical metrics.
-- **IBL parity reference must be high-spp:** scenes using `alignment_16spp_8bounce.render.toml`
-  give a 16-spp (noisy) Hyperion reference — render it with `hyperion --spp 512` first, or the
-  diff measures noise. (On `alignment_suzanne` this alone inflated mean_diff 9.82 -> 13.56.)
+- **IBL parity reference must be high-spp:** a low-spp Hyperion reference is noisy — render it
+  with `hyperion --spp 512` first, or the diff measures noise, not a real discrepancy.
 - **Real-time multi-bounce GI now exists (RT-GI):** Theia runs a HW ray-traced GI pass
   (`gi.comp.slang` → shared `path_integrator`) providing path-traced multi-bounce indirect
   (diffuse + specular + env-NEE) and transmission/refraction, default-on (`--no-rt-gi` to
