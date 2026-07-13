@@ -28,17 +28,17 @@ It implements the [OpenPBR Surface v1.1.1](https://academysoftwarefoundation.git
 |:----:|:--------:|:--------:|
 | ![openpbr_fuzz](screenshots/openpbr_fuzz.png) | ![openpbr_specular](screenshots/openpbr_specular.png) | ![openpbr_organics](screenshots/openpbr_organics.png) |
 
-| Thin-film | Special Materials | Meadow IBL |
-|:---------:|:-----------------:|:----------:|
-| ![openpbr_thinfilm](screenshots/openpbr_thinfilm.png) | ![openpbr_special](screenshots/openpbr_special.png) | ![meadow_scene](screenshots/meadow_scene.png) |
+| Thin-film | Textured Cube | Dragon & Teapot (IBL) |
+|:---------:|:-------------:|:---------------------:|
+| ![openpbr_thinfilm](screenshots/openpbr_thinfilm.png) | ![cornell_textured_cube](screenshots/cornell_textured_cube.png) | ![dragon_teapot](screenshots/dragon_teapot.png) |
 
-| Textured Cube | Dragon & Teapot (IBL) | Advanced Transmission |
-|:-------------:|:---------------------:|:---------------------:|
-| ![cornell_textured_cube](screenshots/cornell_textured_cube.png) | ![dragon_teapot](screenshots/dragon_teapot.png) | ![openpbr_advanced](screenshots/openpbr_advanced.png) |
-
-| A Beautiful Game (IBL) | Bunny + ShaderBall (IBL) | Blender Export |
+| Advanced Transmission | A Beautiful Game (IBL) | Bunny + ShaderBall (IBL) |
 |:----------------------:|:------------------------:|:------------------------:|
-| ![ABeautifulGame](screenshots/ABeautifulGame.png) | ![bunny_shaderball](screenshots/bunny_shaderball.png) | ![camera_suzanne](screenshots/camera_suzanne.png) |
+| ![openpbr_advanced](screenshots/openpbr_advanced.png) | ![ABeautifulGame](screenshots/ABeautifulGame.png) | ![bunny_shaderball](screenshots/bunny_shaderball.png) |
+
+| Blender Export |
+|:------------------------:|
+| ![camera_suzanne](screenshots/camera_suzanne.png) |
 
 ---
 
