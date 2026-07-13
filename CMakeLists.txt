@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(theia VERSION 0.6.14 LANGUAGES C CXX)
+project(theia VERSION 0.6.15 LANGUAGES C CXX)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
