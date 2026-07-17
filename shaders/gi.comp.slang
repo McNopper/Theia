@@ -128,6 +128,19 @@ float targetPdf(float3 Le, float3 bsdfTimesCos, float dist2) {
 [[vk::binding(16, 0)]] RWStructuredBuffer<Reservoir>       t_reservoirsCur;    // current-frame write (and spatial read)
 [[vk::binding(17, 0)]] StructuredBuffer<Reservoir>         t_reservoirsPrev;   // previous-frame read (temporal reuse)
 [[vk::binding(18, 0)]] Texture2D<float2>                   t_motionVectors;    // screen-space (dx,dy) in pixels; 1×1 dummy → zero motion
+// Per-instance object→world transforms (one float4x4 per instance, row-major).
+[[vk::binding(19, 0)]] StructuredBuffer<float4x4>          instanceTransforms;
+
+/// Inverse of a row-major 3×3 (cross-products-of-columns form).
+float3x3 inverse3x3(float3x3 m) {
+    const float3x3 col = transpose(m);
+    const float3 c0 = col[0], c1 = col[1], c2 = col[2];
+    const float3 r0 = cross(c1, c2);
+    const float3 r1 = cross(c2, c0);
+    const float3 r2 = cross(c0, c1);
+    const float invDet = 1.0 / dot(c0, r0);
+    return float3x3(r0 * invDet, r1 * invDet, r2 * invDet);
+}
 
 // Per-sample firefly clamp on the indirect contribution (display-referred, post-exposure),
 // matching the forward pass kFireflyClampDisplay threshold.
@@ -204,12 +217,15 @@ GiHit traceClosestHit(float3 origin, float3 dir, float maxDist) {
     const uint i0 = indices[base + 0u];
     const uint i1 = indices[base + 1u];
     const uint i2 = indices[base + 2u];
-    const float3 p0 = vertices[i0].position;
-    const float3 p1 = vertices[i1].position;
-    const float3 p2 = vertices[i2].position;
-    const float3 n0 = vertices[i0].normal;
-    const float3 n1 = vertices[i1].normal;
-    const float3 n2 = vertices[i2].normal;
+    // Vertices live in object space; the instance transform places them.
+    const float4x4 o2w = instanceTransforms[instIdx];
+    const float3x3 normalMat = transpose(inverse3x3((float3x3)o2w));
+    const float3 p0 = mul(o2w, float4(vertices[i0].position, 1.0)).xyz;
+    const float3 p1 = mul(o2w, float4(vertices[i1].position, 1.0)).xyz;
+    const float3 p2 = mul(o2w, float4(vertices[i2].position, 1.0)).xyz;
+    const float3 n0 = normalize(mul(normalMat, vertices[i0].normal));
+    const float3 n1 = normalize(mul(normalMat, vertices[i1].normal));
+    const float3 n2 = normalize(mul(normalMat, vertices[i2].normal));
     const float2 uv0 = vertices[i0].uv;
     const float2 uv1 = vertices[i1].uv;
     const float2 uv2 = vertices[i2].uv;

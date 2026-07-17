@@ -52,6 +52,8 @@ cbuffer ForwardPC {
 [[vk::binding(0, 0)]] StructuredBuffer<GpuVertex>   vertices;
 [[vk::binding(1, 0)]] StructuredBuffer<GpuInstance> instances;
 [[vk::binding(2, 0)]] StructuredBuffer<uint>        indices;
+// Per-instance object→world transforms (one float4x4 per instance, row-major).
+[[vk::binding(11, 0)]] StructuredBuffer<float4x4>   instanceTransforms;
 
 // Set 2: IBL textures
 // Bindings: 0=diffuse irradiance, 1=specular prefilter (mipped), 2=sheen LUT, 3=sampler, 4=raw env, 5=GGX BRDF LUT
@@ -510,9 +512,11 @@ RayHitData traceClosestHit(float3 originWs, float3 dirWs, float tMin, uint insta
     const uint i0 = indices[base + 0u];
     const uint i1 = indices[base + 1u];
     const uint i2 = indices[base + 2u];
-    const float3 p0 = vertices[i0].position;
-    const float3 p1 = vertices[i1].position;
-    const float3 p2 = vertices[i2].position;
+    // Vertices are object-space; transform into world by the instance matrix.
+    const float4x4 o2w = instanceTransforms[instIdx];
+    const float3 p0 = mul(o2w, float4(vertices[i0].position, 1.0)).xyz;
+    const float3 p1 = mul(o2w, float4(vertices[i1].position, 1.0)).xyz;
+    const float3 p2 = mul(o2w, float4(vertices[i2].position, 1.0)).xyz;
 
     const float2 b = q.CommittedTriangleBarycentrics();
     const float b0 = 1.0 - b.x - b.y;

@@ -88,19 +88,30 @@ struct MeshOutput {
 [[vk::binding(7, 0)]] StructuredBuffer<uint>        prevVisibility;
 [[vk::binding(8, 0)]] RWStructuredBuffer<uint>      currVisibility;
 [[vk::binding(9, 0)]] Texture2D<float>              t_hiZ;
+// Per-instance object→world transforms (one float4x4 per instance, row-major).
+[[vk::binding(11, 0)]] StructuredBuffer<float4x4>   instanceTransforms;
 
 static const uint kMaxVerts = 64;
 static const uint kMaxTris  = 124;
 
-/// Conservative Hi-Z occlusion test for a meshlet bounding sphere against the current-frame
-/// max-depth pyramid. Returns true only when the sphere is fully behind the farthest
-/// occluder over its entire screen footprint (never culls visible geometry).
-bool hiZOccluded(GpuMeshlet ml) {
+/// Inverse of a row-major 3×3 (cross-products-of-columns form).
+float3x3 inverse3x3(float3x3 m) {
+    const float3x3 col = transpose(m);
+    const float3 c0 = col[0], c1 = col[1], c2 = col[2];
+    const float3 r0 = cross(c1, c2);
+    const float3 r1 = cross(c2, c0);
+    const float3 r2 = cross(c0, c1);
+    const float invDet = 1.0 / dot(c0, r0);
+    return float3x3(r0 * invDet, r1 * invDet, r2 * invDet);
+}
+
+/// Conservative Hi-Z occlusion test for a meshlet bounding sphere (in WORLD space)
+/// against the current-frame max-depth pyramid. Returns true only when the sphere is
+/// fully behind the farthest occluder over its entire screen footprint.
+bool hiZOccluded(float3 center, float radius) {
     if (hiZMipCount == 0u) {
         return false; // Hi-Z disabled: draw conservatively.
     }
-    const float3 center = float3(ml.centerX, ml.centerY, ml.centerZ);
-    const float  radius = ml.radius;
 
     // viewProj is row-major VP; mul(M, v) applies VP to a column vector = clip space.
     const float4 clip = mul(viewProj, float4(center, 1.0));
@@ -155,6 +166,15 @@ void main(
     const GpuInstance inst = instances[instIdx];
     const GpuMeshlet meshlet = meshlets[meshletIdx];
 
+    // Object→world placement for this instance + its normal matrix (inverse-transpose).
+    const float4x4 o2w = instanceTransforms[instIdx];
+    const float3x3 normalMat = transpose(inverse3x3((float3x3)o2w));
+
+    // Meshlet bounds are object-space; promote to world for Hi-Z occlusion.
+    const float3 mlCenterWorld = mul(o2w, float4(meshlet.centerX, meshlet.centerY, meshlet.centerZ, 1.0)).xyz;
+    const float mlScale = max(length(o2w[0].xyz), max(length(o2w[1].xyz), length(o2w[2].xyz)));
+    const float mlRadiusWorld = meshlet.radius * mlScale;
+
     // Two-pass Hi-Z occlusion culling. This decision is meshlet-uniform (identical across
     // all 64 threads), so any thread reaching the loops has already been kept.
     bool drawMeshlet;
@@ -166,7 +186,7 @@ void main(
     } else {
         // Pass 2: consider only meshlets not already drawn in pass 1, and test them against
         // the current-frame Hi-Z built from pass 1's depth.
-        drawMeshlet = (prevVisibility[meshletIdx] == 0u) && !hiZOccluded(meshlet);
+        drawMeshlet = (prevVisibility[meshletIdx] == 0u) && !hiZOccluded(mlCenterWorld, mlRadiusWorld);
     }
 
     if (!drawMeshlet) {
@@ -189,11 +209,13 @@ void main(
     for (uint vi = tig; vi < meshlet.vertexCount; vi += 64) {
         const uint globalVertIdx = meshletVertices[meshlet.vertexOffset + vi];
         const GpuVertex v = vertices[globalVertIdx];
-        verts[vi].pos           = mul(viewProj, float4(v.position, 1.0));
-        verts[vi].normal        = v.normal;
-        verts[vi].tangent       = float3(v.tangentX, v.tangentY, v.tangentZ);
+        // Vertices are object-space; transform into world by the instance matrix.
+        const float3 worldPos = mul(o2w, float4(v.position, 1.0)).xyz;
+        verts[vi].pos           = mul(viewProj, float4(worldPos, 1.0));
+        verts[vi].normal        = normalize(mul(normalMat, v.normal));
+        verts[vi].tangent       = normalize(mul(normalMat, float3(v.tangentX, v.tangentY, v.tangentZ)));
         verts[vi].bitangentSign = v.bitangentSign;
-        verts[vi].worldPos      = v.position;
+        verts[vi].worldPos      = worldPos;
         verts[vi].uv            = v.uv;
         verts[vi].materialIdx   = inst.materialIndex;
         verts[vi].instanceIdx   = instIdx;

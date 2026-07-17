@@ -163,7 +163,7 @@ void GiPass::shutdown() {
 }
 
 bool GiPass::createDescriptors() {
-    const std::array<VkDescriptorSetLayoutBinding, 19> bindings{{
+    const std::array<VkDescriptorSetLayoutBinding, 20> bindings{{
         {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // TLAS
         {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // hdr (RW)
         {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // giBuffer
@@ -183,16 +183,17 @@ bool GiPass::createDescriptors() {
         {16, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},            // A4 reservoirs (cur, RW)
         {17, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},            // A4 reservoirs (prev, RO)
         {18, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},             // A4 motion vectors
+        {19, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},            // instance transforms
     }};
 
     constexpr VkDescriptorBindingFlags kUpdateAfterBind = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
     constexpr VkDescriptorBindingFlags kTextureFlags =
         VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
-    const std::array<VkDescriptorBindingFlags, 19> bindingFlags{
+    const std::array<VkDescriptorBindingFlags, 20> bindingFlags{
         kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind,
         kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind,
         kUpdateAfterBind, kTextureFlags, kUpdateAfterBind, kUpdateAfterBind,
-        kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind};
+        kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = static_cast<uint32_t>(bindingFlags.size()),
@@ -216,7 +217,7 @@ bool GiPass::createDescriptors() {
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
         {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 5},   // 2,3,4,15 + 18 (motion)
         {VK_DESCRIPTOR_TYPE_SAMPLER, 1},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 10}, // 6,7,8,9,10,11,12,14 + 16,17 (reservoirs)
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 11}, // 6,7,8,9,10,11,12,14 + 16,17 (reservoirs) + 19 (instance transforms)
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures},
     }};
     const VkDescriptorPoolCreateInfo poolInfo{
@@ -322,6 +323,7 @@ void GiPass::updateDescriptors(const FrameParams& params) {
     const VkDescriptorBufferInfo materialsInfo{scene->materialBuffer().handle(), 0, VK_WHOLE_SIZE};
     const VkDescriptorBufferInfo verticesInfo{scene->vertexBuffer().handle(), 0, VK_WHOLE_SIZE};
     const VkDescriptorBufferInfo instancesInfo{scene->instanceBuffer().handle(), 0, VK_WHOLE_SIZE};
+    const VkDescriptorBufferInfo instanceTransformsInfo{scene->instanceTransformBuffer().handle(), 0, VK_WHOLE_SIZE};
     const VkDescriptorBufferInfo indicesInfo{scene->indexBuffer().handle(), 0, VK_WHOLE_SIZE};
     const VkDescriptorBufferInfo emissiveInfo{scene->emissiveTriangleBuffer().handle(), 0, VK_WHOLE_SIZE};
     const VkDescriptorBufferInfo emissiveCdfInfo{scene->emissiveCdfBuffer().handle(), 0, VK_WHOLE_SIZE};
@@ -336,7 +338,7 @@ void GiPass::updateDescriptors(const FrameParams& params) {
         .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
     };
 
-    const std::array<VkWriteDescriptorSet, 15> writes{{
+    const std::array<VkWriteDescriptorSet, 16> writes{{
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, &tlasWriteInfo, m_set, 0, 0, 1,
          VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, nullptr, nullptr, nullptr},
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 1, 0, 1,
@@ -367,6 +369,8 @@ void GiPass::updateDescriptors(const FrameParams& params) {
          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &emissiveCdfInfo, nullptr},
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 15, 0, 1,
          VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &gradientVarianceInfo, nullptr, nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 19, 0, 1,
+         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &instanceTransformsInfo, nullptr},
     }};
 
     std::vector<VkWriteDescriptorSet> allWrites(writes.begin(), writes.end());

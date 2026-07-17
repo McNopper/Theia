@@ -73,12 +73,17 @@ void main(uint3 tid : SV_DispatchThreadID) {
         return;
     }
 
-    // Per-instance motion correction: apply the previous-frame world transform to
-    // get the world position this point occupied last frame.
-    // For static scenes (prevT == identity): prevWorldPos == wpos (no-op).
-    uint instanceIdx = instanceIdxPlus1 - 1u;
-    float4x4 prevT = prevInstanceTransforms[instanceIdx];
-    float3 prevWorldPos = mul(prevT, float4(wpos, 1.0)).xyz;
+    // Per-instance motion correction.  The world position read from giBuffer is already
+    // in the CURRENT frame's world space (the mesh/GI shaders apply the instance's
+    // object→world transform).  For the static-scene model every instance transform is
+    // constant across frames, so this point occupied the SAME world position last frame:
+    // prevWorldPos == wpos, and the only motion is camera (view-projection) motion.
+    //
+    // The prevInstanceTransforms binding is retained for a future dynamic-object model;
+    // supporting per-frame transform changes would require prevWorldPos = prevT·inverse(curT)·wpos
+    // (undo the current transform, apply the previous one).
+    const uint instanceIdx = instanceIdxPlus1 - 1u;
+    const float3 prevWorldPos = wpos;
 
     // Clip-space positions (homogeneous).
     // Row-major matrices; mul(M, v) column-vector convention — matches the mesh shader.

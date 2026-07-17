@@ -610,7 +610,7 @@ bool ForwardRenderer::createPipeline() {
     // Binding 10: compactInstanceList from GpuCullPass — written by the cull compute
     //   shader each frame; task shader reads it via SV_DrawID to get the instance index.
     constexpr VkShaderStageFlags kTaskStage = VK_SHADER_STAGE_TASK_BIT_EXT;
-    const std::array<VkDescriptorSetLayoutBinding, 11> meshBindings{
+    const std::array<VkDescriptorSetLayoutBinding, 12> meshBindings{
         VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTaskMeshFragStages, nullptr},
         VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTaskMeshFragStages, nullptr},
         VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
@@ -622,10 +622,11 @@ bool ForwardRenderer::createPipeline() {
         VkDescriptorSetLayoutBinding{8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
         VkDescriptorSetLayoutBinding{9, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
         VkDescriptorSetLayoutBinding{10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTaskStage, nullptr},
+        VkDescriptorSetLayoutBinding{11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}, // instance transforms
     };
     constexpr VkDescriptorBindingFlags kUAB = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
-    const std::array<VkDescriptorBindingFlags, 11> meshBindingFlags{
-        kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB};
+    const std::array<VkDescriptorBindingFlags, 12> meshBindingFlags{
+        kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo meshBindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = static_cast<uint32_t>(meshBindingFlags.size()),
@@ -1212,6 +1213,11 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         .offset = 0,
         .range = VK_WHOLE_SIZE,
     };
+    VkDescriptorBufferInfo instanceTransformInfo{
+        .buffer = m_scene->instanceTransformBuffer().handle(),
+        .offset = 0,
+        .range = VK_WHOLE_SIZE,
+    };
     VkDescriptorBufferInfo indexBufferInfo{
         .buffer = m_scene->indexBuffer().handle(),
         .offset = 0,
@@ -1322,7 +1328,7 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
                                         : identFallback;
     VkDescriptorBufferInfo compactInstInfo{compactInstBuf, 0, VK_WHOLE_SIZE};
 
-    std::array<VkWriteDescriptorSet, 19> writes{
+    std::array<VkWriteDescriptorSet, 20> writes{
         VkWriteDescriptorSet{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .dstSet = m_meshSet,
@@ -1480,6 +1486,15 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             .pBufferInfo = &compactInstInfo,
+        },
+        // Set 0, binding 11: per-instance object→world transforms (mesh shader).
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_meshSet,
+            .dstBinding = 11,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &instanceTransformInfo,
         },
     };
     vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);

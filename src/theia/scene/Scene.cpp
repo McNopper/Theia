@@ -12,7 +12,6 @@
 #include <limits>
 #include <meshoptimizer.h>
 #include <span>
-#include <string>
 #include <utility>
 #include <vector>
 #include <vma/vk_mem_alloc.h>
@@ -24,57 +23,58 @@
 #include "harmonia/scene/Geometry.hpp"
 #include "harmonia/scene/ProceduralGeometry.hpp"
 
+namespace {
+
+/// World-space instance bounding sphere from a mesh's object-space bounds + the
+/// instance transform (centre transformed by the matrix, radius scaled by the
+/// largest axis scale — conservative under non-uniform scale).
+GpuInstanceBounds worldBounds(const Scene::MeshGpu& mesh, const Xform& xform) {
+    const sm::float4x4 m = xform.matrix();
+    const sm::float3 c = static_cast<sm::float3>(
+        m * sm::float4(mesh.boundsCenterX, mesh.boundsCenterY, mesh.boundsCenterZ, 1.0f));
+    const float maxScale = std::max({std::abs(xform.scale.x), std::abs(xform.scale.y), std::abs(xform.scale.z)});
+    return GpuInstanceBounds{c.x, c.y, c.z, mesh.boundsRadius * maxScale};
+}
+
+} // namespace
+
 uint32_t Scene::addMesh(const DeviceContext& ctx,
                         const CommandPool& pool,
                         MeshData&& data,
-                        uint32_t materialIdx,
                         std::string_view name) {
-    const uint32_t instanceIndex = static_cast<uint32_t>(m_geometries.size());
+    const uint32_t meshIndex = static_cast<uint32_t>(m_meshes.size());
     const std::string debugName =
-        name.empty() ? std::string{"mesh."} + std::to_string(instanceIndex) : std::string{name};
+        name.empty() ? std::string{"mesh."} + std::to_string(meshIndex) : std::string{name};
 
-    auto mesh = TriangleMesh::create(ctx, pool, std::move(data), materialIdx, debugName);
+    auto mesh = TriangleMesh::create(ctx, pool, std::move(data), debugName);
     if (!mesh) {
         return std::numeric_limits<uint32_t>::max();
     }
-
-    m_geometries.push_back(std::move(*mesh));
-    m_instances.push_back(GpuInstance{
-        .meshIndex = instanceIndex,
-        .materialIndex = materialIdx,
-        .vertexOffset = 0,
-        .indexOffset = 0,
-        .indexCount = 0,
-        .meshletOffset = 0,
-        .meshletCount = 0,
-        .geometryKind = 0,
-        .sphereRadius = 0.0f,
-    });
-    return instanceIndex;
+    m_meshes.push_back(std::move(*mesh));
+    return meshIndex;
 }
 
-uint32_t Scene::addSphere(const DeviceContext& ctx,
-                          const CommandPool& pool,
-                          sm::float3 center,
-                          float radius,
-                          uint32_t materialIdx) {
+uint32_t Scene::addSphereMesh(const DeviceContext& ctx,
+                              const CommandPool& pool,
+                              float radius,
+                              std::string_view name) {
     // Theia is a rasterizer (mesh-shader pipeline), so an analytic sphere cannot
-    // be drawn directly — it is tessellated into a triangle mesh on insertion.
-    // (Hyperion keeps the analytic sphere; that divergence lives in each Scene.)
-    MeshData mesh = ProceduralGeometry::makeSphere(center, radius);
-    return addMesh(ctx, pool, std::move(mesh), materialIdx, "sphere");
+    // be drawn directly — it is tessellated into a triangle mesh (object space,
+    // centred at the origin) and placed by the instance transform.
+    MeshData mesh = ProceduralGeometry::makeSphere(sm::float3{0.0f, 0.0f, 0.0f}, radius);
+    return addMesh(ctx, pool, std::move(mesh), name.empty() ? "sphere" : name);
 }
 
 VkResult Scene::build(const DeviceContext& ctx, const CommandPool& pool) {
-    if (m_geometries.empty()) {
+    if (m_instances.empty()) {
         return VK_ERROR_INITIALIZATION_FAILED;
     }
-    assert(m_geometries.size() == m_instances.size());
     if (const VkResult result = buildSceneBuffers(ctx, pool); result != VK_SUCCESS) {
         return result;
     }
-    for (auto& geo : m_geometries) {
-        if (const VkResult result = geo->buildBlas(ctx, pool); result != VK_SUCCESS) {
+    // One BLAS per unique mesh; N TLAS instances reference a shared BLAS.
+    for (auto& mesh : m_meshes) {
+        if (const VkResult result = mesh->buildBlas(ctx, pool); result != VK_SUCCESS) {
             return result;
         }
     }
@@ -91,145 +91,128 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
         gpuMaterials.push_back(GpuMaterial{});
     }
 
+    // Lay out the global vertex/index/meshlet buffers from the unique meshes (object
+    // space), recording each mesh's ranges + object-space bounding sphere.
     std::vector<GpuVertex> vertices;
     std::vector<uint32_t> indices;
     std::vector<GpuMeshlet> gpuMeshlets;
     std::vector<uint32_t> meshletVertices;
     std::vector<uint32_t> meshletTriangles;
-    vertices.reserve(std::max<size_t>(m_geometries.size(), 1));
+    m_meshGpu.assign(m_meshes.size(), MeshGpu{});
 
-    for (size_t i = 0; i < m_geometries.size(); ++i) {
-        GpuInstance& instance = m_instances[i];
+    constexpr size_t kMaxVerts = 64;
+    constexpr size_t kMaxTris = 124;
 
-        if (const auto* mesh = dynamic_cast<const TriangleMesh*>(m_geometries[i].get())) {
-            instance.vertexOffset = static_cast<uint32_t>(vertices.size());
-            instance.indexOffset = static_cast<uint32_t>(indices.size());
-            instance.geometryKind = 0;
+    for (size_t mi = 0; mi < m_meshes.size(); ++mi) {
+        const auto* mesh = dynamic_cast<const TriangleMesh*>(m_meshes[mi].get());
+        if (mesh == nullptr) {
+            continue; // Theia tessellates everything into triangle meshes
+        }
+        MeshGpu& gpu = m_meshGpu[mi];
+        gpu.vertexOffset = static_cast<uint32_t>(vertices.size());
+        gpu.indexOffset = static_cast<uint32_t>(indices.size());
+        gpu.geometryKind = 0;
 
-            vertices.insert(vertices.end(), mesh->data().vertices.begin(), mesh->data().vertices.end());
+        const auto& meshVerts = mesh->data().vertices;
+        const auto& localIndices = mesh->data().indices;
+        const size_t vertCount = meshVerts.size();
+        const size_t indexCount = localIndices.size();
+        gpu.indexCount = static_cast<uint32_t>(indexCount);
 
-            const auto& localIndices = mesh->data().indices;
-            const size_t vertCount = mesh->data().vertices.size();
-            const size_t indexCount = localIndices.size();
-            instance.indexCount = static_cast<uint32_t>(indexCount);
+        vertices.insert(vertices.end(), meshVerts.begin(), meshVerts.end());
+        for (uint32_t index : localIndices) {
+            indices.push_back(index + gpu.vertexOffset);
+        }
 
-            for (uint32_t index : localIndices) {
-                indices.push_back(index + instance.vertexOffset);
+        // Meshlets (object space — meshopt bounds are object-space too).
+        const size_t maxMeshlets = meshopt_buildMeshletsBound(indexCount, kMaxVerts, kMaxTris);
+        std::vector<meshopt_Meshlet> rawMeshlets(maxMeshlets);
+        std::vector<uint32_t> rawVerts(maxMeshlets * kMaxVerts);
+        std::vector<uint8_t> rawTris(maxMeshlets * kMaxTris * 3);
+
+        std::vector<float> positions;
+        positions.reserve(vertCount * 3);
+        for (const auto& v : meshVerts) {
+            positions.push_back(v.position.x);
+            positions.push_back(v.position.y);
+            positions.push_back(v.position.z);
+        }
+
+        const size_t meshletCount = meshopt_buildMeshlets(rawMeshlets.data(),
+                                                          rawVerts.data(),
+                                                          rawTris.data(),
+                                                          localIndices.data(),
+                                                          indexCount,
+                                                          positions.data(),
+                                                          vertCount,
+                                                          sizeof(float) * 3,
+                                                          kMaxVerts,
+                                                          kMaxTris,
+                                                          0.0f);
+
+        gpu.meshletOffset = static_cast<uint32_t>(gpuMeshlets.size());
+        gpu.meshletCount = static_cast<uint32_t>(meshletCount);
+
+        for (size_t m = 0; m < meshletCount; ++m) {
+            const meshopt_Meshlet& ml = rawMeshlets[m];
+            const meshopt_Bounds bounds = meshopt_computeMeshletBounds(rawVerts.data() + ml.vertex_offset,
+                                                                       rawTris.data() + ml.triangle_offset,
+                                                                       ml.triangle_count,
+                                                                       positions.data(),
+                                                                       vertCount,
+                                                                       sizeof(float) * 3);
+
+            const uint32_t gpuVertBase = static_cast<uint32_t>(meshletVertices.size());
+            for (uint32_t v = 0; v < ml.vertex_count; ++v) {
+                meshletVertices.push_back(gpu.vertexOffset + rawVerts[ml.vertex_offset + v]);
             }
 
-            constexpr size_t kMaxVerts = 64;
-            constexpr size_t kMaxTris = 124;
-            const size_t maxMeshlets = meshopt_buildMeshletsBound(indexCount, kMaxVerts, kMaxTris);
-
-            std::vector<meshopt_Meshlet> rawMeshlets(maxMeshlets);
-            std::vector<uint32_t> rawVerts(maxMeshlets * kMaxVerts);
-            std::vector<uint8_t> rawTris(maxMeshlets * kMaxTris * 3);
-
-            std::vector<float> positions;
-            positions.reserve(vertCount * 3);
-            for (const auto& v : mesh->data().vertices) {
-                positions.push_back(v.position.x);
-                positions.push_back(v.position.y);
-                positions.push_back(v.position.z);
-            }
-
-            const size_t meshletCount = meshopt_buildMeshlets(rawMeshlets.data(),
-                                                              rawVerts.data(),
-                                                              rawTris.data(),
-                                                              localIndices.data(),
-                                                              indexCount,
-                                                              positions.data(),
-                                                              vertCount,
-                                                              sizeof(float) * 3,
-                                                              kMaxVerts,
-                                                              kMaxTris,
-                                                              0.0f);
-
-            instance.meshletOffset = static_cast<uint32_t>(gpuMeshlets.size());
-            instance.meshletCount = static_cast<uint32_t>(meshletCount);
-
-            for (size_t m = 0; m < meshletCount; ++m) {
-                const meshopt_Meshlet& ml = rawMeshlets[m];
-                const meshopt_Bounds bounds = meshopt_computeMeshletBounds(rawVerts.data() + ml.vertex_offset,
-                                                                           rawTris.data() + ml.triangle_offset,
-                                                                           ml.triangle_count,
-                                                                           positions.data(),
-                                                                           vertCount,
-                                                                           sizeof(float) * 3);
-
-                const uint32_t gpuVertBase = static_cast<uint32_t>(meshletVertices.size());
-                for (uint32_t v = 0; v < ml.vertex_count; ++v) {
-                    meshletVertices.push_back(instance.vertexOffset + rawVerts[ml.vertex_offset + v]);
-                }
-
-                const uint32_t gpuTriBase = static_cast<uint32_t>(meshletTriangles.size());
-                const uint8_t* triBytes = rawTris.data() + ml.triangle_offset;
-                const uint32_t triByteCount = ml.triangle_count * 3;
-                const uint32_t triPadded = (triByteCount + 3) & ~3u;
-                for (uint32_t b = 0; b < triPadded; b += 4) {
-                    uint32_t packed = 0;
-                    for (uint32_t k = 0; k < 4; ++k) {
-                        if (b + k < triByteCount) {
-                            packed |= static_cast<uint32_t>(triBytes[b + k]) << (k * 8);
-                        }
+            const uint32_t gpuTriBase = static_cast<uint32_t>(meshletTriangles.size());
+            const uint8_t* triBytes = rawTris.data() + ml.triangle_offset;
+            const uint32_t triByteCount = ml.triangle_count * 3;
+            const uint32_t triPadded = (triByteCount + 3) & ~3u;
+            for (uint32_t b = 0; b < triPadded; b += 4) {
+                uint32_t packed = 0;
+                for (uint32_t k = 0; k < 4; ++k) {
+                    if (b + k < triByteCount) {
+                        packed |= static_cast<uint32_t>(triBytes[b + k]) << (k * 8);
                     }
-                    meshletTriangles.push_back(packed);
                 }
-
-                gpuMeshlets.push_back(GpuMeshlet{
-                    .vertexOffset = gpuVertBase,
-                    .triangleOffset = gpuTriBase,
-                    .vertexCount = ml.vertex_count,
-                    .triangleCount = ml.triangle_count,
-                    .centerX = bounds.center[0],
-                    .centerY = bounds.center[1],
-                    .centerZ = bounds.center[2],
-                    .radius = bounds.radius,
-                });
+                meshletTriangles.push_back(packed);
             }
 
-            // Bounding sphere: centroid method — average vertex position + max-distance radius.
-            // World-space (vertices are already in world space).
-            {
-                const auto& mverts = mesh->data().vertices;
-                const float invN = 1.0f / std::max<float>(static_cast<float>(mverts.size()), 1.0f);
-                float cx = 0.0f, cy = 0.0f, cz = 0.0f;
-                for (const auto& v : mverts) {
-                    cx += v.position.x;
-                    cy += v.position.y;
-                    cz += v.position.z;
-                }
-                cx *= invN; cy *= invN; cz *= invN;
-                float bs = 0.0f;
-                for (const auto& v : mverts) {
-                    const float dx = v.position.x - cx;
-                    const float dy = v.position.y - cy;
-                    const float dz = v.position.z - cz;
-                    bs = std::max(bs, std::sqrt(dx*dx + dy*dy + dz*dz));
-                }
-                m_instanceBounds.push_back(GpuInstanceBounds{cx, cy, cz, bs});
-            }
-        } else if (const auto* sphere = dynamic_cast<const Sphere*>(m_geometries[i].get())) {
-            instance.vertexOffset = static_cast<uint32_t>(vertices.size());
-            instance.indexOffset = 0;
-            instance.indexCount = 0;
-            instance.meshletOffset = 0;
-            instance.meshletCount = 0;
-            instance.geometryKind = 1;
-            vertices.push_back(GpuVertex{
-                .position = sphere->center(),
-                .tangentX = 0.0f,
-                .normal = sm::float3{0.0f, 0.0f, 0.0f},
-                .tangentY = 0.0f,
-                .uv = sm::float2{0.0f, 0.0f},
-                .tangentZ = 0.0f,
-                .bitangentSign = 1.0f,
-            });
-            // Sphere primitives: bounds come directly from the analytical sphere params.
-            m_instanceBounds.push_back(GpuInstanceBounds{
-                sphere->center().x, sphere->center().y, sphere->center().z, sphere->radius()
+            gpuMeshlets.push_back(GpuMeshlet{
+                .vertexOffset = gpuVertBase,
+                .triangleOffset = gpuTriBase,
+                .vertexCount = ml.vertex_count,
+                .triangleCount = ml.triangle_count,
+                .centerX = bounds.center[0],
+                .centerY = bounds.center[1],
+                .centerZ = bounds.center[2],
+                .radius = bounds.radius,
             });
         }
+
+        // Object-space bounding sphere (centroid method).
+        const float invN = 1.0f / std::max<float>(static_cast<float>(vertCount), 1.0f);
+        float cx = 0.0f, cy = 0.0f, cz = 0.0f;
+        for (const auto& v : meshVerts) {
+            cx += v.position.x;
+            cy += v.position.y;
+            cz += v.position.z;
+        }
+        cx *= invN; cy *= invN; cz *= invN;
+        float bs = 0.0f;
+        for (const auto& v : meshVerts) {
+            const float dx = v.position.x - cx;
+            const float dy = v.position.y - cy;
+            const float dz = v.position.z - cz;
+            bs = std::max(bs, std::sqrt(dx * dx + dy * dy + dz * dz));
+        }
+        gpu.boundsCenterX = cx;
+        gpu.boundsCenterY = cy;
+        gpu.boundsCenterZ = cz;
+        gpu.boundsRadius = bs;
     }
 
     if (vertices.empty()) {
@@ -238,9 +221,6 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     if (indices.empty()) {
         indices.push_back(0);
     }
-    // Record the true meshlet count before any sentinel padding below. The visibility
-    // buffer is sized from this; the padding meshlet (index gpuMeshlets.size()) is never
-    // referenced by any instance's [meshletOffset, meshletOffset+meshletCount) range.
     m_meshletCount = static_cast<uint32_t>(gpuMeshlets.size());
     if (gpuMeshlets.empty()) {
         gpuMeshlets.push_back(GpuMeshlet{});
@@ -252,18 +232,37 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
         meshletTriangles.push_back(0);
     }
 
+    // Per-instance GPU rows + world-space bounds from the instance list.
+    m_gpuInstances.clear();
+    m_gpuInstances.reserve(m_instances.size());
+    m_instanceBounds.clear();
+    m_instanceBounds.reserve(m_instances.size());
+    for (const InstanceRecord& inst : m_instances) {
+        const MeshGpu& gpu = m_meshGpu[inst.meshIndex];
+        m_gpuInstances.push_back(GpuInstance{
+            .meshIndex = inst.meshIndex,
+            .materialIndex = inst.materialIndex,
+            .vertexOffset = gpu.vertexOffset,
+            .indexOffset = gpu.indexOffset,
+            .indexCount = gpu.indexCount,
+            .meshletOffset = gpu.meshletOffset,
+            .meshletCount = gpu.meshletCount,
+            .geometryKind = gpu.geometryKind,
+            .sphereRadius = gpu.sphereRadius,
+        });
+        m_instanceBounds.push_back(worldBounds(gpu, inst.xform));
+    }
+    m_instanceBounds.resize(m_instances.size(), GpuInstanceBounds{});
+
     auto instanceBuf =
         Buffer::upload(ctx,
                        pool,
-                       std::as_bytes(std::span<const GpuInstance>(m_instances.data(), m_instances.size())),
+                       std::as_bytes(std::span<const GpuInstance>(m_gpuInstances.data(), m_gpuInstances.size())),
                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                        "scene.instances");
     if (!instanceBuf) {
         return instanceBuf.error();
     }
-
-    // Ensure m_instanceBounds is the same size as m_instances (guard against missing push_back).
-    m_instanceBounds.resize(m_instances.size());
     auto instanceBoundsBuf =
         Buffer::upload(ctx,
                        pool,
@@ -273,7 +272,6 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     if (!instanceBoundsBuf) {
         return instanceBoundsBuf.error();
     }
-
     auto materialBuf =
         Buffer::upload(ctx,
                        pool,
@@ -283,7 +281,6 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     if (!materialBuf) {
         return materialBuf.error();
     }
-
     auto vertexBuf = Buffer::upload(ctx,
                                     pool,
                                     std::as_bytes(std::span<const GpuVertex>(vertices.data(), vertices.size())),
@@ -292,7 +289,6 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     if (!vertexBuf) {
         return vertexBuf.error();
     }
-
     auto indexBuf = Buffer::upload(ctx,
                                    pool,
                                    std::as_bytes(std::span<const uint32_t>(indices.data(), indices.size())),
@@ -301,7 +297,6 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     if (!indexBuf) {
         return indexBuf.error();
     }
-
     auto meshletBuf = Buffer::upload(ctx,
                                      pool,
                                      std::as_bytes(std::span<const GpuMeshlet>(gpuMeshlets.data(), gpuMeshlets.size())),
@@ -310,7 +305,6 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     if (!meshletBuf) {
         return meshletBuf.error();
     }
-
     auto meshletVertexBuf =
         Buffer::upload(ctx,
                        pool,
@@ -320,7 +314,6 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     if (!meshletVertexBuf) {
         return meshletVertexBuf.error();
     }
-
     auto meshletTriangleBuf =
         Buffer::upload(ctx,
                        pool,
@@ -339,21 +332,18 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     m_meshletBuffer = std::move(*meshletBuf);
     m_meshletVertexBuffer = std::move(*meshletVertexBuf);
     m_meshletTriangleBuffer = std::move(*meshletTriangleBuf);
-    Logger::info("Scene built: {} meshlets", gpuMeshlets.size());
+    Logger::info("Scene built: {} meshes, {} instances, {} meshlets",
+                 m_meshes.size(),
+                 m_instances.size(),
+                 gpuMeshlets.size());
 
-    // Per-instance world transforms.  In the current static-scene model, vertex
-    // positions are baked into world space at load time (ObjImporter::flushMesh
-    // applies the scene-file TRS to every vertex), so all geometry xforms are
-    // identity.  These buffers are the A1b infrastructure for future dynamic
-    // objects: when an instance's transform changes, callers update
-    // m_instanceTransformBuffer and shift the old value into
-    // m_prevInstanceTransformBuffer before each frame.
-    const size_t instCount = std::max<size_t>(m_geometries.size(), 1);
+    // Per-instance object→world transforms (current + previous). Static scenes upload
+    // once at build; the previous buffer starts equal to the current.
+    const size_t instCount = std::max<size_t>(m_instances.size(), 1);
     std::vector<sm::float4x4> instanceTransforms(instCount, sm::float4x4(1.0f));
-    for (size_t i = 0; i < m_geometries.size(); ++i) {
-        instanceTransforms[i] = m_geometries[i]->xform.matrix();
+    for (size_t i = 0; i < m_instances.size(); ++i) {
+        instanceTransforms[i] = m_instances[i].xform.matrix();
     }
-
     auto transformBuf =
         Buffer::upload(ctx,
                        pool,
@@ -363,7 +353,6 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     if (!transformBuf) {
         return transformBuf.error();
     }
-    // Previous-frame transforms start equal to current (first-frame / static default).
     auto prevTransformBuf =
         Buffer::upload(ctx,
                        pool,
@@ -373,11 +362,8 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     if (!prevTransformBuf) {
         return prevTransformBuf.error();
     }
-
-    // Stable per-object IDs: objectId[i] == i.  Persistent across frames as long as
-    // the scene is not rebuilt.  Suitable for temporal reservoir keys (ReSTIR DI, A-SVGF).
     std::vector<uint32_t> objectIds(instCount, 0u);
-    for (uint32_t i = 0; i < static_cast<uint32_t>(m_geometries.size()); ++i) {
+    for (uint32_t i = 0; i < static_cast<uint32_t>(m_instances.size()); ++i) {
         objectIds[i] = i;
     }
     auto objectIdBuf =
@@ -389,7 +375,6 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     if (!objectIdBuf) {
         return objectIdBuf.error();
     }
-
     m_instanceTransformBuffer = std::move(*transformBuf);
     m_prevInstanceTransformBuffer = std::move(*prevTransformBuf);
     m_objectIdBuffer = std::move(*objectIdBuf);
@@ -401,13 +386,10 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
         gpuLights.push_back(light->toGpu());
     }
 
-    // Auto-synthesize rect lights from emissive mesh instances.
-    // In path tracing (Hyperion), emissive surfaces are sampled via NEE.
-    // In real-time rendering (Theia), the forward shader needs explicit GpuLight entries.
-    // When no lights were added explicitly, derive one RectLight per emissive mesh.
+    // Auto-synthesize lights from emissive mesh instances when none were added explicitly.
     if (m_lights.empty()) {
-        for (size_t i = 0; i < m_geometries.size(); ++i) {
-            const GpuInstance& inst = m_instances[i];
+        for (size_t i = 0; i < m_instances.size(); ++i) {
+            const InstanceRecord& inst = m_instances[i];
             if (inst.materialIndex >= m_materials.size() || !m_materials[inst.materialIndex].emissiveAsLightSource())
                 continue;
             const GpuMaterial& gpuMat = gpuMaterials[inst.materialIndex];
@@ -415,40 +397,7 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
             if (luminance <= 0.0f)
                 continue;
 
-            constexpr float kPiLight = 3.14159265358979323846F;
-
-            // Emissive sphere primitive → omnidirectional point light at its centre.
-            // The projected disk area (π r²) carries the radiance so the metal/diffuse
-            // response matches a path-traced uniform spherical emitter.
-            if (inst.geometryKind == 1U) {
-                const auto* sph = dynamic_cast<const Sphere*>(m_geometries[i].get());
-                if (!sph)
-                    continue;
-                const sm::float3 sc = static_cast<sm::float3>(m_geometries[i]->xform.matrix() * sm::float4(sph->center(), 1.0F));
-                const float sr = std::max(sph->radius(), 0.01F);
-                GpuLight gl{};
-                gl.position = sc;
-                gl.type = std::bit_cast<float>(static_cast<uint32_t>(LightType::Point));
-                gl.direction = sm::float3(0.0F, -1.0F, 0.0F);
-                gl.range = 0.0F;
-                gl.color = static_cast<sm::float3>(gpuMat.emissionColorLum);
-                gl.intensity = luminance * kPiLight * sr * sr;
-                gl.halfWidth = sr;
-                gl.halfHeight = sr;
-                gpuLights.push_back(gl);
-                Logger::info("Scene: emissive sphere {} → PointLight at ({:.1f},{:.1f},{:.1f}) lum={:.0f} r={:.2f}",
-                             i,
-                             sc.x,
-                             sc.y,
-                             sc.z,
-                             luminance,
-                             sr);
-                continue;
-            }
-            if (inst.geometryKind != 0U)
-                continue;
-
-            const auto* mesh = dynamic_cast<const TriangleMesh*>(m_geometries[i].get());
+            const auto* mesh = dynamic_cast<const TriangleMesh*>(m_meshes[inst.meshIndex].get());
             if (!mesh)
                 continue;
             const auto& verts = mesh->data().vertices;
@@ -456,20 +405,18 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
             if (verts.empty() || idxBuf.empty())
                 continue;
 
-            const sm::float4x4 xform = m_geometries[i]->xform.matrix();
+            constexpr float kPi = 3.14159265358979323846F;
+            const sm::float4x4 xform = inst.xform.matrix();
 
-            // Compute world-space vertices and centroid.
             std::vector<sm::float3> wverts;
             wverts.reserve(verts.size());
             sm::float3 centroid{0.0f};
             for (const auto& v : verts) {
-                wverts.push_back(static_cast<sm::float3>(xform * sm::float4(v.position, 1.0F)));
+                wverts.push_back(static_cast<sm::float3>(xform * sm::float4(v.position, 1.0f)));
                 centroid += wverts.back();
             }
             centroid /= static_cast<float>(wverts.size());
 
-            // Compute area-weighted average normal.  normalSum accumulates 2·area·n̂
-            // per triangle; its magnitude relative to total area measures planarity.
             sm::float3 normalSum{0.0f};
             float totalArea = 0.0f;
             const uint32_t triCount = static_cast<uint32_t>(idxBuf.size() / 3);
@@ -486,17 +433,9 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
             if (totalArea <= 0.0f)
                 continue;
 
-            // Planarity ∈ [0,1]: 1 for a flat quad (all face normals aligned), ~0 for a
-            // closed/curved emitter (sphere) whose face normals cancel.  A degenerate
-            // average normal cannot form a meaningful rect frame, so those emitters are
-            // synthesized as omnidirectional point lights instead.
             const float planarity = sm::length(normalSum) / (2.0F * totalArea);
 
-            constexpr float kPi = 3.14159265358979323846F;
             if (planarity < 0.5F) {
-                // Bounding radius from the centroid approximates a uniform spherical
-                // emitter.  Its projected disk area (π r²) carries the radiance into the
-                // point-light intensity so Li = color · (L·π r²) / d² matches the rect form.
                 float radius = 0.0F;
                 for (const auto& wv : wverts) {
                     radius = std::max(radius, sm::length(wv - centroid));
@@ -506,7 +445,7 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
                 GpuLight gl{};
                 gl.position = centroid;
                 gl.type = std::bit_cast<float>(static_cast<uint32_t>(LightType::Point));
-                gl.direction = sm::float3(0.0F, -1.0F, 0.0F); // unused for point lights
+                gl.direction = sm::float3(0.0F, -1.0F, 0.0F);
                 gl.range = 0.0F;
                 gl.color = static_cast<sm::float3>(gpuMat.emissionColorLum);
                 gl.intensity = luminance * kPi * radius * radius;
@@ -514,18 +453,11 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
                 gl.halfHeight = radius;
                 gpuLights.push_back(gl);
                 Logger::info("Scene: emissive mesh {} → PointLight at ({:.1f},{:.1f},{:.1f}) lum={:.0f} r={:.2f}",
-                             i,
-                             centroid.x,
-                             centroid.y,
-                             centroid.z,
-                             luminance,
-                             radius);
+                             i, centroid.x, centroid.y, centroid.z, luminance, radius);
                 continue;
             }
 
             const sm::float3 avgNormal = sm::normalize(normalSum);
-
-            // Build tangent frame and project vertices to find half-extents.
             const sm::float3 up = (std::abs(avgNormal.y) < 0.99F) ? sm::float3{0.0f, 1.0f, 0.0f} : sm::float3{1.0f, 0.0f, 0.0f};
             const sm::float3 tangX = sm::normalize(sm::cross(up, avgNormal));
             const sm::float3 tangY = sm::cross(avgNormal, tangX);
@@ -544,33 +476,19 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
             GpuLight gl{};
             gl.position = centroid;
             gl.type = std::bit_cast<float>(static_cast<uint32_t>(LightType::Rect));
-            gl.direction = avgNormal; // emission direction (toward scene)
+            gl.direction = avgNormal;
             gl.range = 0.0F;
             gl.color = static_cast<sm::float3>(gpuMat.emissionColorLum);
-            // Raw emissive radiance — matches Hyperion's emissive-mesh NEE, which
-            // illuminates with the unmodified Le = emissionColor * luminance
-            // (closesthit.slang:233,258, no /683). The /683 luminous-efficacy divide is
-            // reserved for explicit Light primitives (Light::toGpu), not meshes synthesized
-            // into area lights here. Using raw Le keeps direct lighting equal to Hyperion's.
             gl.intensity = luminance;
             gl.halfWidth = halfW;
             gl.halfHeight = halfH;
             gpuLights.push_back(gl);
             Logger::info("Scene: emissive mesh {} → RectLight at ({:.1f},{:.1f},{:.1f}) lum={:.0f} hw={:.1f} hh={:.1f}",
-                         i,
-                         centroid.x,
-                         centroid.y,
-                         centroid.z,
-                         luminance,
-                         halfW,
-                         halfH);
+                         i, centroid.x, centroid.y, centroid.z, luminance, halfW, halfH);
         }
     }
 
-    // Record the real light count (auto-synthesized rect lights included) before
-    // padding the buffer with a dummy entry when there are no lights at all.
     m_lightCount = static_cast<uint32_t>(gpuLights.size());
-
     if (gpuLights.empty()) {
         gpuLights.push_back(GpuLight{});
     }
@@ -584,18 +502,12 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     }
     m_lightBuffer = std::move(*lightBuf);
 
-    // Build emissive triangle buffer via the shared harmonia utility.
-    std::vector<harmonia::EmissiveInstanceInfo> emissiveInstances;
-    emissiveInstances.reserve(m_instances.size());
-    for (const GpuInstance& inst : m_instances) {
-        emissiveInstances.push_back({inst.geometryKind, inst.materialIndex});
-    }
-    harmonia::EmissiveData emissiveData =
-        harmonia::buildEmissiveData(m_geometries, emissiveInstances, m_materials, gpuMaterials);
+    // Emissive triangles via the shared harmonia utility (iterates instances).
+    harmonia::EmissiveData emissiveData = harmonia::buildEmissiveData(m_meshes, m_instances, m_materials, gpuMaterials);
 
     m_emissiveTriangleCount = static_cast<uint32_t>(emissiveData.triangles.size());
     if (emissiveData.triangles.empty()) {
-        emissiveData.triangles.push_back(GpuEmissiveTriangle{}); // sentinel — keeps the binding valid
+        emissiveData.triangles.push_back(GpuEmissiveTriangle{});
     }
     auto emissiveBuf = Buffer::upload(
         ctx,
@@ -608,8 +520,6 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     }
     m_emissiveTriangleBuffer = std::move(*emissiveBuf);
 
-    // Power-proportional selection CDF: cdf[i] = (Σ_{j≤i} power_j) / totalPower, so cdf[N-1] == 1.
-    // Falls back to a uniform CDF when all emitters have zero power (degenerate/black emitters).
     const std::vector<float>& emissivePower = emissiveData.power;
     std::vector<float> emissiveCdf;
     emissiveCdf.reserve(emissivePower.size());
@@ -624,7 +534,7 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
             emissiveCdf.push_back(static_cast<float>(running / totalPower));
         }
         if (!emissiveCdf.empty()) {
-            emissiveCdf.back() = 1.0F; // guard against rounding leaving cdf[N-1] < 1
+            emissiveCdf.back() = 1.0F;
         }
     } else {
         const auto count = static_cast<uint32_t>(emissivePower.size());
@@ -633,7 +543,7 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
         }
     }
     if (emissiveCdf.empty()) {
-        emissiveCdf.push_back(1.0F); // sentinel — keeps the binding valid when no emitters
+        emissiveCdf.push_back(1.0F);
     }
     auto emissiveCdfBuf = Buffer::upload(
         ctx,
@@ -650,16 +560,15 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
 }
 
 VkResult Scene::buildTlas(const DeviceContext& ctx, const CommandPool& pool) {
-    std::vector<VkAccelerationStructureInstanceKHR> instances(m_geometries.size());
-    for (size_t i = 0; i < m_geometries.size(); ++i) {
-        instances[i] = m_geometries[i]->makeInstance(static_cast<uint32_t>(i));
+    std::vector<VkAccelerationStructureInstanceKHR> instances(m_instances.size());
+    for (size_t i = 0; i < m_instances.size(); ++i) {
+        const InstanceRecord& inst = m_instances[i];
+        instances[i] = m_meshes[inst.meshIndex]->makeInstance(static_cast<uint32_t>(i), inst.xform);
         // Instance masks:
         //   0x01 = emissive geometry
         //   0x02 = transparent non-emissive geometry
         //   0x04 = opaque non-emissive geometry
-        // Shadow rays use non-emissive mask (0x06). 26c transmission rays can target
-        // opaque-only geometry (0x04) before stacked transparent traversal (26e).
-        const uint32_t matIdx = m_instances[i].materialIndex;
+        const uint32_t matIdx = inst.materialIndex;
         const bool isEmissive = matIdx < m_materials.size() && m_materials[matIdx].emissiveAsLightSource() &&
                                 m_materials[matIdx].gpu().emissionColorLum.w > 0.0F;
         bool isTransparent = false;

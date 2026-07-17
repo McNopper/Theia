@@ -1,4 +1,6 @@
-// Module tests: Scene build path (meshlets + BLAS/TLAS + light/emissive buffers).
+// Module tests: Scene build path (meshlets + BLAS/TLAS + light/emissive buffers)
+// under the mesh/instance model (unique meshes registered once; instances placed
+// with a transform).
 
 #include <slang-math/slang-math.hpp>
 
@@ -15,13 +17,16 @@ TEST_F(RtFixture, Scene_BuildWithMeshAndSphere) {
     const uint32_t matDiffuse = scene.addMaterial(Material::diffuse(sm::float3(0.8F), 1.0F));
     const uint32_t matMetal = scene.addMaterial(Material::metal(sm::float3(0.9F, 0.3F, 0.2F), 0.15F));
 
-    MeshData floor = ProceduralGeometry::makeBox(sm::float3(2.0F, 0.1F, 2.0F), sm::float4x4(1.0F));
-    const uint32_t meshInst = scene.addMesh(deviceCtx(), commandPool(), std::move(floor), matDiffuse, "test.floor");
-    ASSERT_NE(meshInst, std::numeric_limits<uint32_t>::max());
+    MeshData floor = ProceduralGeometry::makeBox(sm::float3(2.0F, 0.1F, 2.0F)); // object space
+    const uint32_t floorMesh = scene.addMesh(deviceCtx(), commandPool(), std::move(floor), "test.floor");
+    ASSERT_NE(floorMesh, std::numeric_limits<uint32_t>::max());
 
-    const uint32_t sphereInst =
-        scene.addSphere(deviceCtx(), commandPool(), sm::float3(0.0F, 0.5F, 0.0F), 0.5F, matMetal);
-    ASSERT_NE(sphereInst, std::numeric_limits<uint32_t>::max());
+    const uint32_t sphereMesh = scene.addSphereMesh(deviceCtx(), commandPool(), 0.5F, "test.sphere");
+    ASSERT_NE(sphereMesh, std::numeric_limits<uint32_t>::max());
+
+    ASSERT_NE(scene.addInstance(floorMesh, Xform{}, matDiffuse), std::numeric_limits<uint32_t>::max());
+    ASSERT_NE(scene.addInstance(sphereMesh, Xform{.translation = {0.0F, 0.5F, 0.0F}}, matMetal),
+              std::numeric_limits<uint32_t>::max());
 
     const VkResult result = scene.build(deviceCtx(), commandPool());
     ASSERT_EQ(result, VK_SUCCESS) << "scene.build() failed: VkResult=" << static_cast<int>(result);
@@ -38,9 +43,10 @@ TEST_F(RtFixture, Scene_SynthesizesLightFromEmissiveMesh) {
     Scene scene;
     const uint32_t matEmitter = scene.addMaterial(Material::emissive(sm::float3(1.0F), 1000.0F));
 
-    MeshData quad = ProceduralGeometry::makeBox(sm::float3(1.0F, 0.01F, 1.0F), sm::float4x4(1.0F));
-    const uint32_t emitterInst = scene.addMesh(deviceCtx(), commandPool(), std::move(quad), matEmitter, "test.emitter");
-    ASSERT_NE(emitterInst, std::numeric_limits<uint32_t>::max());
+    MeshData quad = ProceduralGeometry::makeBox(sm::float3(1.0F, 0.01F, 1.0F));
+    const uint32_t emitterMesh = scene.addMesh(deviceCtx(), commandPool(), std::move(quad), "test.emitter");
+    ASSERT_NE(emitterMesh, std::numeric_limits<uint32_t>::max());
+    ASSERT_NE(scene.addInstance(emitterMesh, Xform{}, matEmitter), std::numeric_limits<uint32_t>::max());
 
     ASSERT_EQ(scene.build(deviceCtx(), commandPool()), VK_SUCCESS);
     EXPECT_GT(scene.lightCount(), 0U);
@@ -59,9 +65,10 @@ TEST_F(RtFixture, Scene_DoesNotSynthesizeLightsForNonEmissiveGeometry) {
     Scene scene;
     const uint32_t matDiffuse = scene.addMaterial(Material::diffuse(sm::float3(0.7F), 1.0F));
 
-    MeshData floor = ProceduralGeometry::makeBox(sm::float3(1.0F, 0.1F, 1.0F), sm::float4x4(1.0F));
-    const uint32_t meshInst = scene.addMesh(deviceCtx(), commandPool(), std::move(floor), matDiffuse, "test.floor");
-    ASSERT_NE(meshInst, std::numeric_limits<uint32_t>::max());
+    MeshData floor = ProceduralGeometry::makeBox(sm::float3(1.0F, 0.1F, 1.0F));
+    const uint32_t floorMesh = scene.addMesh(deviceCtx(), commandPool(), std::move(floor), "test.floor");
+    ASSERT_NE(floorMesh, std::numeric_limits<uint32_t>::max());
+    ASSERT_NE(scene.addInstance(floorMesh, Xform{}, matDiffuse), std::numeric_limits<uint32_t>::max());
 
     ASSERT_EQ(scene.build(deviceCtx(), commandPool()), VK_SUCCESS);
     EXPECT_EQ(scene.lightCount(), 0U);
@@ -70,3 +77,21 @@ TEST_F(RtFixture, Scene_DoesNotSynthesizeLightsForNonEmissiveGeometry) {
     EXPECT_TRUE(scene.emissiveTriangleBuffer().isValid());
 }
 
+// One mesh instanced N times — the core instancing case (one BLAS, N TLAS instances).
+TEST_F(RtFixture, Scene_BuildWithMultipleInstancesOfOneMesh) {
+    Scene scene;
+    const uint32_t mat = scene.addMaterial(Material::diffuse(sm::float3(0.7F), 1.0F));
+
+    MeshData box = ProceduralGeometry::makeBox(sm::float3(0.8F)); // one unique mesh
+    const uint32_t mesh = scene.addMesh(deviceCtx(), commandPool(), std::move(box), "test.shared");
+    ASSERT_NE(mesh, std::numeric_limits<uint32_t>::max());
+
+    for (int i = 0; i < 4; ++i) {
+        const Xform xform{.translation = sm::float3(static_cast<float>(i) * 2.0F, 0.0F, 0.0F)};
+        ASSERT_NE(scene.addInstance(mesh, xform, mat), std::numeric_limits<uint32_t>::max()) << "instance " << i;
+    }
+
+    ASSERT_EQ(scene.build(deviceCtx(), commandPool()), VK_SUCCESS);
+    EXPECT_NE(scene.tlas(), VK_NULL_HANDLE);
+    EXPECT_EQ(scene.instanceCount(), 4U);
+}
