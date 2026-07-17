@@ -77,7 +77,7 @@ pre-tonemap EXR, same color space).
   `_deps` copy or build with `-DFETCHCONTENT_SOURCE_DIR_AETHER=...`. Symptom: two "different"
   renders give byte-identical metrics.
 - **IBL parity reference must be high-spp:** a low-spp Hyperion reference is noisy — render it
-  with `hyperion --spp 512` first, or the diff measures noise, not a real discrepancy.
+  with `hyperion --spp 256` first, or the diff measures noise, not a real discrepancy.
 - **Real-time multi-bounce GI now exists (RT-GI):** Theia runs a HW ray-traced GI pass
   (`gi.comp.slang` → shared `path_integrator`) providing path-traced multi-bounce indirect
   (diffuse + specular + env-NEE) and transmission/refraction, default-on (`--no-rt-gi` to
