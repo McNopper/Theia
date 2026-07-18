@@ -376,6 +376,7 @@ SurfaceHit makeSurfaceHit(GiHit h, float3 wo) {
     }
     const float3x3 tbn = buildTBN(N);
     surf.position = h.worldPos;
+    surf.shadowPos = h.worldPos; // Theia GI: no terminator lift (primary shading is analytic IBL)
     surf.normal = N;
     surf.geoNormal = Ng;
     surf.T = tbn[0];
@@ -893,6 +894,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
         }
         const float3x3 tbn = buildTBN(worldN);
         primary.position = primaryWorldPos;
+        primary.shadowPos = primaryWorldPos;
         primary.normal = worldN;
         primary.geoNormal = worldN;
         primary.T = tbn[0];
