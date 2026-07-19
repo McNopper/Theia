@@ -6,6 +6,7 @@
 
 import common; // GpuMaterial, GpuLight, GpuEmissiveTriangle, kLight* constants
 import bsdf;   // evalBSDF() -- imports common + math transitively
+import bsdf_shared; // shadowTerminatorFactor (Chiang 2019)
 import math;   // fresnelDielectric()
 import rng;
 import env_sample;
@@ -352,6 +353,25 @@ float traceShadow(float3 origin, float3 dir, float tMin, float tMax) {
     return (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) ? 0.0 : 1.0;
 }
 
+/// Shadow visibility with Chiang 2019 terminator handling (same factor as the
+/// shared estimator — full scheme + references in Harmonia bsdf_shared.slang).
+/// `N` is the interpolated shading normal, `Ng` the true facet normal (from
+/// screen-space derivatives). The factor is 0 at/below the geometric horizon
+/// (an opaque facet receives nothing from behind itself — the ray is skipped),
+/// rolls off C1-smoothly above it, and is exactly 1 on flat geometry (N == Ng).
+/// The rasterizer has no per-vertex data in the fragment stage, so the Hanika
+/// origin lift is not applied here; the factor alone masks the residual
+/// self-intersection zone for the punctual/sun lights this pass owns.
+float traceShadowTerminator(float3 origin, float3 dir, float tMin, float tMax,
+                             float3 N, float3 Ng) {
+    float g;
+    const float f = shadowTerminatorFactor(N, Ng, dir, g);
+    if (f <= 0.0) {
+        return 0.0;
+    }
+    return f * traceShadow(origin, dir, tMin, tMax);
+}
+
 /// Evaluate incoming radiance from a single light source.
 /// Returns Li; sets wi to the incoming direction (surface to light).
 /// Returns zero radiance when light is out of range or behind.
@@ -410,7 +430,7 @@ float3 evalLightWi(GpuLight light, float3 worldPos, out float3 wi) {
 /// Visibility is evaluated per sample to preserve soft-shadow penumbra quality.
 /// Lo = ∫ f(wo,wi) · L · cos_i · cos_l / r² dA   (L = light.color·intensity, W/sr/m²)
 float3 shadeRectLight(GpuLight light, GpuMaterial mat, float3 worldPos, float3 wo,
-                      float3 N, float3 T, float3 B, float3 shadowOrigin, float shadowBias) {
+                      float3 N, float3 Ng, float3 T, float3 B, float3 shadowOrigin, float shadowBias) {
     const float3 Ln = normalize(light.direction); // emitter normal (toward scene)
 
     // Build an orthonormal tangent frame on the emitter plane.
@@ -439,7 +459,7 @@ float3 shadeRectLight(GpuLight light, GpuMaterial mat, float3 worldPos, float3 w
             const float cosL = max(dot(-wi, Ln), 0.0); // one-sided emission
             if (cosL <= 0.0) continue;
             const float tMax = max(dist - shadowBias, shadowBias * 2.0);
-            const float vis = traceShadow(shadowOrigin, wi, shadowBias, tMax);
+            const float vis = traceShadowTerminator(shadowOrigin, wi, shadowBias, tMax, N, Ng);
             if (vis <= 0.0) continue;
             acc += evalBSDF(mat, wo, wi, N, T, B, N, T, B)
                  * (light.intensity * NdotL * cosL * dA * vis / distSq);
@@ -451,10 +471,10 @@ float3 shadeRectLight(GpuLight light, GpuMaterial mat, float3 worldPos, float3 w
 /// Full direct-lighting contribution of one light, including shadow + BSDF.
 /// Rect lights use area integration; point/spot/directional use the point form.
 float3 shadeOneLight(GpuLight light, GpuMaterial mat, float3 worldPos, float3 wo,
-                     float3 N, float3 T, float3 B, float3 shadowOrigin, float shadowBias) {
+                     float3 N, float3 Ng, float3 T, float3 B, float3 shadowOrigin, float shadowBias) {
     const uint lt = asuint(light.typeF);
     if (lt == kLightRect) {
-        return shadeRectLight(light, mat, worldPos, wo, N, T, B, shadowOrigin, shadowBias);
+        return shadeRectLight(light, mat, worldPos, wo, N, Ng, T, B, shadowOrigin, shadowBias);
     }
 
     float3 wi;
@@ -465,7 +485,7 @@ float3 shadeOneLight(GpuLight light, GpuMaterial mat, float3 worldPos, float3 wo
     const float tMax = (lt == kLightDirectional)
         ? 1e16
         : max(length(light.position - worldPos) - light.halfWidth - shadowBias, shadowBias * 2.0);
-    const float vis = traceShadow(shadowOrigin, wi, shadowBias, tMax);
+    const float vis = traceShadowTerminator(shadowOrigin, wi, shadowBias, tMax, N, Ng);
     if (vis <= 0.0) return 0..xxx;
     return evalBSDF(mat, wo, wi, N, T, B, N, T, B) * Li * NdotL * vis;
 }
@@ -541,6 +561,9 @@ RayHitData tracePrimaryOpaqueHit(float3 cameraPosWs, float3 targetWorldPos, floa
 float3 shadeHitRadianceWithWo(RayHitData hit, float3 wo, float shadowBias) {
     const GpuMaterial mat = materials[hit.materialIdx];
     const float3 N = normalize(hit.normal);
+    // True geometric (facet) normal from screen-space derivatives of world position,
+    // for Chiang terminator handling (the interpolated N is the shading normal).
+    const float3 Ng = normalize(cross(ddx(hit.worldPos), ddy(hit.worldPos)));
     wo = normalize(wo);
     const float3 up = abs(N.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
     const float3 T = normalize(cross(up, N));
@@ -556,7 +579,7 @@ float3 shadeHitRadianceWithWo(RayHitData hit, float3 wo, float shadowBias) {
         if (skipRectLights && asuint(lights[i].typeF) == kLightRect) {
             continue;
         }
-        directLo += shadeOneLight(lights[i], mat, hit.worldPos, wo, N, T, B, shadowOrigin, shadowBias);
+        directLo += shadeOneLight(lights[i], mat, hit.worldPos, wo, N, Ng, T, B, shadowOrigin, shadowBias);
     }
 
     float iblShadow = 1.0;
@@ -564,7 +587,7 @@ float3 shadeHitRadianceWithWo(RayHitData hit, float3 wo, float shadowBias) {
     if (sunStrength > 0.0) {
         const float3 sunDir = normalize(sunDirection.xyz);
         if (dot(N, sunDir) > 0.0) {
-            const float sunVis = traceShadow(shadowOrigin, sunDir, shadowBias, 1e16);
+            const float sunVis = traceShadowTerminator(shadowOrigin, sunDir, shadowBias, 1e16, N, Ng);
             const float skyFloor = shadowParams.y;
             iblShadow = lerp(1.0, lerp(skyFloor, 1.0, sunVis), sunStrength);
         }
@@ -713,6 +736,9 @@ FS_OUT main(FS_IN input) {
     // avoid self-intersection. `bias` is a scene-scale epsilon (camera near plane).
     const float  shadowBias   = shadowParams.x;
     const float3 shadowOrigin = input.worldPos + N * shadowBias;
+    // True geometric (facet) normal from screen-space derivatives, for Chiang terminator
+    // handling (N above is the interpolated/smooth shading normal).
+    const float3 Ng = normalize(cross(ddx(input.worldPos), ddy(input.worldPos)));
 
     if (!hitVisibleEmitter) {
         // Tile-based direct lighting (Forward+).
@@ -730,13 +756,13 @@ FS_OUT main(FS_IN input) {
                 const uint i = tileLightIndices[tileId * kMaxLightsPerTile + j];
                 if (i >= lightCount) continue;
                 if (skipRectLightsT && asuint(lights[i].typeF) == kLightRect) continue;
-                directLo += shadeOneLight(lights[i], mat, input.worldPos, wo, N, T, B, shadowOrigin, shadowBias);
+                directLo += shadeOneLight(lights[i], mat, input.worldPos, wo, N, Ng, T, B, shadowOrigin, shadowBias);
             }
         } else {
             // Fallback: evaluate all lights (used when light culler hasn't run).
             for (uint i = 0; i < lightCount; ++i) {
                 if (skipRectLightsT && asuint(lights[i].typeF) == kLightRect) continue;
-                directLo += shadeOneLight(lights[i], mat, input.worldPos, wo, N, T, B, shadowOrigin, shadowBias);
+                directLo += shadeOneLight(lights[i], mat, input.worldPos, wo, N, Ng, T, B, shadowOrigin, shadowBias);
             }
         }
 
@@ -750,7 +776,7 @@ FS_OUT main(FS_IN input) {
         if (sunStrength > 0.0) {
             const float3 sunDir = normalize(sunDirection.xyz);
             if (dot(N, sunDir) > 0.0) {
-                const float sunVis = traceShadow(shadowOrigin, sunDir, shadowBias, 1e16);
+                const float sunVis = traceShadowTerminator(shadowOrigin, sunDir, shadowBias, 1e16, N, Ng);
                 const float skyFloor = shadowParams.y;
                 iblShadow = 1.0 - sunStrength * (1.0 - skyFloor) * (1.0 - sunVis);
             }

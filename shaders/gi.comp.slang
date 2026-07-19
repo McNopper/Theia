@@ -18,6 +18,7 @@ import common;          // GpuMaterial, GpuVertex, GpuInstance, GpuEmissiveTrian
 import math;            // buildTBN, randFloat
 import rng;             // composeRngSeed
 import bsdf;            // evalBSDF / pdfBSDF / sampleBSDF + BSDFSample (resolves to Theia's bsdf.slang)
+import bsdf_shared;     // shadowTerminatorFactor / terminatorSmoothPosition
 import env_sample;      // evalEnvImportancePdfDir
 import path_integrator; // ITracer, SurfaceHit, PathState, EnvNeeSample, evalEnvNEESample, integrateSurface, sampleEnvMapLatLong
 
@@ -376,7 +377,7 @@ SurfaceHit makeSurfaceHit(GiHit h, float3 wo) {
     }
     const float3x3 tbn = buildTBN(N);
     surf.position = h.worldPos;
-    surf.shadowPos = h.worldPos; // Theia GI: no terminator lift (primary shading is analytic IBL)
+    surf.shadowPos = h.worldPos; // == position (Chiang factor-only terminator scheme; see bsdf_shared.slang)
     surf.normal = N;
     surf.geoNormal = Ng;
     surf.T = tbn[0];
@@ -614,11 +615,20 @@ float3 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
         // Single shadow ray to the chosen sample (unbiased single-shadow-ray scheme):
         // if occluded, W contributes nothing this frame but the reservoir survives with
         // full M for next-frame temporal reuse.
+        // Shadow-terminator handling — same scheme as the shared estimator's NEE
+        // (Chiang 2019 factor; rationale + references in Harmonia bsdf_shared.slang).
+        // The factor multiplies the reservoir contribution f(y)·W; the visibility
+        // ray is always traced when the factor is > 0, so no light leaks through
+        // real occluders.
         TheiaTracer tracer;
-        float3 shadowOrigin = primary.position + primary.geoNormal * kRayEpsilon;
-        float  shadowTMax   = max(fe.dist - kRayEpsilon * (1.0 + dot(primary.geoNormal, fe.wi)), 0.0);
-        if (tracer.traceOccluded(shadowOrigin, fe.wi, shadowTMax)) {
-            contribution = fe.Le * fe.bsdfCos * r.W; // f(y) * W, f = Le * bsdf * cos
+        float gTerm;
+        float fTerm = shadowTerminatorFactor(primary.normal, primary.geoNormal, fe.wi, gTerm);
+        if (fTerm > 0.0) {
+            float3 shadowOrigin = primary.position + primary.geoNormal * kRayEpsilon;
+            float  shadowTMax   = max(fe.dist - kRayEpsilon * (1.0 + dot(primary.geoNormal, fe.wi)), 0.0);
+            if (tracer.traceOccluded(shadowOrigin, fe.wi, shadowTMax)) {
+                contribution = fe.Le * fe.bsdfCos * r.W * fTerm; // f(y) * W, f = Le * bsdf * cos * fTerm
+            }
         }
     } else {
         r.W = 0.0;
@@ -696,7 +706,17 @@ bool estimateGiSample(SurfaceHit primary, RngState seed, float adaptiveClamp,
         if (bs.pdf <= 0.0 || maxComp(bs.weight) <= 0.0 || !all(isfinite(bs.weight))) {
             return false;
         }
-        state.throughput = bs.weight;
+        // Shadow-terminator consistency at the primary vertex (Chiang 2019, see Harmonia
+        // bsdf_shared.slang): the continuation throughput carries the same microstructure
+        // shadowing that attenuates NEE, keeping the MIS integrand identical across
+        // techniques (mirrors the shared integrateSurface, which covers bounce 1+).
+        float gPrim;
+        float fPrim = shadowTerminatorFactor(primary.normal, primary.geoNormal,
+                                             normalize(bs.direction), gPrim);
+        if (fPrim <= 0.0) {
+            state.terminated = true; // sampled direction self-shadowed by the microstructure
+        }
+        state.throughput = bs.weight * fPrim;
         state.specularBounce = bs.isDelta;
         state.lastBsdfPdf = bs.isDelta ? 1.0e30 : bs.pdf;
         // G9/G10: capture a primary-vertex medium entry (bulk SSS / transmission scatter) so the
