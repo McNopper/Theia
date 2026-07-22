@@ -230,8 +230,9 @@ RT-GI is the single unified indirect + transmission provider and drives both the
 >
 > **Transparency parity note:** Transparent surfaces route through the **shared Harmonia
 > `path_integrator`** (smooth-dielectric delta refraction lobe + Beer-Lambert + env-NEE) — the same
-> estimator Hyperion uses. Residuals are localized high-energy-IBL-through-glass variance and a
-> minor TIR notch.
+> estimator Hyperion uses, with side-correct dielectric exits (Fresnel/Snell/TIR) and exact
+> pure-absorber transmittance. Residuals are localized high-energy-IBL-through-glass Monte-Carlo
+> variance at finite frame counts, not a transport-model gap.
 >
 > **Gate policy:** keep the strict absolute gate (`mean_diff <= 4.0`) for opaque/direct/SDR fixtures.
 > For HDR transmissive fixtures, use `compare_renders.py --gate scale-aware` (absolute OR relative+PSNR),

@@ -133,11 +133,14 @@ bool isFiniteDir(float3 v) {
 }
 
 float3 computeTransmissionTint(GpuMaterial mat) {
-    // Reuse the shared OpenPBR transmission-color model (Harmonia bsdf_shared.slang).
-    float3 effTransColor = effectiveTransColor(mat);
-    float transDepth = max(mat.transmissionParams.x, 0.001);
-    float3 absorption = exp(-transDepth * (1.0.xxx - effTransColor));
-    return effTransColor * absorption;
+    // OpenPBR/MaterialX (C5): with transmission_depth == 0 the BTDF is tinted by
+    // transmission_color directly; with depth > 0 the interface is white and the color
+    // comes from interior Beer-Lambert absorption (σ_t = -ln(color)/depth) — at the
+    // nominal thickness t = depth the transmittance is exp(-σ_t·depth) = transmission_color
+    // exactly. The raster path has no interior path length, so transmission_color is the
+    // correct single-sample approximation in BOTH regimes. (transmission_scatter has no
+    // effect at depth == 0 per the MaterialX VDF gating; the RT-GI path handles it.)
+    return saturate3(mat.transmissionColorWeight.xyz);
 }
 
 /// MaterialX analytic GGX directional albedo (rational polynomial fit).
@@ -298,9 +301,9 @@ float3 evalIBL(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B)
     // produced when only the (energy-zero) opaque lobes are evaluated, giving a
     // believable see-through dielectric for env-lit scenes.
     if (transmissionWeight > 0.0) {
-        // OpenPBR transmission tint = effective transmission_color (incl. single-scatter
-        // re-tint) modulated by Beer-Lambert volume absorption over transmission_depth.
-        // Matches Hyperion bsdf.slang effectiveTransColor() * exp(-depth*(1-color)).
+        // OpenPBR transmission tint per MaterialX semantics (see computeTransmissionTint):
+        // transmission_color at depth==0, and the nominal-thickness Beer transmittance
+        // (= transmission_color again) for depth>0.
         float3 transTint = computeTransmissionTint(mat);
         float Fr = fresnelDielectric(NoV, eta);
         float3 refrDir = refract(-wo, N, 1.0 / eta);

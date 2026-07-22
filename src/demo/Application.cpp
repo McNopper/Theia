@@ -247,8 +247,9 @@ bool Application::onSceneLoaded(const SceneLoader::SceneConfig& sceneConfig) {
     // Scene-scale-aware near/far — shared helper from harmonia::Camera.
     const float camDist = sm::length(m_camera.target - m_camera.position);
     std::tie(m_camera.nearPlane, m_camera.farPlane) = Camera::nearFarFromDistance(camDist);
-    // Camera move speed also scales with the scene.
-    m_camCtrl.speed = std::max(0.1f, camDist * 0.5f);
+    // Camera move speed also scales with the scene (5× the camera distance, so navigating
+    // a scene feels responsive rather than crawling); mouse-wheel still adjusts on top.
+    m_camCtrl.speed = std::max(0.1f, camDist * 2.5f);
 
     m_renderer->setCamera(m_camera);
     m_sceneMaxDepth = sceneConfig.maxDepth.value_or(3u);

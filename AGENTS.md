@@ -87,7 +87,19 @@ pre-tonemap EXR, same color space).
   compute loop executes the same chromatic hero-wavelength free-flight/scatter/boundary
   estimator as Hyperion (`runMediumWalk`), on both primary and secondary vertices. `sampleBSDF`
   sets `entersMedium` with per-channel σ_t exactly like Hyperion; it is NOT a diffuse-tint
-  approximation anymore. Thin-walled subsurface keeps the diffuse sheet.
+  approximation anymore. Thin-walled subsurface keeps the diffuse sheet. Pure absorbers
+  (single-scatter albedo = 0, e.g. OpenPBR transmission with `transmission_scatter = 0` and
+  `transmission_depth > 0`) take the **exact deterministic Beer–Lambert** branch (no free-flight
+  sampling, transmittance `exp(-σ_t·d)` applied at the boundary) — matches Hyperion, zero walk
+  variance.
+- **`GiHit.geoNormal` is the RAW outward-winding normal — never pre-flip it to face the ray.**
+  `traceClosestHit` historically flipped `Ng` by `frontFace`, which erased the side bit:
+  `surf.backface = dot(h.geoNormal, wo) < 0` then read **always false** → the C7 dielectric-exit
+  branch never engaged (interior exits refracted with the entry IOR, no TIR), and the medium walk
+  refracted against a wrong-signed normal (broken exits, spurious re-entry, repeated Beer–Lambert
+  → the "dragon shifted towards black" regression at v0.6.18). Consumers flip a local copy by wo
+  (`makeSurfaceHit`, mirroring Hyperion's `shadeSurface`) or use it as the true interface outward
+  normal (`runMediumWalk` offsets/Fresnel/refract, backface detection).
 - **IBL specular split-sum is the GI-OFF fallback only:** the prefiltered split-sum map
   (1024x512 / 8-mip, band-limited, can't resolve a sharp HDR sun-disc) is used only on the
   `--no-rt-gi` debug path. The default unified path gets specular reflections from RT-GI.

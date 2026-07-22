@@ -173,7 +173,9 @@ struct GiHit {
     uint   materialIdx;
     float3 worldPos;
     float3 shadingNormal;
-    float3 geoNormal; // geometric normal, oriented to face the incoming ray's origin
+    float3 geoNormal; // RAW outward-winding geometric normal (NOT ray-facing): consumers flip by
+                      // wo (makeSurfaceHit, mirroring Hyperion's shadeSurface) or use it as the
+                      // true interface outward normal (runMediumWalk, backface/side detection).
     float2 uv;
     float3 tangent;
     float  dist;      // committed ray T (used for volumetric medium boundary transmittance)
@@ -207,7 +209,6 @@ GiHit traceClosestHit(float3 origin, float3 dir, float maxDist) {
     }
 
     const uint instIdx = q.CommittedInstanceID();
-    const bool frontFace = q.CommittedTriangleFrontFace();
     const GpuInstance inst = instances[instIdx];
     const uint tri = q.CommittedPrimitiveIndex();
     const uint base = inst.indexOffset + tri * 3u;
@@ -233,10 +234,15 @@ GiHit traceClosestHit(float3 origin, float3 dir, float maxDist) {
 
     const float2 b = q.CommittedTriangleBarycentrics();
     const float3 bary = float3(1.0 - b.x - b.y, b.x, b.y);
+    // RAW outward-winding geometric normal (Hyperion's HitInfo contract): the side
+    // information is carried by the sign of dot(geoNormal, wo) at the consumers —
+    // makeSurfaceHit flips a local copy to face wo and derives SurfaceHit.backface
+    // (C7 dielectric exit branch), runMediumWalk needs the TRUE outward normal for the
+    // exit refraction/TIR and the inside/outside ray offsets. Pre-flipping it here
+    // (ray-facing) would erase the side bit: backface would always read false and the
+    // medium walk would refract against a wrong-signed normal (broken exits, spurious
+    // re-entry, repeated absorption).
     float3 Ng = normalize(cross(p1 - p0, p2 - p0));
-    if (!frontFace) {
-        Ng = -Ng;
-    }
 
     hit.worldPos = p0 * bary.x + p1 * bary.y + p2 * bary.z;
     hit.uv = uv0 * bary.x + uv1 * bary.y + uv2 * bary.z;
@@ -267,6 +273,13 @@ GiHit traceClosestHit(float3 origin, float3 dir, float maxDist) {
 /// refracted ray leaving the medium and clears insideMedium; on absorption terminates the path.
 void runMediumWalk(inout PathState state, inout float3 origin, inout float3 dir) {
     const uint kMaxMediumWalk = 256u;
+    // Pure absorber (single-scatter albedo Λ = 0 — e.g. OpenPBR transmission with
+    // transmission_depth>0 and transmission_scatter=0): NO collision events exist, extinction
+    // is entirely absorption. The transmittance to the boundary is exactly exp(-σ_t·d), so the
+    // correct estimator is deterministic per-channel Beer-Lambert (the ratio-tracking
+    // degenerate case) — no free-flight sampling, no binary kill/survive variance. Matches
+    // Hyperion's raygen/closesthit/miss pure-absorption branch exactly.
+    const bool pureAbsorption = maxComp(state.mediumAlbedo) == 0.0;
     for (uint i = 0u; i < kMaxMediumWalk && state.insideMedium && !state.terminated; ++i) {
         float3 st = max(state.mediumSigmaT, 1.0e-6.xxx);
         // A3(c): σ_t-importance-weighted hero channel selection (flag-gated, Theia-only knob).
@@ -287,13 +300,22 @@ void runMediumWalk(inout PathState state, inout float3 origin, inout float3 dir)
         if (a3ChromaticImportanceEnabled != 0u) {
             chProb = st / (st.x + st.y + st.z);
         }
-        float chSel = randFloat(state.seed);
-        float sigmaHero = chSel < chProb.x ? st.x : (chSel < chProb.x + chProb.y ? st.y : st.z);
-        float u = randFloat(state.seed);
-        float freeDist = -log(max(1.0 - u, 1.0e-6)) / max(sigmaHero, 1.0e-6);
+        float freeDist = kInf;
+        if (!pureAbsorption) {
+            float chSel = randFloat(state.seed);
+            float sigmaHero = chSel < chProb.x ? st.x : (chSel < chProb.x + chProb.y ? st.y : st.z);
+            float u = randFloat(state.seed);
+            freeDist = -log(max(1.0 - u, 1.0e-6)) / max(sigmaHero, 1.0e-6);
+        }
 
         GiHit h = traceClosestHit(origin, dir, freeDist);
         if (!h.hit) {
+            if (pureAbsorption) {
+                // No boundary within kInf: the absorber is unbounded along the ray (escaped via
+                // non-watertight geometry) — exact transmittance exp(-σ_t·∞) = 0.
+                state.terminated = true;
+                return;
+            }
             // Scatter event at freeDist — spectral factor sigma_s*T/pdf_coll.
             float3 T = exp(-st * freeDist);
             float3 sigmaS = state.mediumAlbedo * st;
@@ -310,9 +332,14 @@ void runMediumWalk(inout PathState state, inout float3 origin, inout float3 dir)
         }
 
         // Boundary crossing at h.dist — spectral transmittance factor, then Fresnel exit/TIR.
+        // Pure absorber: exact Beer-Lambert transmittance, no mixture pdf (no flight sampled).
         float3 Tb = exp(-st * h.dist);
-        float pdfSurf = dot(chProb, Tb);
-        state.throughput *= Tb / max(pdfSurf, 1.0e-8);
+        if (pureAbsorption) {
+            state.throughput *= Tb;
+        } else {
+            float pdfSurf = dot(chProb, Tb);
+            state.throughput *= Tb / max(pdfSurf, 1.0e-8);
+        }
 
         float3 outwardN = h.geoNormal;
         float cosI = abs(dot(normalize(dir), outwardN));
@@ -380,6 +407,10 @@ SurfaceHit makeSurfaceHit(GiHit h, float3 wo) {
     surf.shadowPos = h.worldPos; // == position (Chiang factor-only terminator scheme; see bsdf_shared.slang)
     surf.normal = N;
     surf.geoNormal = Ng;
+    // C7: side flag from the RAW (outward-winding) geometric normal, BEFORE the face-wo
+    // flip — true when the ray hit the back side (inside the dielectric): the BSDF takes
+    // the exit branch (inverted eta → side-correct Fresnel/Snell, TIR-capable).
+    surf.backface = dot(h.geoNormal, wo) < 0.0;
     surf.T = tbn[0];
     surf.B = tbn[1];
     surf.coatN = N;
@@ -453,7 +484,7 @@ RestirSampleEval evalReservoirSample(SurfaceHit surf, uint lightIdx,
         return e;
     }
     float3 bsdf = evalBSDF(surf.mat, surf.wo, wi,
-        surf.normal, surf.T, surf.B, surf.coatN, surf.coatT, surf.coatB);
+        surf.normal, surf.T, surf.B, surf.coatN, surf.coatT, surf.coatB, surf.backface);
     e.Le      = Le;
     e.bsdfCos = bsdf * cosI;
     e.dist2   = dist2;
@@ -702,7 +733,7 @@ bool estimateGiSample(SurfaceHit primary, RngState seed, float adaptiveClamp,
 
         // --- Primary BSDF continuation (primary env NEE above; analytic/emissive direct handled by forward) ---
         BSDFSample bs = sampleBSDF(primary.mat, primary.wo,
-            primary.normal, primary.T, primary.B, primary.coatN, primary.coatT, primary.coatB, state.seed);
+            primary.normal, primary.T, primary.B, primary.coatN, primary.coatT, primary.coatB, primary.backface, state.seed);
         if (bs.pdf <= 0.0 || maxComp(bs.weight) <= 0.0 || !all(isfinite(bs.weight))) {
             return false;
         }
@@ -922,6 +953,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
         primary.coatN = worldN;
         primary.coatT = tbn[0];
         primary.coatB = tbn[1];
+        primary.backface = false; // G-buffer fallback: rasterized camera-facing surface
         primary.mat = mat;
         primary.wo = wo;
     }
