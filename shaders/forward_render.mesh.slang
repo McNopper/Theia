@@ -1,6 +1,8 @@
 // Mesh shader — one workgroup per visible meshlet (dispatched by task shader).
 // 64 threads: each transforms one vertex and emits one triangle.
 
+import common; // GpuVertex/GpuInstance/GpuMeshlet (gpu_types) + inverse3x3
+
 [[vk::push_constant]]
 cbuffer ForwardPC {
     float4x4 viewProj;
@@ -26,38 +28,7 @@ cbuffer ForwardPC {
     float4   presentationParams;   // x = indirect ambient, y = pass flag, z = debug ray-hit, w = |proj[1][1]|
 };
 
-struct GpuVertex {
-    float3 position;
-    float  tangentX;
-    float3 normal;
-    float  tangentY;
-    float2 uv;
-    float  tangentZ;
-    float  bitangentSign;
-};
-
-struct GpuInstance {
-    uint  meshIndex;
-    uint  materialIndex;
-    uint  vertexOffset;
-    uint  indexOffset;
-    uint  indexCount;
-    uint  meshletOffset;
-    uint  meshletCount;
-    uint  geometryKind;
-    float sphereRadius;
-};
-
-struct GpuMeshlet {
-    uint  vertexOffset;
-    uint  triangleOffset;
-    uint  vertexCount;
-    uint  triangleCount;
-    float centerX;
-    float centerY;
-    float centerZ;
-    float radius;
-};
+// GpuVertex (gpu_types) and GpuInstance/GpuMeshlet (common.slang) are imported, not redeclared.
 
 /// Payload from task shader: instance index + base meshlet offset.
 struct TaskPayload {
@@ -94,16 +65,7 @@ struct MeshOutput {
 static const uint kMaxVerts = 64;
 static const uint kMaxTris  = 124;
 
-/// Inverse of a row-major 3×3 (cross-products-of-columns form).
-float3x3 inverse3x3(float3x3 m) {
-    const float3x3 col = transpose(m);
-    const float3 c0 = col[0], c1 = col[1], c2 = col[2];
-    const float3 r0 = cross(c1, c2);
-    const float3 r1 = cross(c2, c0);
-    const float3 r2 = cross(c0, c1);
-    const float invDet = 1.0 / dot(c0, r0);
-    return float3x3(r0 * invDet, r1 * invDet, r2 * invDet);
-}
+/// inverse3x3 lives in common.slang (shared with gi.comp).
 
 /// Conservative Hi-Z occlusion test for a meshlet bounding sphere (in WORLD space)
 /// against the current-frame max-depth pyramid. Returns true only when the sphere is

@@ -143,25 +143,6 @@ float3 computeTransmissionTint(GpuMaterial mat) {
     return saturate3(mat.transmissionColorWeight.xyz);
 }
 
-/// MaterialX analytic GGX directional albedo (rational polynomial fit).
-/// Returns (A, B) where the directional albedo = F0*A + F90*B.
-/// Ref: MaterialX libraries/pbrlib/genglsl/lib/mx_microfacet_specular.glsl
-///      mx_ggx_dir_albedo_analytic()
-float2 mx_ggx_dir_albedo_AB(float NdotV, float alpha) {
-    float x = NdotV, y = alpha;
-    float x2 = x * x, y2 = y * y;
-    float4 r = float4( 0.1003,  0.9345, 1.0,    1.0   )
-             + float4(-0.6303, -2.323, -1.765,   0.2281) * x
-             + float4( 9.748,   2.229,  8.263,  15.94  ) * y
-             + float4(-2.038,  -3.748, 11.53,  -55.83  ) * x * y
-             + float4(29.34,    1.424, 28.96,   13.08  ) * x2
-             + float4(-8.245,  -0.7684,-7.507,  41.26  ) * y2
-             + float4(-26.44,   1.436,-36.11,   54.9   ) * x2 * y
-             + float4(19.99,    0.2913,15.86,  300.2   ) * x * y2
-             + float4(-5.448,   0.6286,33.37, -285.1   ) * x2 * y2;
-    return clamp(r.xy / r.zw, 0.0.xx, 1.0.xx);
-}
-
 /// Roughness → mip level for the prefiltered specular map (8 mip levels, linear distribution).
 float roughnessToLod(float roughness) {
     return roughness * 7.0; // mip 0 = roughness 0, mip 7 = roughness 1

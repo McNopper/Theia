@@ -22,6 +22,7 @@
 #include "harmonia/scene/EmissiveBuilder.hpp"
 #include "harmonia/scene/Geometry.hpp"
 #include "harmonia/scene/ProceduralGeometry.hpp"
+#include "harmonia/renderer/TlasBuilder.hpp"
 
 namespace {
 
@@ -38,22 +39,6 @@ GpuInstanceBounds worldBounds(const Scene::MeshGpu& mesh, const Xform& xform) {
 
 } // namespace
 
-uint32_t Scene::addMesh(const DeviceContext& ctx,
-                        const CommandPool& pool,
-                        MeshData&& data,
-                        std::string_view name) {
-    const uint32_t meshIndex = static_cast<uint32_t>(m_meshes.size());
-    const std::string debugName =
-        name.empty() ? std::string{"mesh."} + std::to_string(meshIndex) : std::string{name};
-
-    auto mesh = TriangleMesh::create(ctx, pool, std::move(data), debugName);
-    if (!mesh) {
-        return std::numeric_limits<uint32_t>::max();
-    }
-    m_meshes.push_back(std::move(*mesh));
-    return meshIndex;
-}
-
 uint32_t Scene::addSphereMesh(const DeviceContext& ctx,
                               const CommandPool& pool,
                               float radius,
@@ -63,22 +48,6 @@ uint32_t Scene::addSphereMesh(const DeviceContext& ctx,
     // centred at the origin) and placed by the instance transform.
     MeshData mesh = ProceduralGeometry::makeSphere(sm::float3{0.0f, 0.0f, 0.0f}, radius);
     return addMesh(ctx, pool, std::move(mesh), name.empty() ? "sphere" : name);
-}
-
-VkResult Scene::build(const DeviceContext& ctx, const CommandPool& pool) {
-    if (m_instances.empty()) {
-        return VK_ERROR_INITIALIZATION_FAILED;
-    }
-    if (const VkResult result = buildSceneBuffers(ctx, pool); result != VK_SUCCESS) {
-        return result;
-    }
-    // One BLAS per unique mesh; N TLAS instances reference a shared BLAS.
-    for (auto& mesh : m_meshes) {
-        if (const VkResult result = mesh->buildBlas(ctx, pool); result != VK_SUCCESS) {
-            return result;
-        }
-    }
-    return buildTlas(ctx, pool);
 }
 
 VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& pool) {
@@ -520,31 +489,9 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     }
     m_emissiveTriangleBuffer = std::move(*emissiveBuf);
 
-    const std::vector<float>& emissivePower = emissiveData.power;
-    std::vector<float> emissiveCdf;
-    emissiveCdf.reserve(emissivePower.size());
-    double totalPower = 0.0;
-    for (const float p : emissivePower) {
-        totalPower += static_cast<double>(p);
-    }
-    if (totalPower > 0.0) {
-        double running = 0.0;
-        for (const float p : emissivePower) {
-            running += static_cast<double>(p);
-            emissiveCdf.push_back(static_cast<float>(running / totalPower));
-        }
-        if (!emissiveCdf.empty()) {
-            emissiveCdf.back() = 1.0F;
-        }
-    } else {
-        const auto count = static_cast<uint32_t>(emissivePower.size());
-        for (uint32_t i = 0; i < count; ++i) {
-            emissiveCdf.push_back(static_cast<float>(i + 1) / static_cast<float>(count));
-        }
-    }
-    if (emissiveCdf.empty()) {
-        emissiveCdf.push_back(1.0F);
-    }
+    // Power-proportional selection CDF for emissive-triangle NEE (shared helper —
+    // identical across renderers, so the NEE sampling CDF cannot drift).
+    const std::vector<float> emissiveCdf = harmonia::buildEmissiveCdf(emissiveData.power);
     auto emissiveCdfBuf = Buffer::upload(
         ctx,
         pool,
@@ -564,7 +511,7 @@ VkResult Scene::buildTlas(const DeviceContext& ctx, const CommandPool& pool) {
     for (size_t i = 0; i < m_instances.size(); ++i) {
         const InstanceRecord& inst = m_instances[i];
         instances[i] = m_meshes[inst.meshIndex]->makeInstance(static_cast<uint32_t>(i), inst.xform);
-        // Instance masks:
+        // Instance masks (Theia-specific visibility channels for the raster/RT-GI passes):
         //   0x01 = emissive geometry
         //   0x02 = transparent non-emissive geometry
         //   0x04 = opaque non-emissive geometry
@@ -580,94 +527,6 @@ VkResult Scene::buildTlas(const DeviceContext& ctx, const CommandPool& pool) {
         }
         instances[i].mask = isEmissive ? 0x01u : (isTransparent ? 0x02u : 0x04u);
     }
-
-    auto instanceUpload = Buffer::upload(
-        ctx,
-        pool,
-        std::as_bytes(std::span<const VkAccelerationStructureInstanceKHR>(instances.data(), instances.size())),
-        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-            VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        "scene.tlas.instances");
-    if (!instanceUpload) {
-        return instanceUpload.error();
-    }
-
-    const VkAccelerationStructureGeometryInstancesDataKHR instancesData{
-        .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR,
-        .pNext = nullptr,
-        .arrayOfPointers = VK_FALSE,
-        .data = VkDeviceOrHostAddressConstKHR{instanceUpload->deviceAddress()},
-    };
-    const VkAccelerationStructureGeometryKHR geometry{
-        .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR,
-        .pNext = nullptr,
-        .geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR,
-        .geometry = VkAccelerationStructureGeometryDataKHR{.instances = instancesData},
-        .flags = VK_GEOMETRY_OPAQUE_BIT_KHR,
-    };
-    const uint32_t primitiveCount = static_cast<uint32_t>(instances.size());
-    VkAccelerationStructureBuildGeometryInfoKHR buildInfo{
-        .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR,
-        .pNext = nullptr,
-        .type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
-        .flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR,
-        .mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR,
-        .srcAccelerationStructure = VK_NULL_HANDLE,
-        .dstAccelerationStructure = VK_NULL_HANDLE,
-        .geometryCount = 1,
-        .pGeometries = &geometry,
-        .ppGeometries = nullptr,
-        .scratchData = VkDeviceOrHostAddressKHR{},
-    };
-    VkAccelerationStructureBuildSizesInfoKHR sizeInfo{};
-    sizeInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
-    vkGetAccelerationStructureBuildSizesKHR(
-        ctx.device, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &buildInfo, &primitiveCount, &sizeInfo);
-
-    auto tlasAS = AccelerationStructure::create(
-        ctx, VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR, sizeInfo.accelerationStructureSize, "scene.tlas");
-    if (!tlasAS) {
-        return tlasAS.error();
-    }
-
-    VkPhysicalDeviceAccelerationStructurePropertiesKHR asProps{};
-    asProps.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR;
-    VkPhysicalDeviceProperties2 props{};
-    props.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
-    props.pNext = &asProps;
-    vkGetPhysicalDeviceProperties2(ctx.physicalDevice, &props);
-
-    auto scratch = Buffer::create(
-        ctx,
-        std::max<VkDeviceSize>(sizeInfo.buildScratchSize + asProps.minAccelerationStructureScratchOffsetAlignment, 16),
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-        VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-        "scene.tlasScratch");
-    if (!scratch) {
-        return scratch.error();
-    }
-
-    buildInfo.dstAccelerationStructure = tlasAS->handle();
-    buildInfo.scratchData.deviceAddress =
-        bufferAlignUp(scratch->deviceAddress(), asProps.minAccelerationStructureScratchOffsetAlignment);
-    const VkAccelerationStructureBuildRangeInfoKHR rangeInfo{
-        .primitiveCount = primitiveCount,
-        .primitiveOffset = 0,
-        .firstVertex = 0,
-        .transformOffset = 0,
-    };
-    const VkAccelerationStructureBuildRangeInfoKHR* rangePtr = &rangeInfo;
-
-    auto cmd = pool.beginOneShot();
-    if (!cmd) {
-        return cmd.error();
-    }
-    vkCmdBuildAccelerationStructuresKHR(*cmd, 1, &buildInfo, &rangePtr);
-    if (const VkResult result = pool.endOneShot(*cmd); result != VK_SUCCESS) {
-        return result;
-    }
-
-    m_tlas = std::move(*tlasAS);
-    m_tlasAddress = m_tlas.deviceAddress();
-    return VK_SUCCESS;
+    // The TLAS-build mechanics are shared (harmonia::buildTlas); only the masks above diverge.
+    return harmonia::buildTlas(ctx, pool, instances, m_tlas, m_tlasAddress);
 }

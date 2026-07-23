@@ -68,9 +68,6 @@ class GiPass {
         /// A3(a): secondary-bounce GGX roughness regularization (Theia-only bias;
         /// Hyperion stays unbiased). Off → estimator identical to before.
         bool useA3Regularization = true;
-        /// A3(c): σ_t-importance-weighted hero channel selection in the medium walk
-        /// (unbiased reweighting). Off → legacy uniform 1/3 channel pick.
-        bool useA3ChromaticImportance = true;
         /// c1: variance-guided adaptive sampling. Upper bound on GI samples per pixel; the
         /// per-pixel count ramps from 1 up to this with the A-SVGF variance guide. Averaging
         /// independent samples keeps the estimator unbiased. 1 disables adaptive sampling.
@@ -129,7 +126,6 @@ class GiPass {
         uint32_t screenHeight = 0;
         uint32_t _pad0 = 0;
         uint32_t a3RegularizationEnabled = 1;      ///< A3(a): secondary-bounce roughness regularization
-        uint32_t a3ChromaticImportanceEnabled = 1; ///< A3(c): σ_t-weighted hero channel selection
         uint32_t hasGradientVariance = 0;          ///< A3(b): 1 when a real A-SVGF guide is bound
         uint32_t giAdaptiveMaxSamples = 1;         ///< c1: max GI samples/pixel (1 = adaptive sampling off / behavior-preserving)
         uint32_t restirDiEnabled = 0;              ///< A4: 1 = spatiotemporal reservoir DI; 0 = bit-identical fallback
@@ -137,7 +133,7 @@ class GiPass {
         uint32_t restirHasMotion = 0;              ///< A4: 1 = real motion image bound; 0 = dummy (skip reprojection)
         uint32_t _restirPad1 = 0;
     };
-    static_assert(sizeof(GiPushConstants) == 160);
+    static_assert(sizeof(GiPushConstants) == 156);
 
     [[nodiscard]] bool createDescriptors();
     [[nodiscard]] bool createPipeline(const char* giSpv);

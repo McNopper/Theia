@@ -382,7 +382,6 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         gp.rngBaseSeed = config().rngSeed;
         gp.maxDepth = m_sceneMaxDepth;
         gp.useA3Regularization = true;
-        gp.useA3ChromaticImportance = true;
         // A3(b): wire the A-SVGF gradient/variance guide from the shared denoiser pass.
         gp.gradientVarianceView = denoiserGradientImageView();
         // c1: variance-guided adaptive sampling (unbiased; only active when the guide above is
@@ -554,7 +553,6 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         // A3: firefly / chromatic-SSS noise reduction (Theia-only, flag-gated;
         // Hyperion stays the unbiased ground truth). Defaults ON.
         gp.useA3Regularization = true;      // A3(a): secondary-bounce roughness regularization
-        gp.useA3ChromaticImportance = true; // A3(c): σ_t-weighted hero channel selection (unbiased)
         // A3(b): wire the A-SVGF gradient/variance guide from the shared denoiser pass.
         gp.gradientVarianceView = denoiserGradientImageView();
         // c1: variance-guided adaptive sampling (unbiased; only active when the guide above is

@@ -558,7 +558,6 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         .screenHeight = m_cfg.height,
         ._pad0 = 0u,
         .a3RegularizationEnabled = params.useA3Regularization ? 1u : 0u,
-        .a3ChromaticImportanceEnabled = params.useA3ChromaticImportance ? 1u : 0u,
         .hasGradientVariance = (params.gradientVarianceView != VK_NULL_HANDLE) ? 1u : 0u,
         .giAdaptiveMaxSamples = std::max(1u, params.adaptiveMaxSamples),
         .restirDiEnabled = (params.useRestirDi && m_reservoirBuf[0].isValid()) ? 1u : 0u,
