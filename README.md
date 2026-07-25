@@ -14,31 +14,47 @@ It implements the [OpenPBR Surface v1.1.1](https://academysoftwarefoundation.git
 
 ## Screenshots
 
-*Same test scenes as [Hyperion](https://github.com/McNopper/Hyperion) — converged to visual parity through accumulation.*
+*Same 29 test scenes as [Hyperion](https://github.com/McNopper/Hyperion) — converged to visual parity through accumulation.* Theia at **256 frames**, 1280×720.
 
-| Cornell Box | Spheres | Suzanne |
-|:-----------:|:-------:|:-------:|
-| ![cornell_classic](screenshots/cornell_classic.png) | ![cornell_spheres](screenshots/cornell_spheres.png) | ![cornell_suzanne](screenshots/cornell_suzanne.png) |
+| cornell_classic | cornell_classic_rec709 | cornell_empty |
+|:---:|:---:|:---:|
+| ![cornell_classic](screenshots/cornell_classic.png) | ![cornell_classic_rec709](screenshots/cornell_classic_rec709.png) | ![cornell_empty](screenshots/cornell_empty.png) |
 
-| Metals | Dielectrics | Coat |
-|:------:|:-----------:|:----:|
+| cornell_spheres | cornell_suzanne | cornell_textured_cube |
+|:---:|:---:|:---:|
+| ![cornell_spheres](screenshots/cornell_spheres.png) | ![cornell_suzanne](screenshots/cornell_suzanne.png) | ![cornell_textured_cube](screenshots/cornell_textured_cube.png) |
+
+| openpbr_metals | openpbr_dielectrics | openpbr_coat |
+|:---:|:---:|:---:|
 | ![openpbr_metals](screenshots/openpbr_metals.png) | ![openpbr_dielectrics](screenshots/openpbr_dielectrics.png) | ![openpbr_coat](screenshots/openpbr_coat.png) |
 
-| Fuzz | Specular | Organics |
-|:----:|:--------:|:--------:|
+| openpbr_fuzz | openpbr_specular | openpbr_organics |
+|:---:|:---:|:---:|
 | ![openpbr_fuzz](screenshots/openpbr_fuzz.png) | ![openpbr_specular](screenshots/openpbr_specular.png) | ![openpbr_organics](screenshots/openpbr_organics.png) |
 
-| Thin-film | Textured Cube | Dragon & Teapot (IBL) |
-|:---------:|:-------------:|:---------------------:|
-| ![openpbr_thinfilm](screenshots/openpbr_thinfilm.png) | ![cornell_textured_cube](screenshots/cornell_textured_cube.png) | ![dragon_teapot](screenshots/dragon_teapot.png) |
+| openpbr_thinfilm | openpbr_advanced | shaderball_base |
+|:---:|:---:|:---:|
+| ![openpbr_thinfilm](screenshots/openpbr_thinfilm.png) | ![openpbr_advanced](screenshots/openpbr_advanced.png) | ![shaderball_base](screenshots/shaderball_base.png) |
 
-| Advanced Transmission | A Beautiful Game (IBL) | Bunny + ShaderBall (IBL) |
-|:----------------------:|:------------------------:|:------------------------:|
-| ![openpbr_advanced](screenshots/openpbr_advanced.png) | ![ABeautifulGame](screenshots/ABeautifulGame.png) | ![bunny_shaderball](screenshots/bunny_shaderball.png) |
+| shaderball_coat | shaderball_fuzz | shaderball_metal |
+|:---:|:---:|:---:|
+| ![shaderball_coat](screenshots/shaderball_coat.png) | ![shaderball_fuzz](screenshots/shaderball_fuzz.png) | ![shaderball_metal](screenshots/shaderball_metal.png) |
 
-| Blender Export |
-|:------------------------:|
-| ![camera_suzanne](screenshots/camera_suzanne.png) |
+| shaderball_opacity | shaderball_specular | shaderball_subsurface |
+|:---:|:---:|:---:|
+| ![shaderball_opacity](screenshots/shaderball_opacity.png) | ![shaderball_specular](screenshots/shaderball_specular.png) | ![shaderball_subsurface](screenshots/shaderball_subsurface.png) |
+
+| shaderball_thinfilm | shaderball_transmission | shaderball_emission |
+|:---:|:---:|:---:|
+| ![shaderball_thinfilm](screenshots/shaderball_thinfilm.png) | ![shaderball_transmission](screenshots/shaderball_transmission.png) | ![shaderball_emission](screenshots/shaderball_emission.png) |
+
+| shader_ball | bunny_shaderball | camera_suzanne |
+|:---:|:---:|:---:|
+| ![shader_ball](screenshots/shader_ball.png) | ![bunny_shaderball](screenshots/bunny_shaderball.png) | ![camera_suzanne](screenshots/camera_suzanne.png) |
+
+| ABeautifulGame | dragon_teapot |
+|:---:|:---:|
+| ![ABeautifulGame](screenshots/ABeautifulGame.png) | ![dragon_teapot](screenshots/dragon_teapot.png) |
 
 ---
 
@@ -111,7 +127,7 @@ reference = "presets/preview.render.toml"      # shared preset; inline keys over
 working_color_space = "lin_rec2020_scene"      # or "lin_rec709_scene"
 
 [camera]
-reference = "presets/cornell.camera.toml"      # translate / look_at / vfov / ev100
+reference = "presets/cornell.camera.toml"      # translate / rotate / vfov / ev100
 
 [tonemap]
 tonemapper = "agx"                             # aces | agx | reinhard | hable

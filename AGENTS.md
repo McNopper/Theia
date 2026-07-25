@@ -52,7 +52,7 @@ Theia-specific (not in Harmonia).
 
 ```powershell
 build/theia.exe --scene cornell_classic --output out.exr               # headless EXR+PNG
-build/theia.exe --scene fixture_ibl                                    # interactive window
+build/theia.exe --scene shaderball_base                               # interactive window
 ```
 
 CLI flags: `--scene/-s`, `--output/-o` (headless EXR+PNG), `--width`, `--height`,
@@ -70,6 +70,11 @@ Parity vs Hyperion and showcase screenshots use the unified accumulation RT path
 Compare with `Harmonia/tools/compare_renders.py ref.exr cand.exr` (pass = mean_diff <= 4.0,
 pre-tonemap EXR, same color space).
 
+**Screenshot gallery** (`screenshots/`, 1280×720 PNG): Theia renders 256 frames. The matching
+Hyperion screenshots use **64 spp** (fireflies acceptable — 256 spp is too slow for the full
+29-scene set); a parity *reference* is distinct and uses a clean Hyperion **256 spp** EXR at
+the 320×240 parity resolution.
+
 ## Gotchas (each has cost a debug cycle)
 
 - **Assets come from `build/_deps/aether-src/assets/`** (FetchContent clone), NOT the working
@@ -82,7 +87,7 @@ pre-tonemap EXR, same color space).
   (`gi.comp.slang` → shared `path_integrator`) providing path-traced multi-bounce indirect
   (diffuse + specular + env-NEE) and transmission/refraction, default-on (`--no-rt-gi` to
   disable). The old "single-bounce IBL + flat ambient, darker than Hyperion" gap is closed for
-  the unified pipeline. The isolated-diffuse `fixture_ibl` passes at 1.76.
+  the unified pipeline.
 - **Bulk subsurface + transmission-scatter run the shared volumetric walk in `gi.comp`:** the
   compute loop executes the same chromatic hero-wavelength free-flight/scatter/boundary
   estimator as Hyperion (`runMediumWalk`), on both primary and secondary vertices. `sampleBSDF`
@@ -113,7 +118,7 @@ pre-tonemap EXR, same color space).
 ## Test scenes
 
 - Quick parity/iteration (cheap): `cornell_classic`, `cornell_spheres`, `cornell_suzanne`,
-  `dragon_teapot`, `fixture_ibl`.
+  `dragon_teapot`.
 - **Never** use `ABeautifulGame` for quick test renders — expensive. (Required only in final
   screenshot/render *deliverable* batches.)
 
