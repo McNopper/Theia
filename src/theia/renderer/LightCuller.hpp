@@ -13,7 +13,7 @@ namespace theia {
 /// Runs a compute pass each frame that bins lights into 16×16 pixel screen tiles.
 /// Results are stored in GPU buffers and bound to ForwardRenderer set 1, bindings 3–4.
 ///
-/// Ref: Olsson & Assarsson — "Tiled Shading" (JCGT 2011)
+/// Ref: Olsson & Assarsson — "Tiled Shading" (J. Graphics, GPU, and Game Tools 15(4), 2011)
 class LightCuller {
   public:
     static constexpr uint32_t kTileSize = 16;

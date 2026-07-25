@@ -161,7 +161,7 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
     }
 
     // Debug/A-B toggle: set THEIA_DISABLE_HIZ to draw all meshlets (two passes, no occlusion
-    // test). Used to verify the Hi-Z culling introduces no visual regression.
+    // test). Used to verify Hi-Z culling is visually equivalent to the uncullered path.
     char* hiZDisableRaw = nullptr;
     size_t hiZDisableLen = 0;
     if (_dupenv_s(&hiZDisableRaw, &hiZDisableLen, "THEIA_DISABLE_HIZ") == 0 && hiZDisableRaw != nullptr) {

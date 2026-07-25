@@ -280,10 +280,10 @@ Theia's BSDF, volumetric, color-science, and denoising references live in [Harmo
 ### Real-time rendering & GPU-driven
 | Resource | Relevance |
 |----------|-----------|
-| [Wihlidal — "GPU-Driven Rendering Pipelines" (SIGGRAPH 2015)](https://advances.realtimerendering.com/s2015/aaltonenhaar_siggraph2015_combined_final_footer_220dpi.pdf) | Indirect draw, GPU command generation, per-cluster culling |
+| [Haar & Aaltonen — "GPU-Driven Rendering Pipelines" (SIGGRAPH 2015, Advances course)](https://advances.realtimerendering.com/s2015/aaltonenhaar_siggraph2015_combined_final_footer_220dpi.pdf) | Indirect draw, GPU command generation, per-cluster culling |
 | [Khronos — Mesh Shading for Vulkan](https://www.khronos.org/blog/mesh-shading-for-vulkan) | `VK_EXT_mesh_shader` task/mesh pipeline, `EmitMeshTasksEXT` |
 | [Meshoptimizer — Arseny Kapoulkine](https://github.com/zeux/meshoptimizer) | `meshopt_buildMeshlets`, `meshopt_computeMeshletBounds`, cone culling |
-| [Bitterli, Jarabo, Kaplanyan, Mantiuk et al. — "Spatiotemporal Reservoir Resampling for Real-Time Ray Tracing with Dynamic Direct Lighting" (TOG 2020)](https://research.nvidia.com/publication/2020-06_Spatiotemporal-reservoir-resampling) | ReSTIR DI for emissive-triangle direct lighting (8-candidate RIS, unbiased W) |
+| [Bitterli, Wyman, Pharr, Shirley, Lefohn & Jarosz — "Spatiotemporal Reservoir Resampling for Real-Time Ray Tracing with Dynamic Direct Lighting" (ACM TOG / SIGGRAPH 2020)](https://doi.org/10.1145/3386569.3392481) | ReSTIR DI for emissive-triangle direct lighting (8-candidate RIS, unbiased W) |
 | [Gribb & Hartmann — "Fast Extraction of Viewing Frustum Planes from the World-View-Projection Matrix" (2001)](https://www.gamedevs.org/uploads/fast-extraction-viewing-frustum-planes-from-world-view-projection-matrix.pdf) | 5-plane frustum cull in the cull compute shader |
 
 ### Vulkan & API

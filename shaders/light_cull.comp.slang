@@ -3,8 +3,8 @@
 // One thread per light: each thread iterates over all tiles and checks
 // sphere-frustum overlap.
 //
-// Ref: Olsson & Assarsson — "Tiled Shading" (JCGT 2011)
-//      https://jcgt.org/published/0001/01/01/
+// Ref: Olsson & Assarsson — "Tiled Shading" (J. Graphics, GPU, and Game Tools 15(4), 2011)
+//      https://doi.org/10.1080/2151237X.2011.621761
 
 [[vk::push_constant]]
 cbuffer LightCullPC {

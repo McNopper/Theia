@@ -98,13 +98,12 @@ the 320×240 parity resolution.
   sampling, transmittance `exp(-σ_t·d)` applied at the boundary) — matches Hyperion, zero walk
   variance.
 - **`GiHit.geoNormal` is the RAW outward-winding normal — never pre-flip it to face the ray.**
-  `traceClosestHit` historically flipped `Ng` by `frontFace`, which erased the side bit:
-  `surf.backface = dot(h.geoNormal, wo) < 0` then read **always false** → the C7 dielectric-exit
-  branch never engaged (interior exits refracted with the entry IOR, no TIR), and the medium walk
-  refracted against a wrong-signed normal (broken exits, spurious re-entry, repeated Beer–Lambert
-  → the "dragon shifted towards black" regression at v0.6.18). Consumers flip a local copy by wo
-  (`makeSurfaceHit`, mirroring Hyperion's `shadeSurface`) or use it as the true interface outward
-  normal (`runMediumWalk` offsets/Fresnel/refract, backface detection).
+  Pre-flipping erases the side bit: `surf.backface = dot(h.geoNormal, wo) < 0` then reads **always
+  false** → the C7 dielectric-exit branch never engages (interior exits refract with the entry IOR,
+  no TIR), and the medium walk refracts against a wrong-signed normal (broken exits, spurious
+  re-entry, repeated Beer–Lambert). Consumers flip a local copy by wo (`makeSurfaceHit`, mirroring
+  Hyperion's `shadeSurface`) or use it as the true interface outward normal (`runMediumWalk`
+  offsets/Fresnel/refract, backface detection).
 - **IBL specular split-sum is the GI-OFF fallback only:** the prefiltered split-sum map
   (1024x512 / 8-mip, band-limited, can't resolve a sharp HDR sun-disc) is used only on the
   `--no-rt-gi` debug path. The default unified path gets specular reflections from RT-GI.
@@ -113,7 +112,7 @@ the 320×240 parity resolution.
 - **GI primary surface = the re-traced closest hit, NOT the rasterized giBuffer materialIdx.**
   The giBuffer is draw-order dependent for overlapping transparent surfaces (depth-write off);
   `gi.comp.slang` trusts the order-independent inline ray query for primary visibility. Do not
-  re-add a `materialIdx ==` guard (it caused black holes on overlapping glass; commit 4a04e6e).
+  re-add a `materialIdx ==` guard (it causes black holes on overlapping glass).
 
 ## Test scenes
 
@@ -175,7 +174,7 @@ path. Both paths share one task-shader entry point (`gid.x = 0..visibleCount-1`)
 > ⚠️ **Do not** use N per-instance DGC sequences keyed on `SV_DrawIndex`: with `maxDrawCount=1`,
 > `SV_DrawIndex` is the draw index *within* a sequence (always 0), **not** the sequence index — so
 > every sequence would read `compactInstanceList[0]` and only instance 0 (e.g. the floor) would
-> rasterize. This was the GD6 "missing geometry" regression; the single-sequence design avoids it.
+> rasterize. The single-sequence design (one sequence, `gid.x` indexes the list) avoids this.
 
 - `forward_cull.comp.slang`: 64-thread compute; Gribb-Hartmann 5-plane frustum cull; atomic
   `InterlockedAdd` on `indirectDrawBuf` byte-offset 0 accumulates `groupCountX` = visible count;
