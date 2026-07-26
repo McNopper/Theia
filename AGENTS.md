@@ -8,9 +8,11 @@ Quick-start context for AI agents so basic facts don't have to be rediscovered e
 converges to the **Hyperion** path-traced ground truth through frame accumulation. Multi-bounce
 global illumination — diffuse, specular, environment NEE, transmission and refraction — is
 **hardware ray-traced** through Harmonia's shared OpenPBR `path_integrator`, the same estimator
-and BSDF Hyperion uses. **ReSTIR DI** provides spatiotemporal reservoir resampling for direct
-illumination from emissive triangles. An **A-SVGF denoiser** and **TAA** stabilize the image,
-and progressive accumulation resolves it to the reference.
+and BSDF Hyperion uses. **ReSTIR PT** provides reservoir resampling: a direct-light reservoir
+(emissive triangles / env NEE by scene type) plus a **multi-bounce path reservoir** for the
+indirect term (GRIS random-replay shift — spatial reuse only, no temporal merge; see gotchas).
+An **A-SVGF denoiser** and **TAA** stabilize the image, and progressive accumulation resolves
+it to the reference.
 
 Pipeline (dependency direction):
 
@@ -104,6 +106,13 @@ the 320×240 parity resolution.
   re-entry, repeated Beer–Lambert). Consumers flip a local copy by wo (`makeSurfaceHit`, mirroring
   Hyperion's `shadeSurface`) or use it as the true interface outward normal (`runMediumWalk`
   offsets/Fresnel/refract, backface detection).
+- **The path reservoir has NO temporal merge — do not add one back.** A streamed temporal
+  merge (yesterday's merged reservoir as today's input) double-counts re-selected history on
+  heavy-tailed path candidates: measured −2.8% darker on cornell indirect @1024f, reproduced
+  in Monte-Carlo simulation; M-caps don't fix it. Spatial reuse reads neighbours' **unmerged
+  local** reservoirs (bindings 20/21 store local candidates only) — plain unbiased RIS, and
+  progressive accumulation already integrates the temporal axis. The DI reservoir's temporal
+  merge has the same latent bias, invisible on light-tailed direct lighting.
 - **IBL specular split-sum is the GI-OFF fallback only:** the prefiltered split-sum map
   (1024x512 / 8-mip, band-limited, can't resolve a sharp HDR sun-disc) is used only on the
   `--no-rt-gi` debug path. The default unified path gets specular reflections from RT-GI.
