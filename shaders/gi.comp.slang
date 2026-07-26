@@ -529,15 +529,13 @@ void combineTwoReservoirs(inout Reservoir r_dst, Reservoir r_src,
     }
 }
 
-/// A4 ReSTIR DI direct-lighting estimate for the primary surface.
-/// Runs initial-candidate RIS (kRestirInitialCandidates) via the power CDF, optional
-/// temporal reuse of the reprojected previous-frame reservoir (M-capped), computes the
-/// unbiased weight W, traces ONE shadow ray, and returns the throughput-free direct
-/// radiance (pre-exposure). The final reservoir is written to t_reservoirsCur[pixelIdx]
-/// for next-frame temporal reuse (kept valid with full M even when this frame's sample
-/// is shadowed, so history survives). Emissive-triangle direct only; env/analytic remain
-/// owned by their existing paths.
-float3 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
+/// A4/GI2 ReSTIR DI direct-lighting estimate for the primary surface.
+/// Runs initial-candidate RIS via the power CDF + env importance CDF, temporal reuse,
+/// spatial reuse, computes the unbiased weight W, traces ONE shadow ray, and returns
+/// the throughput-free direct radiance (pre-exposure) as .xyz plus the reservoir M
+/// (effective sample count) as .w — used by the GI2.7 M-aware denoiser via the HDR
+/// alpha channel. The final reservoir is written to t_reservoirsCur[pixelIdx].
+float4 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
     const uint kRestirInitialCandidates = 8u;
     const uint kRestirMCap = 20u;
     const uint pixelIdx = px.y * screenWidth + px.x;
@@ -723,7 +721,7 @@ float3 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
     contribution = max(contribution, 0.0.xxx);
 
     t_reservoirsCur[pixelIdx] = r;
-    return contribution;
+    return float4(contribution, float(r.M));  // GI2.7: .w = M for the M-aware denoiser
 }
 
 /// One independent GI estimate for a reconstructed primary surface: primary-vertex env NEE +
@@ -1039,6 +1037,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     //    and the reservoir buffers are valid; restirDiSpatial is set when EITHER path
     //    requests spatial reuse. PT enables spatial reuse by default (Application.cpp).
     float3 restirDirect = 0.0.xxx;
+    float  restirM = 0.0;  // GI2.7: reservoir effective sample count for the M-aware denoiser
     // GI2.6: reservoir handles BOTH emissive-triangle AND env-NEE direct. Runs when
     // either light source is present (was emissive-only before). For IBL-only scenes
     // (dragon_teapot: no emissive triangles, env map present), the reservoir now
@@ -1047,13 +1046,13 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // reuse. The primary env NEE is removed from estimateGiSample to avoid double-counting.
     if (restirDiEnabled != 0u && (emissiveTriangleCount > 0u || hasEnvMap != 0u)) {
         RngState restirSeed = composeRngSeed(px, frameSampleIndex, 0xA4u, rngBaseSeed);
-        restirDirect = restirDiDirect(primary, px, restirSeed) * exposure;
+        const float4 restirResult = restirDiDirect(primary, px, restirSeed);
+        restirDirect = restirResult.xyz * exposure;
+        restirM = restirResult.w;  // GI2.7: carry M via the HDR alpha channel
         if (!all(isfinite(restirDirect)) || any(isnan(restirDirect))) {
             restirDirect = 0.0.xxx;
         }
-        // Hard firefly ceiling matching the indirect path (adaptiveClamp*3). A degenerate
-        // reservoir weight on a near-specular surface can spike W; this removes the outlier
-        // without the soft rescale that would bias the smooth direct term.
+        // Hard firefly ceiling matching the indirect path (adaptiveClamp*3).
         restirDirect = clamp(restirDirect, 0.0.xxx, (adaptiveClamp * 3.0).xxx);
     }
 
@@ -1072,7 +1071,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
         // even when the GI bounce degenerates.
         if (maxSamples == 1u && !valid) {
             if (restirDirect.x != 0.0 || restirDirect.y != 0.0 || restirDirect.z != 0.0) {
-                hdrImage[px] += float4(restirDirect, 0.0);
+                hdrImage[px] += float4(restirDirect, restirM);  // GI2.7: M in alpha
             }
             return;
         }
@@ -1082,5 +1081,5 @@ void main(uint3 tid : SV_DispatchThreadID) {
     }
 
     const float invN = 1.0 / float(sampleCount);
-    hdrImage[px] += float4((sumIndirect + sumEnvNee) * invN + restirDirect, 0.0);
+    hdrImage[px] += float4((sumIndirect + sumEnvNee) * invN + restirDirect, restirM);  // GI2.7: M in alpha
 }
