@@ -27,6 +27,7 @@ import surface;         // shared OpenPBR surface-frame (texture-map) populator
 [[vk::push_constant]]
 cbuffer GiPC {
     float4x4 view;                  // view matrix (row-major; mul(M, v) convention — matches -matrix-layout-row-major)
+    float4x4 prevViewProj;          // GI2 Phase 3: previous-frame view-projection for inline temporal reprojection
     float4   cameraPos;             // xyz = world-space camera position
     float    exposure;              // 1 / (1.2 * 2^EV100) — matches forward pass
     uint     frameSampleIndex;      // per-frame sample counter (drives RNG decorrelation across accumulated frames)
@@ -480,13 +481,18 @@ float3 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
         reservoirUpdate(r, cand.lightIdx, cand.samplePoint, cand.sampleNormal, weight, rng);
     }
 
-    // ── Temporal reuse: reproject via motion vectors, merge the previous reservoir. ──
+    // ── Temporal reuse: reproject via prevViewProj, merge the previous reservoir. ──
     {
-        float2 mv = 0.0.xx;
-        if (restirHasMotion != 0u) {
-            mv = t_motionVectors.Load(int3(int(px.x), int(px.y), 0)); // screen-space pixels
-        }
-        int2 prevCoord = int2(int(px.x) - int(round(mv.x)), int(px.y) - int(round(mv.y)));
+        // GI2 Phase 3: inline temporal reprojection — compute where THIS pixel's world
+        // position was on the previous frame's screen, directly from prevViewProj.
+        // Replaces the binding-18 motion-vector load (which was always nulled because
+        // MotionVectorPass runs AFTER GiPass in the pipeline). The math is identical
+        // to MotionVectorPass's, but evaluated only where temporal reuse needs it.
+        float4 prevClip = mul(prevViewProj, float4(primary.position, 1.0));
+        float  prevW    = max(abs(prevClip.w), 1.0e-6);
+        float2 prevNdc  = prevClip.xy / prevW;
+        float2 prevPixel = (prevNdc * 0.5 + 0.5) * float2(screenWidth, screenHeight);
+        int2 prevCoord = int2(int(round(prevPixel.x)), int(round(prevPixel.y)));
         if (prevCoord.x >= 0 && prevCoord.y >= 0 &&
             prevCoord.x < int(screenWidth) && prevCoord.y < int(screenHeight)) {
             uint prevIdx = uint(prevCoord.y) * screenWidth + uint(prevCoord.x);

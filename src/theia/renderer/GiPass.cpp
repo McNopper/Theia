@@ -544,6 +544,7 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
 
     const GiPushConstants pc{
         .view = params.view,
+        .prevViewProj = params.prevViewProj,
         .cameraPos = sm::float4(params.cameraPos, 1.0f),
         .exposure = params.exposure,
         .frameSampleIndex = params.frameSampleIndex,

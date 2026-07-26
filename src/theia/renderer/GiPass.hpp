@@ -53,6 +53,7 @@ class GiPass {
         float envLuminanceScale = 1.0f;
 
         sm::float4x4 view{1.0f}; ///< view matrix
+        sm::float4x4 prevViewProj{1.0f}; ///< GI2: previous-frame view-projection for inline motion-vector reprojection (temporal reuse)
         sm::float3 cameraPos{0.0f};
         float exposure = 1.0f;
         uint32_t frameSampleIndex = 0;
@@ -120,6 +121,7 @@ class GiPass {
   private:
     struct GiPushConstants {
         sm::float4x4 view{1.0f};
+        sm::float4x4 prevViewProj{1.0f}; ///< GI2: prev-frame VP for inline temporal reprojection
         sm::float4 cameraPos{0.0f};
         float exposure = 1.0f;
         uint32_t frameSampleIndex = 0;
@@ -141,7 +143,7 @@ class GiPass {
         uint32_t restirHasMotion = 0;              ///< A4: 1 = real motion image bound; 0 = dummy (skip reprojection)
         uint32_t restirPtEnabled = 0;              ///< GI2: 1 = ReSTIR PT (path integrator owns primary emissive NEE); 0 = legacy DI path
     };
-    static_assert(sizeof(GiPushConstants) == 156);
+    static_assert(sizeof(GiPushConstants) == 220);
 
     [[nodiscard]] bool createDescriptors();
     [[nodiscard]] bool createPipeline(const char* giSpv);

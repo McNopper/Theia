@@ -379,6 +379,8 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         gp.view = view;
         gp.cameraPos = m_camera.position;
         gp.exposure = m_camera.physical.exposure();
+        // GI2 Phase 3: inline temporal reprojection — no separate motion-vector binding needed.
+        gp.prevViewProj = m_prevViewProjValid ? m_prevViewProj : curViewProj;
         gp.frameSampleIndex = frameIndex();
         gp.rngBaseSeed = config().rngSeed;
         gp.maxDepth = m_sceneMaxDepth;
@@ -552,6 +554,8 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         gp.view = view;
         gp.cameraPos = m_camera.position;
         gp.exposure = m_camera.physical.exposure();
+        // GI2 Phase 3: inline temporal reprojection — no separate motion-vector binding needed.
+        gp.prevViewProj = m_prevViewProjValid ? m_prevViewProj : curViewProj;
         gp.frameSampleIndex = frameIndex();
         gp.rngBaseSeed = config().rngSeed;
         gp.maxDepth = m_sceneMaxDepth;
