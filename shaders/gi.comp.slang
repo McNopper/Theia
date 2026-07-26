@@ -72,6 +72,7 @@ struct Reservoir {
 };
 
 static const uint kReservoirEmpty = 0xFFFFFFFFu;
+static const uint kReservoirEnv   = 0xFFFFFFFEu;  // GI2.6: env-NEE sample sentinel
 
 // GI2.5: Candidate hash for the duplication map. Two reservoirs that sampled the
 // same point on the same light produce the same hash — detected during spatial
@@ -124,6 +125,11 @@ float restirTargetLuma(float3 c) {
 // Unshadowed target PDF p_hat(y) = |L_e * bsdf * cos| / dist^2 (scalar, unnormalised).
 float targetPdf(float3 Le, float3 bsdfTimesCos, float dist2) {
     return restirTargetLuma(Le * bsdfTimesCos) / max(dist2, 1.0e-6);
+}
+
+// GI2.6: Target PDF for env samples — no dist^2 (env is at infinity).
+float targetPdfEnv(float3 Le, float3 bsdfTimesCos) {
+    return restirTargetLuma(Le * bsdfTimesCos);
 }
 
 [[vk::binding(0, 0)]]  RaytracingAccelerationStructure       t_tlas;
@@ -349,16 +355,46 @@ SurfaceHit makeSurfaceHit(GiHit h, float3 wo) {
 struct RestirSampleEval {
     float3 Le;        // emitter radiance
     float3 bsdfCos;   // bsdf(wo,wi) * cos(theta_surface)
-    float  dist2;     // |samplePoint - surf.position|^2
+    float  dist2;     // |samplePoint - surf.position|^2 (kInf for env)
     float  dist;      // sqrt(dist2)
     float3 wi;        // normalized surface->light direction
+    float  p_hat;     // target PDF at this surface (kind-aware: targetPdf or targetPdfEnv)
     bool   valid;
 };
 
 RestirSampleEval evalReservoirSample(SurfaceHit surf, uint lightIdx,
                                      float3 samplePoint, float3 sampleNormal) {
     RestirSampleEval e;
-    e.Le = 0.0.xxx; e.bsdfCos = 0.0.xxx; e.dist2 = 0.0; e.dist = 0.0; e.wi = 0.0.xxx; e.valid = false;
+    e.Le = 0.0.xxx; e.bsdfCos = 0.0.xxx; e.dist2 = 0.0; e.dist = 0.0;
+    e.wi = 0.0.xxx; e.p_hat = 0.0; e.valid = false;
+
+    // GI2.6: env-NEE sample — samplePoint.xyz holds the env direction (unit vector).
+    // MIS-aware: the BSDF continuation in estimateGiSample also reaches env when its
+    // bounce ray escapes to infinity. Balance heuristic (Veach 1997 §9.2) prevents
+    // double-counting — same MIS the shared evalEnvNEESample applies.
+    if (lightIdx == kReservoirEnv) {
+        float3 wi = normalize(samplePoint);
+        float  cosI = dot(wi, surf.normal);
+        if (cosI <= 0.0) return e;
+        float3 Le = sampleEnvMapLatLong(t_envMap, s_env, wi) * envLuminanceScale;
+        float3 bsdf = evalBSDF(surf.mat, surf.wo, wi,
+            surf.normal, surf.T, surf.B, surf.coatN, surf.coatT, surf.coatB, surf.backface);
+        // MIS: envPdf from the importance CDF; bsdfPdf from the BSDF model.
+        float envPdf = evalEnvImportancePdfDir(envMarginalCdf, envConditionalCdf,
+                                                envImportanceWidth, envImportanceHeight, wi);
+        float bsdfPdf = pdfBSDF(surf.mat, surf.wo, wi,
+            surf.normal, surf.T, surf.B, surf.coatN, surf.coatT, surf.coatB, surf.backface);
+        float misW = envPdf / max(envPdf + bsdfPdf, 1.0e-6);
+        e.Le = Le;
+        e.bsdfCos = bsdf * cosI;
+        e.dist2 = kInf;
+        e.dist = kInf;
+        e.wi = wi;
+        e.p_hat = targetPdfEnv(Le, e.bsdfCos) * misW;  // MIS-weighted target
+        e.valid = (envPdf > 0.0);
+        return e;
+    }
+
     if (lightIdx >= emissiveTriangleCount) {
         return e;
     }
@@ -381,6 +417,7 @@ RestirSampleEval evalReservoirSample(SurfaceHit surf, uint lightIdx,
     e.dist2   = dist2;
     e.dist    = dist;
     e.wi      = wi;
+    e.p_hat   = targetPdf(Le, e.bsdfCos, dist2);
     e.valid   = true;
     return e;
 }
@@ -449,13 +486,38 @@ RestirCandidate sampleEmissiveCandidate(SurfaceHit surf, inout RngState seed) {
     return c;
 }
 
+/// GI2.6: Draw one initial env-NEE candidate via the 2D-separable importance CDF.
+/// Stores the sampled direction in samplePoint (overloaded — env has no world-space
+/// position). The source PDF is the env importance PDF.
+RestirCandidate sampleEnvCandidate(SurfaceHit surf, inout RngState seed) {
+    RestirCandidate c;
+    c.lightIdx = kReservoirEmpty; c.samplePoint = 0.0.xxx;
+    c.sampleNormal = float3(0.0, 1.0, 0.0); c.solidPdf = 0.0; c.valid = false;
+
+    const bool envImportance = (hasEnvMap != 0u) && envImportanceWidth > 0u && envImportanceHeight > 0u;
+    if (!envImportance) return c;
+
+    float envPdf;
+    float2 xi = float2(randFloat(seed), randFloat(seed));
+    float3 dir = sampleEnvImportanceDir(envMarginalCdf, envConditionalCdf,
+                                         envImportanceWidth, envImportanceHeight, xi, envPdf);
+    float cosI = dot(dir, surf.normal);
+    if (cosI <= 0.0 || envPdf <= 0.0) return c;
+
+    c.lightIdx     = kReservoirEnv;
+    c.samplePoint  = dir;        // env direction (not a world-space point)
+    c.sampleNormal = float3(0.0, 1.0, 0.0); // unused for env
+    c.solidPdf     = envPdf;
+    c.valid        = true;
+    return c;
+}
+
 /// Combine a source reservoir into the destination (Bitterli 2020, Alg. 4). The
 /// source's chosen sample is re-weighted by its target PDF evaluated AT the current
-/// surface (passed in via Le/bsdfCos/dist2) times its stored W and history length M.
+/// surface (passed in as p_hat_at_cur — kind-aware) times its stored W and M.
 void combineTwoReservoirs(inout Reservoir r_dst, Reservoir r_src,
-                          float3 Le_src, float3 bsdfCos_src, float dist2_src,
+                          float p_hat_at_cur,
                           inout RngState rng) {
-    float p_hat_at_cur = targetPdf(Le_src, bsdfCos_src, dist2_src);
     float w = p_hat_at_cur * r_src.W * float(r_src.M);
     r_dst.M += r_src.M;
     r_dst.w_sum += w;
@@ -482,10 +544,27 @@ float3 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
 
     Reservoir r = makeEmptyReservoir();
 
-    // ── Initial candidates (RIS): draw N unshadowed light samples, weight by
-    //    p_hat/p_source, and stream them through weighted reservoir sampling. ──
+    // ── Initial candidates (RIS): GI2.6 interleaves emissive-triangle and env-NEE
+    //    candidates so the reservoir owns BOTH direct terms (unified DI). For IBL-only
+    //    scenes (no emissive triangles) all candidates are env — giving dragon_teapot-
+    //    class scenes the same spatiotemporal reuse that emissive-lit scenes already had.
+    //    Each candidate's WRS weight = p_hat / p_source (target/source ratio), with the
+    //    target being the unshadowed contribution (Bitterli 2020 §5.2).
     for (uint i = 0u; i < kRestirInitialCandidates; ++i) {
-        RestirCandidate cand = sampleEmissiveCandidate(primary, rng);
+        RestirCandidate cand;
+        // Alternate: even indices → emissive (when available), odd → env (when available).
+        // Falls through to whichever kind exists when only one is present.
+        const bool tryEmissive = (emissiveTriangleCount > 0u) && ((i & 1u) == 0u);
+        const bool tryEnv = (hasEnvMap != 0u) && ((i & 1u) == 1u);
+        if (tryEmissive) {
+            cand = sampleEmissiveCandidate(primary, rng);
+        } else if (tryEnv) {
+            cand = sampleEnvCandidate(primary, rng);
+        } else if (emissiveTriangleCount > 0u) {
+            cand = sampleEmissiveCandidate(primary, rng);
+        } else {
+            cand = sampleEnvCandidate(primary, rng);
+        }
         if (!cand.valid) {
             r.M += 1u; // count the attempt to keep M consistent with candidate budget
             continue;
@@ -493,8 +572,7 @@ float3 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
         RestirSampleEval e = evalReservoirSample(primary, cand.lightIdx, cand.samplePoint, cand.sampleNormal);
         float weight = 0.0;
         if (e.valid) {
-            float p_hat = targetPdf(e.Le, e.bsdfCos, e.dist2);
-            weight = p_hat / max(cand.solidPdf, 1.0e-10);
+            weight = e.p_hat / max(cand.solidPdf, 1.0e-10);
         }
         reservoirUpdate(r, cand.lightIdx, cand.samplePoint, cand.sampleNormal, weight, rng);
     }
@@ -519,7 +597,7 @@ float3 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
                 prev.M = min(prev.M, kRestirMCap); // cap history length to bound temporal bias
                 RestirSampleEval pe = evalReservoirSample(primary, prev.lightIdx, prev.samplePoint, prev.sampleNormal);
                 if (pe.valid) {
-                    combineTwoReservoirs(r, prev, pe.Le, pe.bsdfCos, pe.dist2, rng);
+                    combineTwoReservoirs(r, prev, pe.p_hat, rng);
                 } else {
                     r.M += prev.M; // account for history even if its sample is now invalid
                 }
@@ -591,7 +669,7 @@ float3 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
                 RestirSampleEval ne = evalReservoirSample(primary, neighbor.lightIdx,
                                                           neighbor.samplePoint, neighbor.sampleNormal);
                 if (ne.valid) {
-                    combineTwoReservoirs(r, neighbor, ne.Le, ne.bsdfCos, ne.dist2, rng);
+                    combineTwoReservoirs(r, neighbor, ne.p_hat, rng);
                 } else {
                     r.M += neighbor.M; // account for history even if its sample is now invalid
                 }
@@ -603,25 +681,36 @@ float3 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
     float3 contribution = 0.0.xxx;
     RestirSampleEval fe = evalReservoirSample(primary, r.lightIdx, r.samplePoint, r.sampleNormal);
     if (r.lightIdx != kReservoirEmpty && fe.valid && r.M > 0u) {
-        float p_hat_final = targetPdf(fe.Le, fe.bsdfCos, fe.dist2);
-        r.W = r.w_sum / max(float(r.M) * p_hat_final, 1.0e-10);
+        r.W = r.w_sum / max(float(r.M) * fe.p_hat, 1.0e-10);
 
-        // Single shadow ray to the chosen sample (unbiased single-shadow-ray scheme):
-        // if occluded, W contributes nothing this frame but the reservoir survives with
-        // full M for next-frame temporal reuse.
-        // Shadow-terminator handling — same scheme as the shared estimator's NEE
-        // (Chiang 2019 factor; rationale + references in Harmonia bsdf_shared.slang).
-        // The factor multiplies the reservoir contribution f(y)·W; the visibility
-        // ray is always traced when the factor is > 0, so no light leaks through
-        // real occluders.
+        // Single shadow ray (unbiased single-shadow-ray scheme). For env samples
+        // (lightIdx == kReservoirEnv) the ray goes to infinity (kInf); for emissive
+        // triangles it goes to the stored sample point.
         TheiaTracer tracer;
         float gTerm;
         float fTerm = shadowTerminatorFactor(primary.normal, primary.geoNormal, fe.wi, gTerm);
         if (fTerm > 0.0) {
             float3 shadowOrigin = primary.position + primary.geoNormal * kRayEpsilon;
-            float  shadowTMax   = max(fe.dist - kRayEpsilon * (1.0 + dot(primary.geoNormal, fe.wi)), 0.0);
+            float shadowTMax;
+            float misW = 1.0; // MIS weight (1.0 for emissive — no competing BSDF technique at primary)
+            if (r.lightIdx == kReservoirEnv) {
+                shadowTMax = kInf;  // env is at infinity
+                // GI2.6: balance heuristic MIS with the BSDF continuation path (which also
+                // reaches env when its bounce ray escapes). The misW was already folded into
+                // p_hat during evalReservoirSample; apply it again here as a contribution
+                // multiplier (the luminance in p_hat cancels in W, leaving the RGB misW
+                // factor to be applied explicitly — standard ReSTIR DI §5.2 formulation).
+                float envPdf = evalEnvImportancePdfDir(envMarginalCdf, envConditionalCdf,
+                                                        envImportanceWidth, envImportanceHeight, fe.wi);
+                float bsdfPdf = pdfBSDF(primary.mat, primary.wo, fe.wi,
+                    primary.normal, primary.T, primary.B,
+                    primary.coatN, primary.coatT, primary.coatB, primary.backface);
+                misW = envPdf / max(envPdf + bsdfPdf, 1.0e-6);
+            } else {
+                shadowTMax = max(fe.dist - kRayEpsilon * (1.0 + dot(primary.geoNormal, fe.wi)), 0.0);
+            }
             if (tracer.traceOccluded(shadowOrigin, fe.wi, shadowTMax)) {
-                contribution = fe.Le * fe.bsdfCos * r.W * fTerm; // f(y) * W, f = Le * bsdf * cos * fTerm
+                contribution = fe.Le * fe.bsdfCos * r.W * fTerm * misW;
             }
         }
     } else {
@@ -673,28 +762,14 @@ bool estimateGiSample(SurfaceHit primary, RngState seed, float adaptiveClamp,
     const float primaryOpacity = saturate(primary.mat.opacityFlagsPad.x);
     const bool primaryPassThrough = randFloat(state.seed) < (1.0 - primaryOpacity);
 
-    // Primary-vertex environment NEE only (shared estimator conventions). Keep this in a
-    // separate accumulator so firefly suppression does not bias the sun term.
-    float3 primaryEnvNee = 0.0.xxx;
+    // GI2.6: primary-vertex env NEE is now owned by the reservoir (restirDiDirect)
+    // — giving it spatial+temporal reuse. This block is removed to avoid double-counting.
+    // The reservoir generates env candidates via sampleEnvCandidate, evaluates them via
+    // evalReservoirSample (env kind), and shades them with a shadow ray to infinity.
+    // Secondary-vertex env NEE (inside the bounce loop via integrateSurface) is unchanged.
+    float3 primaryEnvNee = 0.0.xxx; // kept as zero for the outEnvNee contract; reservoir owns it now
     if (!primaryPassThrough) {
-        if (envImportance) {
-            float3 sum = 0.0.xxx;
-            const uint count = 4u;
-            for (uint i = 0u; i < count; ++i) {
-                EnvNeeSample envNee = evalEnvNEESample(
-                    tracer, primary,
-                    envMarginalCdf, envConditionalCdf,
-                    envImportanceWidth, envImportanceHeight, envEnabled, envLuminanceScale,
-                    t_envMap, s_env, state.seed);
-                sum += envNee.contribution;
-            }
-            primaryEnvNee = sum / float(count);
-            if (!all(isfinite(primaryEnvNee)) || any(isnan(primaryEnvNee))) {
-                primaryEnvNee = 0.0.xxx;
-            }
-        }
-
-        // --- Primary BSDF continuation (primary env NEE above; analytic/emissive direct handled by forward) ---
+        // --- Primary BSDF continuation (env/emissive direct handled by the reservoir) ---
         BSDFSample bs = sampleBSDF(primary.mat, primary.wo,
             primary.normal, primary.T, primary.B, primary.coatN, primary.coatT, primary.coatB, primary.backface, state.seed);
         if (bs.pdf <= 0.0 || maxComp(bs.weight) <= 0.0 || !all(isfinite(bs.weight))) {
@@ -964,7 +1039,13 @@ void main(uint3 tid : SV_DispatchThreadID) {
     //    and the reservoir buffers are valid; restirDiSpatial is set when EITHER path
     //    requests spatial reuse. PT enables spatial reuse by default (Application.cpp).
     float3 restirDirect = 0.0.xxx;
-    if (restirDiEnabled != 0u && emissiveTriangleCount > 0u) {
+    // GI2.6: reservoir handles BOTH emissive-triangle AND env-NEE direct. Runs when
+    // either light source is present (was emissive-only before). For IBL-only scenes
+    // (dragon_teapot: no emissive triangles, env map present), the reservoir now
+    // provides spatiotemporal reuse for the env direct term — previously only the
+    // 4-sample-per-frame primaryEnvNee inside estimateGiSample handled it, with no
+    // reuse. The primary env NEE is removed from estimateGiSample to avoid double-counting.
+    if (restirDiEnabled != 0u && (emissiveTriangleCount > 0u || hasEnvMap != 0u)) {
         RngState restirSeed = composeRngSeed(px, frameSampleIndex, 0xA4u, rngBaseSeed);
         restirDirect = restirDiDirect(primary, px, restirSeed) * exposure;
         if (!all(isfinite(restirDirect)) || any(isnan(restirDirect))) {
