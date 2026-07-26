@@ -542,23 +542,16 @@ float4 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
 
     Reservoir r = makeEmptyReservoir();
 
-    // ── Initial candidates (RIS): GI2.6 interleaves emissive-triangle and env-NEE
-    //    candidates so the reservoir owns BOTH direct terms (unified DI). For IBL-only
-    //    scenes (no emissive triangles) all candidates are env — giving dragon_teapot-
-    //    class scenes the same spatiotemporal reuse that emissive-lit scenes already had.
-    //    Each candidate's WRS weight = p_hat / p_source (target/source ratio), with the
-    //    target being the unshadowed contribution (Bitterli 2020 §5.2).
+    // ── Initial candidates (RIS): scene-type-dependent. Emissive-lit scenes
+    //    (cornell etc.): all emissive candidates — env NEE stays in estimateGiSample
+    //    (4 independent samples with own shadow rays, better for occluded env).
+    //    IBL-only scenes (dragon_teapot etc.): all env candidates — the reservoir
+    //    gives env spatiotemporal reuse for the first time. The gate is
+    //    emissiveTriangleCount (scene property, not a knob).
+    const bool sceneHasEmissive = (emissiveTriangleCount > 0u);
     for (uint i = 0u; i < kRestirInitialCandidates; ++i) {
         RestirCandidate cand;
-        // Alternate: even indices → emissive (when available), odd → env (when available).
-        // Falls through to whichever kind exists when only one is present.
-        const bool tryEmissive = (emissiveTriangleCount > 0u) && ((i & 1u) == 0u);
-        const bool tryEnv = (hasEnvMap != 0u) && ((i & 1u) == 1u);
-        if (tryEmissive) {
-            cand = sampleEmissiveCandidate(primary, rng);
-        } else if (tryEnv) {
-            cand = sampleEnvCandidate(primary, rng);
-        } else if (emissiveTriangleCount > 0u) {
+        if (sceneHasEmissive) {
             cand = sampleEmissiveCandidate(primary, rng);
         } else {
             cand = sampleEnvCandidate(primary, rng);
@@ -586,7 +579,12 @@ float4 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
         float  prevW    = max(abs(prevClip.w), 1.0e-6);
         float2 prevNdc  = prevClip.xy / prevW;
         float2 prevPixel = (prevNdc * 0.5 + 0.5) * float2(screenWidth, screenHeight);
-        int2 prevCoord = int2(int(round(prevPixel.x)), int(round(prevPixel.y)));
+        // B2 fix: use floor (not round) for pixel index. The NDC→pixel mapping produces
+        // pixel-center coordinates (px + 0.5); round() with banker's rounding gives the
+        // wrong pixel for odd px (round(1.5)=2, round(3.5)=4). floor() correctly recovers
+        // the integer pixel index. v0.7.0 used exact integer subtraction (px - 0 = px)
+        // via the nulled motion vectors; this floor() path reproduces that exactly.
+        int2 prevCoord = int2(int(floor(prevPixel.x)), int(floor(prevPixel.y)));
         if (prevCoord.x >= 0 && prevCoord.y >= 0 &&
             prevCoord.x < int(screenWidth) && prevCoord.y < int(screenHeight)) {
             uint prevIdx = uint(prevCoord.y) * screenWidth + uint(prevCoord.x);
@@ -760,14 +758,33 @@ bool estimateGiSample(SurfaceHit primary, RngState seed, float adaptiveClamp,
     const float primaryOpacity = saturate(primary.mat.opacityFlagsPad.x);
     const bool primaryPassThrough = randFloat(state.seed) < (1.0 - primaryOpacity);
 
-    // GI2.6: primary-vertex env NEE is now owned by the reservoir (restirDiDirect)
-    // — giving it spatial+temporal reuse. This block is removed to avoid double-counting.
-    // The reservoir generates env candidates via sampleEnvCandidate, evaluates them via
-    // evalReservoirSample (env kind), and shades them with a shadow ray to infinity.
-    // Secondary-vertex env NEE (inside the bounce loop via integrateSurface) is unchanged.
-    float3 primaryEnvNee = 0.0.xxx; // kept as zero for the outEnvNee contract; reservoir owns it now
+    // GI2.6: primary-vertex env NEE ownership is scene-type-dependent:
+    //   • Emissive-lit scenes (emissiveTriangleCount > 0): env NEE stays here —
+    //     4 independent samples with own shadow rays + MIS (better for occluded env,
+    //     matches v0.7.0 behaviour). The reservoir only handles emissive triangles.
+    //   • IBL-only scenes (emissiveTriangleCount == 0): env NEE moved to the reservoir
+    //     (restirDiDirect) — giving it spatial+temporal reuse for the first time.
+    // The gate is the scene property emissiveTriangleCount, not a knob.
+    float3 primaryEnvNee = 0.0.xxx;
     if (!primaryPassThrough) {
-        // --- Primary BSDF continuation (env/emissive direct handled by the reservoir) ---
+        if (envImportance && emissiveTriangleCount > 0u) {
+            float3 sum = 0.0.xxx;
+            const uint count = 4u;
+            for (uint i = 0u; i < count; ++i) {
+                EnvNeeSample envNee = evalEnvNEESample(
+                    tracer, primary,
+                    envMarginalCdf, envConditionalCdf,
+                    envImportanceWidth, envImportanceHeight, envEnabled, envLuminanceScale,
+                    t_envMap, s_env, state.seed);
+                sum += envNee.contribution;
+            }
+            primaryEnvNee = sum / float(count);
+            if (!all(isfinite(primaryEnvNee)) || any(isnan(primaryEnvNee))) {
+                primaryEnvNee = 0.0.xxx;
+            }
+        }
+
+        // --- Primary BSDF continuation (env/emissive direct handled per scene type above) ---
         BSDFSample bs = sampleBSDF(primary.mat, primary.wo,
             primary.normal, primary.T, primary.B, primary.coatN, primary.coatT, primary.coatB, primary.backface, state.seed);
         if (bs.pdf <= 0.0 || maxComp(bs.weight) <= 0.0 || !all(isfinite(bs.weight))) {
@@ -1038,12 +1055,12 @@ void main(uint3 tid : SV_DispatchThreadID) {
     //    requests spatial reuse. PT enables spatial reuse by default (Application.cpp).
     float3 restirDirect = 0.0.xxx;
     float  restirM = 0.0;  // GI2.7: reservoir effective sample count for the M-aware denoiser
-    // GI2.6: reservoir handles BOTH emissive-triangle AND env-NEE direct. Runs when
-    // either light source is present (was emissive-only before). For IBL-only scenes
-    // (dragon_teapot: no emissive triangles, env map present), the reservoir now
-    // provides spatiotemporal reuse for the env direct term — previously only the
-    // 4-sample-per-frame primaryEnvNee inside estimateGiSample handled it, with no
-    // reuse. The primary env NEE is removed from estimateGiSample to avoid double-counting.
+    // GI2.6: reservoir runs for BOTH scene types. Emissive-lit scenes: reservoir handles
+    // emissive-triangle direct only (v0.7.0 behaviour — env NEE stays in estimateGiSample
+    // because the reservoir's single-shadow-ray scheme wastes candidates on occluded env
+    // directions in enclosed scenes). IBL-only scenes: reservoir handles env direct
+    // (giving it spatiotemporal reuse for the first time). The gate is the scene property
+    // emissiveTriangleCount, evaluated inside restirDiDirect's candidate generation.
     if (restirDiEnabled != 0u && (emissiveTriangleCount > 0u || hasEnvMap != 0u)) {
         RngState restirSeed = composeRngSeed(px, frameSampleIndex, 0xA4u, rngBaseSeed);
         const float4 restirResult = restirDiDirect(primary, px, restirSeed);
