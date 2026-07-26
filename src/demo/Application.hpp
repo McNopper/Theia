@@ -35,6 +35,10 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     /// A4: toggle ReSTIR DI spatiotemporal reservoir resampling (default on). When off the
     /// forward pass keeps ownership of emissive direct lighting (bit-identical pre-A4 path).
     void setRestirDiEnabled(bool enabled) noexcept { m_useRestirDi = enabled; }
+    /// GI2: toggle ReSTIR PT Enhanced — the unified DI+GI path reservoir (default on).
+    /// Mutually exclusive with ReSTIR DI: when PT is on, DI is forced off and the path
+    /// integrator owns primary emissive NEE (Hyperion bit-identical in expectation).
+    void setRestirPtEnabled(bool enabled) noexcept { m_useRestirPt = enabled; }
     void setTaaEnabled(bool enabled) noexcept { m_useTaa = enabled; }
     // harmonia::IRenderer
     void record(VkCommandBuffer cmd, const harmonia::RenderTarget& target) noexcept override;
@@ -127,6 +131,11 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     /// lighting (default on). When active the forward pass skips its emissive-derived
     /// rect lights (setRestirDiActive) so GiPass owns that term without double-counting.
     bool m_useRestirDi = true;
+    /// GI2: ReSTIR PT Enhanced — unified DI+GI path reservoir (default on). Mutually
+    /// exclusive with m_useRestirDi: when PT is active the path integrator owns primary
+    /// emissive NEE and ReSTIR DI is skipped. The forward pass's rect-light skip is
+    /// shared (same semantic — GiPass owns emissive direct either way).
+    bool m_useRestirPt = true;
     bool m_useTaa      = true;
     uint32_t m_sceneMaxDepth = 3u;
 

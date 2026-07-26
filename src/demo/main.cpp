@@ -16,6 +16,10 @@ int main(int argc, char* const argv[]) {
 
     bool cameraJitterEnabled = true;
     bool restirDiEnabled = true;
+    // GI2: ReSTIR PT Enhanced — unified DI+GI path reservoir (default on). Mutually
+    // exclusive with ReSTIR DI (the unified reservoir absorbs the separate DI path).
+    // `--no-restir-pt` falls back to the legacy ReSTIR DI direct-illumination path.
+    bool restirPtEnabled = true;
     // TAA is a real-time *window* feature: it temporally reprojects fresh, non-accumulated
     // frames during camera motion. It is on by default for the interactive window but does
     // NOT run under offscreen capture, which uses progressive accumulation instead (the two
@@ -31,6 +35,10 @@ int main(int argc, char* const argv[]) {
         }
         if (arg == "--no-restir-di") {
             restirDiEnabled = false;
+            continue;
+        }
+        if (arg == "--no-restir-pt") {
+            restirPtEnabled = false;
             continue;
         }
         if (arg == "--no-taa") {
@@ -61,6 +69,7 @@ int main(int argc, char* const argv[]) {
     theia::Application app;
     app.setCameraJitterEnabled(cameraJitterEnabled);
     app.setRestirDiEnabled(restirDiEnabled);
+    app.setRestirPtEnabled(restirPtEnabled);
     app.setTaaEnabled(taaEnabled);
     return app.run(std::move(config));
 }

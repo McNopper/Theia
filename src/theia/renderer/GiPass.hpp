@@ -80,7 +80,15 @@ class GiPass {
         /// forward pass's emissive-derived rect-light term (the forward pass must be
         /// told to skip those lights to avoid double-counting). When false the reservoir
         /// buffers are untouched and behaviour is bit-identical to the pre-A4 path.
+        /// Mutually exclusive with useRestirPt: when PT is on, DI is forced off.
         bool useRestirDi = true;
+        /// GI2: ReSTIR PT Enhanced — unified DI+GI path reservoir (default on). When
+        /// true the primary vertex's emissive-triangle NEE runs through the shared path
+        /// integrator (the same estimator Hyperion uses → bit-identical in expectation).
+        /// The forward pass still skips its emissive-derived rect lights (shared with
+        /// DI's semantic). Temporal/spatial reuse of path reservoirs is layered on top
+        /// (Phase 2+); the Phase 1 stub is unbiased but high-variance.
+        bool useRestirPt = true;
         /// A4: enable the (optional) spatial reuse follow-on. Default off — initial
         /// candidates + temporal reuse only, which avoids the single-pass spatial race.
         bool useRestirDiSpatial = false;
@@ -131,7 +139,7 @@ class GiPass {
         uint32_t restirDiEnabled = 0;              ///< A4: 1 = spatiotemporal reservoir DI; 0 = bit-identical fallback
         uint32_t restirDiSpatial = 0;              ///< A4: 1 = enable spatial reuse (default 0 = initial+temporal only)
         uint32_t restirHasMotion = 0;              ///< A4: 1 = real motion image bound; 0 = dummy (skip reprojection)
-        uint32_t _restirPad1 = 0;
+        uint32_t restirPtEnabled = 0;              ///< GI2: 1 = ReSTIR PT (path integrator owns primary emissive NEE); 0 = legacy DI path
     };
     static_assert(sizeof(GiPushConstants) == 156);
 

@@ -563,6 +563,7 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         .restirDiEnabled = (params.useRestirDi && m_reservoirBuf[0].isValid()) ? 1u : 0u,
         .restirDiSpatial = params.useRestirDiSpatial ? 1u : 0u,
         .restirHasMotion = (params.motionVectorView != VK_NULL_HANDLE) ? 1u : 0u,
+        .restirPtEnabled = params.useRestirPt ? 1u : 0u,
     };
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);

@@ -46,7 +46,7 @@ cbuffer GiPC {
     uint     restirDiEnabled;              // A4: 1 = spatiotemporal reservoir DI; 0 = no ReSTIR direct (bit-identical fallback)
     uint     restirDiSpatial;              // A4: 1 = enable spatial reuse pass (default 0 = initial+temporal only)
     uint     restirHasMotion;              // A4: 1 = t_motionVectors is a real motion image; 0 = dummy (skip reprojection)
-    uint     _restirPad1;
+    uint     restirPtEnabled;              // GI2: 1 = ReSTIR PT — path integrator owns primary emissive NEE; 0 = legacy DI path
 };
 
 // ── A4: ReSTIR DI reservoir type ──────────────────────────────────────────────
@@ -864,15 +864,37 @@ void main(uint3 tid : SV_DispatchThreadID) {
         sampleCount = 1u + uint(float(maxSamples - 1u) * t + 0.5);
     }
 
-    // A4: ReSTIR DI direct lighting from emissive triangles at the primary vertex.
-    // Runs ONCE per pixel (independent of c1 adaptive sampling, which only spawns extra
-    // indirect samples) and writes this pixel's reservoir for next-frame temporal reuse.
-    // Gated by restirDiEnabled: when 0 the reservoir buffers are untouched and the direct
-    // term is 0 (the forward pass keeps ownership of emissive direct — bit-identical
-    // fallback). When active the forward pass skips its emissive-derived rect lights so
-    // this contribution replaces (does not double-count) that term.
+    // A4/GI2: direct lighting from emissive triangles at the primary vertex. Two paths:
+    //   • ReSTIR PT (restirPtEnabled): the shared estimator's primary-vertex
+    //     evalEmissiveTriangleNEE — bit-identical to Hyperion in expectation. Single
+    //     sample per frame; Phase 2+ wraps this in a path reservoir (temporal+spatial
+    //     reuse) to recover ReSTIR DI's variance reduction. restirDirect carries the
+    //     contribution; the forward pass still skips its rect lights.
+    //   • ReSTIR DI (legacy, restirDiEnabled): spatiotemporal reservoir resampling.
+    //     Writes this pixel's reservoir for next-frame temporal reuse. When active the
+    //     forward pass skips its emissive-derived rect lights so this contribution
+    //     replaces (does not double-count) that term.
+    // Mutually exclusive — PT absorbs DI (sprint plan GI2 conflict resolution). Both
+    // paths composite `restirDirect` independently of the indirect sample's validity,
+    // matching the legacy ReSTIR DI contract (a degenerate GI bounce must not lose DI).
     float3 restirDirect = 0.0.xxx;
-    if (restirDiEnabled != 0u && emissiveTriangleCount > 0u) {
+    if (restirPtEnabled != 0u && emissiveTriangleCount > 0u) {
+        // GI2 Phase 1: single-sample primary emissive NEE via the shared estimator.
+        // Distinct RNG stream from the indirect GI samples so the two are decorrelated.
+        RngState ptSeed = composeRngSeed(px, frameSampleIndex, 0xA5u, rngBaseSeed);
+        TheiaTracer ptTracer;
+        restirDirect = evalEmissiveTriangleNEE(
+            ptTracer, primary,
+            emissiveTriangles, emissiveTriangleCount, emissiveCdf,
+            ptSeed) * exposure;
+        if (!all(isfinite(restirDirect)) || any(isnan(restirDirect))) {
+            restirDirect = 0.0.xxx;
+        }
+        // Hard firefly ceiling matching the indirect path (adaptiveClamp*3) — a degenerate
+        // solid-angle PDF on a near-specular surface can spike the contribution; this
+        // removes the outlier without the soft rescale that would bias the smooth term.
+        restirDirect = clamp(restirDirect, 0.0.xxx, (adaptiveClamp * 3.0).xxx);
+    } else if (restirDiEnabled != 0u && emissiveTriangleCount > 0u) {
         RngState restirSeed = composeRngSeed(px, frameSampleIndex, 0xA4u, rngBaseSeed);
         restirDirect = restirDiDirect(primary, px, restirSeed) * exposure;
         if (!all(isfinite(restirDirect)) || any(isnan(restirDirect))) {
@@ -894,10 +916,11 @@ void main(uint3 tid : SV_DispatchThreadID) {
         float3 sampleEnvNee;
         const bool valid = estimateGiSample(primary, sampleSeed, adaptiveClamp, sampleIndirect, sampleEnvNee);
         // Preserve legacy behaviour on the non-adaptive path: a single invalid sample leaves
-        // the pixel's accumulated indirect value untouched. The ReSTIR direct term (computed
-        // and reservoir-persisted above) is still composited so DI keeps converging.
+        // the pixel's accumulated indirect value untouched. The direct term (ReSTIR DI or
+        // ReSTIR PT — whichever ran above) is still composited so direct keeps converging
+        // even when the GI bounce degenerates.
         if (maxSamples == 1u && !valid) {
-            if (restirDiEnabled != 0u) {
+            if (restirDirect.x != 0.0 || restirDirect.y != 0.0 || restirDirect.z != 0.0) {
                 hdrImage[px] += float4(restirDirect, 0.0);
             }
             return;
