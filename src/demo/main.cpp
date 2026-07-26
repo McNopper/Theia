@@ -70,6 +70,18 @@ int main(int argc, char* const argv[]) {
     app.setCameraJitterEnabled(cameraJitterEnabled);
     app.setRestirDiEnabled(restirDiEnabled);
     app.setRestirPtEnabled(restirPtEnabled);
+    // GI2 Phase 4: A-SVGF correlation awareness. ReSTIR PT's spatial reuse introduces
+    // inter-pixel sample correlation (neighbours share reservoir samples). The à-trous
+    // filter's per-pixel variance estimate (from the gradient/variance guide) under-counts
+    // this shared-sample correlation, so a slightly stronger spatial filter compensates.
+    // Temporal accumulation is unaffected — per-frame RNG reseeding keeps temporal paths
+    // independent. Only tune the interactive-window denoiser; the parity/accumulation path
+    // attenuates the denoiser to identity regardless.
+    // Full M-aware denoising (denoiser reads the reservoir's effective sample count) is
+    // future work — it needs a new G-buffer image + Harmonia denoiser shader changes.
+    if (restirPtEnabled && config.denoiser.strength == 0.45F) {
+        config.denoiser.strength = 0.55F;
+    }
     app.setTaaEnabled(taaEnabled);
     return app.run(std::move(config));
 }
