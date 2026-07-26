@@ -753,9 +753,11 @@ bool ForwardRenderer::createPipeline() {
         return false;
     }
 
-    // Single pool for all four sets.
+    // Single pool for all four sets. Storage-buffer count: set 0 (mesh) 11 +
+    // set 1 (mat) 5 + set 2 (ibl env CDFs 6/7) 2 = 18 total. Set 3 (bindless
+    // textures) uses COMBINED_IMAGE_SAMPLER, no storage-buffer slot.
     const std::array<VkDescriptorPoolSize, 5> poolSizes{
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 17},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 18},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 6},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLER, 1},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures},
