@@ -560,8 +560,12 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         .a3RegularizationEnabled = params.useA3Regularization ? 1u : 0u,
         .hasGradientVariance = (params.gradientVarianceView != VK_NULL_HANDLE) ? 1u : 0u,
         .giAdaptiveMaxSamples = std::max(1u, params.adaptiveMaxSamples),
-        .restirDiEnabled = (params.useRestirDi && m_reservoirBuf[0].isValid()) ? 1u : 0u,
-        .restirDiSpatial = params.useRestirDiSpatial ? 1u : 0u,
+        // GI2 Phase 2: the reservoir path serves both legacy ReSTIR DI and ReSTIR PT
+        // (PT absorbs DI — sprint plan GI2 conflict resolution). restirDiEnabled here
+        // means "reservoir active"; restirDiSpatial enables the Phase 2 neighbour-reuse
+        // pass (on by default for PT; opt-in for legacy DI via useRestirDiSpatial).
+        .restirDiEnabled = ((params.useRestirDi || params.useRestirPt) && m_reservoirBuf[0].isValid()) ? 1u : 0u,
+        .restirDiSpatial = (params.useRestirDiSpatial || params.useRestirPt) ? 1u : 0u,
         .restirHasMotion = (params.motionVectorView != VK_NULL_HANDLE) ? 1u : 0u,
         .restirPtEnabled = params.useRestirPt ? 1u : 0u,
     };

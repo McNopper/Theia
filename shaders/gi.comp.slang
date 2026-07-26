@@ -509,6 +509,55 @@ float3 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
     // accumulated frames. The stored M (kRestirInitialCandidates + capped history) stays
     // bounded on its own and is re-capped when reused next frame.
 
+    // ── Spatial reuse (Bitterli 2020 Alg. 5; GI2 Phase 2). Merge neighbour reservoirs
+    //    from the PREV frame's buffer (same binding as temporal — avoids the read-write
+    //    hazard a same-frame spatial pass would create in this single dispatch).
+    //    Disocclusion check via G-buffer: world-position distance (view-scaled) and
+    //    view-space normal similarity. Compatible neighbours contribute their full
+    //    history M (capped); incompatible ones are skipped. The shift is the same
+    //    "re-evaluate target PDF at current surface" used for temporal — valid because
+    //    the reservoir carries an explicit world-space sample point.
+    if (restirDiSpatial != 0u) {
+        const uint  kSpatialNeighbors = 5u;
+        const float kSpatialRadius    = 32.0;
+        const float kPosThresholdRel  = 0.01;   // 1% of view distance
+        const float kNormalThreshold  = 0.98;   // ~11.5° half-angle
+
+        // Current pixel's G-buffer edge-stop signals.
+        const float3 curWorldPos = t_giBuffer.Load(int3(int(px.x), int(px.y), 0)).xyz;
+        const float3 curViewN    = t_gbuffer.Load(int3(int(px.x), int(px.y), 0)).xyz * 2.0 - 1.0;
+        const float  viewDist    = length(curWorldPos - cameraPos.xyz);
+        const float  posThresh   = max(viewDist * kPosThresholdRel, 1.0e-3);
+
+        for (uint n = 0u; n < kSpatialNeighbors; ++n) {
+            // Random offset in [-radius, +radius]^2 (Bitterli 2020 §5.2 random neighbour).
+            const float2 off = (float2(randFloat(rng), randFloat(rng)) * 2.0 - 1.0) * kSpatialRadius;
+            const int2 nCoord = int2(int(px.x) + int(round(off.x)), int(px.y) + int(round(off.y)));
+            if (nCoord.x < 0 || nCoord.y < 0 ||
+                nCoord.x >= int(screenWidth) || nCoord.y >= int(screenHeight)) {
+                continue;
+            }
+            // Disocclusion: skip neighbours on a different surface.
+            const float3 nWorldPos = t_giBuffer.Load(int3(nCoord.x, nCoord.y, 0)).xyz;
+            const float3 nViewN    = t_gbuffer.Load(int3(nCoord.x, nCoord.y, 0)).xyz * 2.0 - 1.0;
+            if (length(curWorldPos - nWorldPos) > posThresh) continue;
+            if (dot(curViewN, nViewN) < kNormalThreshold) continue;
+
+            const uint nIdx = uint(nCoord.y) * screenWidth + uint(nCoord.x);
+            Reservoir neighbor = t_reservoirsPrev[nIdx];
+            if (neighbor.lightIdx != kReservoirEmpty && neighbor.M > 0u) {
+                neighbor.M = min(neighbor.M, kRestirMCap);
+                RestirSampleEval ne = evalReservoirSample(primary, neighbor.lightIdx,
+                                                          neighbor.samplePoint, neighbor.sampleNormal);
+                if (ne.valid) {
+                    combineTwoReservoirs(r, neighbor, ne.Le, ne.bsdfCos, ne.dist2, rng);
+                } else {
+                    r.M += neighbor.M; // account for history even if its sample is now invalid
+                }
+            }
+        }
+    }
+
     // ── Final unbiased weight W = w_sum / (M * p_hat(y_chosen)). ──
     float3 contribution = 0.0.xxx;
     RestirSampleEval fe = evalReservoirSample(primary, r.lightIdx, r.samplePoint, r.sampleNormal);
@@ -864,37 +913,17 @@ void main(uint3 tid : SV_DispatchThreadID) {
         sampleCount = 1u + uint(float(maxSamples - 1u) * t + 0.5);
     }
 
-    // A4/GI2: direct lighting from emissive triangles at the primary vertex. Two paths:
-    //   • ReSTIR PT (restirPtEnabled): the shared estimator's primary-vertex
-    //     evalEmissiveTriangleNEE — bit-identical to Hyperion in expectation. Single
-    //     sample per frame; Phase 2+ wraps this in a path reservoir (temporal+spatial
-    //     reuse) to recover ReSTIR DI's variance reduction. restirDirect carries the
-    //     contribution; the forward pass still skips its rect lights.
-    //   • ReSTIR DI (legacy, restirDiEnabled): spatiotemporal reservoir resampling.
-    //     Writes this pixel's reservoir for next-frame temporal reuse. When active the
-    //     forward pass skips its emissive-derived rect lights so this contribution
-    //     replaces (does not double-count) that term.
-    // Mutually exclusive — PT absorbs DI (sprint plan GI2 conflict resolution). Both
-    // paths composite `restirDirect` independently of the indirect sample's validity,
-    // matching the legacy ReSTIR DI contract (a degenerate GI bounce must not lose DI).
+    // A4/GI2: direct lighting from emissive triangles at the primary vertex. Both the
+    // legacy ReSTIR DI and the GI2 ReSTIR PT paths route through the SAME reservoir
+    // (restirDiDirect) — PT absorbs DI per the sprint plan GI2 conflict resolution. The
+    // reservoir does initial-candidate RIS + temporal reuse + spatial reuse (Phase 2),
+    // computes the unbiased weight W, and traces ONE shadow ray. The forward pass skips
+    // its emissive-derived rect lights for both paths (shared setRestirDiActive semantic).
+    //    restirDiEnabled is set by GiPass when EITHER useRestirDi OR useRestirPt is true
+    //    and the reservoir buffers are valid; restirDiSpatial is set when EITHER path
+    //    requests spatial reuse. PT enables spatial reuse by default (Application.cpp).
     float3 restirDirect = 0.0.xxx;
-    if (restirPtEnabled != 0u && emissiveTriangleCount > 0u) {
-        // GI2 Phase 1: single-sample primary emissive NEE via the shared estimator.
-        // Distinct RNG stream from the indirect GI samples so the two are decorrelated.
-        RngState ptSeed = composeRngSeed(px, frameSampleIndex, 0xA5u, rngBaseSeed);
-        TheiaTracer ptTracer;
-        restirDirect = evalEmissiveTriangleNEE(
-            ptTracer, primary,
-            emissiveTriangles, emissiveTriangleCount, emissiveCdf,
-            ptSeed) * exposure;
-        if (!all(isfinite(restirDirect)) || any(isnan(restirDirect))) {
-            restirDirect = 0.0.xxx;
-        }
-        // Hard firefly ceiling matching the indirect path (adaptiveClamp*3) — a degenerate
-        // solid-angle PDF on a near-specular surface can spike the contribution; this
-        // removes the outlier without the soft rescale that would bias the smooth term.
-        restirDirect = clamp(restirDirect, 0.0.xxx, (adaptiveClamp * 3.0).xxx);
-    } else if (restirDiEnabled != 0u && emissiveTriangleCount > 0u) {
+    if (restirDiEnabled != 0u && emissiveTriangleCount > 0u) {
         RngState restirSeed = composeRngSeed(px, frameSampleIndex, 0xA4u, rngBaseSeed);
         restirDirect = restirDiDirect(primary, px, restirSeed) * exposure;
         if (!all(isfinite(restirDirect)) || any(isnan(restirDirect))) {
