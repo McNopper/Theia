@@ -48,6 +48,7 @@ cbuffer GiPC {
     uint     restirDiSpatial;              // A4: 1 = enable spatial reuse pass (default 0 = initial+temporal only)
     uint     restirHasMotion;              // A4: 1 = t_motionVectors is a real motion image; 0 = dummy (skip reprojection)
     uint     restirPtEnabled;              // GI2: 1 = ReSTIR PT — path integrator owns primary emissive NEE; 0 = legacy DI path
+    uint     restirPtPathEnabled;          // GI2 full PT: 1 = multi-bounce path reservoir owns the indirect walk
 };
 
 // ── A4: ReSTIR DI reservoir type ──────────────────────────────────────────────
@@ -115,6 +116,97 @@ bool reservoirUpdate(inout Reservoir r, uint lightIdx, float3 samplePt, float3 s
     return false;
 }
 
+// ── GI2 full PT: multi-bounce path reservoir (GRIS random-replay shift) ──────
+// One indirect PATH candidate per pixel, stored as its RNG replay token. A
+// candidate's value g is the full multi-bounce indirect estimate of the walk
+// (estimateGiSampleCore with primary env NEE excluded): the walk's throughput
+// already carries the 1/pdf factors, so g IS the per-seed path-integral
+// estimator value and the RIS target is simply p̂ = luminance(g) — no path-pdf
+// instrumentation, no shift Jacobian. This is the seed-space formulation of
+// Talbot RIS: every candidate (local, temporal, spatial) is uniform in the
+// shared Owen-scrambled Sobol seed space, so replaying a stored seed at the
+// CURRENT primary surface draws a sample from the same canonical distribution
+// as a local candidate (Lin 2022 GRIS §5 random-replay). Unbiased by
+// construction; medium walks, Russian roulette and opacity gates ride along
+// inside g for free.
+struct PathReservoir {
+    float3 g;              // selected candidate's indirect estimate, evaluated at THIS pixel
+    uint   rngKey;         // replay token: RngState.key of the selected candidate
+    uint   rngIndex;       // replay token: RngState.index (dim always restarts at 0)
+    float  W;              // unbiased contribution weight = w_sum / (M * p̂(y))
+    float  w_sum;          // running sum of resampling weights
+    uint   M;              // number of candidates this reservoir has seen
+    uint   candidateHash;  // hash of the replay token (duplication map)
+};
+
+PathReservoir makeEmptyPathReservoir() {
+    PathReservoir r;
+    r.g             = 0.0.xxx;
+    r.rngKey        = 0u;
+    r.rngIndex      = 0u;
+    r.W             = 0.0;
+    r.w_sum         = 0.0;
+    r.M             = 0u;
+    r.candidateHash = 0u;
+    return r;
+}
+
+uint pathCandidateHash(uint key, uint index) {
+    uint h = hashCombine(key, index);
+    return (h == 0u) ? 1u : h; // 0 is the empty marker
+}
+
+// RngState for a local path candidate. Independent walks are decorrelated via the
+// Sobol sample INDEX (not the dimension offset): the main sample loop reserves
+// indices [0, 8) per frame (maxSamples ≤ 4 for env NEE + margin), so path
+// candidates take index base 8 with a stride of 16 (≥ base + max candidates).
+RngState pathCandidateSeed(uint2 px, uint candidateIdx) {
+    return composeRngSeed(px, frameSampleIndex * 16u + 8u + candidateIdx, 0u, rngBaseSeed);
+}
+
+RngState pathReplaySeed(uint key, uint index) {
+    RngState s;
+    s.key   = key;
+    s.index = index;
+    s.dim   = 0u;
+    return s;
+}
+
+// WRS update with a replayable candidate (weight = p̂ = luminance(g); the
+// seed-space proposal density q ≡ 1 cancels). Attempts count toward M even when
+// the walk degenerated, keeping M consistent with the candidate budget.
+void pathReservoirUpdate(inout PathReservoir r, RngState candSeed, float3 g, bool valid,
+                         inout RngState rng) {
+    const float w = valid ? restirTargetLuma(g) : 0.0;
+    r.w_sum += w;
+    r.M += 1u;
+    if (w > 0.0 && randFloat(rng) < (w / max(r.w_sum, 1.0e-10))) {
+        r.rngKey        = candSeed.key;
+        r.rngIndex      = candSeed.index;
+        r.g             = g;
+        r.candidateHash = pathCandidateHash(candSeed.key, candSeed.index);
+    }
+}
+
+// Merge a source reservoir (temporal/spatial reuse), Bitterli 2020 Alg. 4 in seed
+// space. gReplayed is the source's selected candidate REPLAYED at the current
+// primary surface; its luminance is p̂(y_src) evaluated at the current pixel.
+// On selection the reservoir stores the LOCAL replay (never the source's g,
+// which was evaluated at a different surface).
+void pathReservoirCombine(inout PathReservoir r_dst, PathReservoir r_src,
+                          float3 gReplayed, bool replayValid, inout RngState rng) {
+    const float pHat = replayValid ? restirTargetLuma(gReplayed) : 0.0;
+    const float w = pHat * r_src.W * float(r_src.M);
+    r_dst.M += r_src.M;
+    r_dst.w_sum += w;
+    if (w > 0.0 && randFloat(rng) < (w / max(r_dst.w_sum, 1.0e-10))) {
+        r_dst.rngKey        = r_src.rngKey;
+        r_dst.rngIndex      = r_src.rngIndex;
+        r_dst.g             = gReplayed;
+        r_dst.candidateHash = r_src.candidateHash;
+    }
+}
+
 // Rec.709 luminance for the ReSTIR target function (Bitterli 2020 §5.2). Any
 // positive scalar target keeps the estimator unbiased; the choice only affects
 // variance, so a fixed luminance is used regardless of working colour space.
@@ -156,6 +248,11 @@ float targetPdfEnv(float3 Le, float3 bsdfTimesCos) {
 [[vk::binding(18, 0)]] Texture2D<float2>                   t_motionVectors;    // screen-space (dx,dy) in pixels; 1×1 dummy → zero motion
 // Per-instance object→world transforms (one float4x4 per instance, row-major).
 [[vk::binding(19, 0)]] StructuredBuffer<float4x4>          instanceTransforms;
+
+// GI2 full PT: path reservoir ping-pong buffers (multi-bounce indirect reuse).
+// Layout: one PathReservoir per pixel, indexed [y * screenWidth + x].
+[[vk::binding(20, 0)]] RWStructuredBuffer<PathReservoir>   t_pathReservoirsCur;   // current-frame write
+[[vk::binding(21, 0)]] StructuredBuffer<PathReservoir>     t_pathReservoirsPrev;  // previous-frame read
 
 /// Inverse of a row-major 3×3 lives in common.slang (shared with forward_render.mesh).
 
@@ -735,8 +832,8 @@ float4 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
 /// several of these). Returns false when the sample produced no usable contribution (degenerate
 /// BSDF direction or a non-finite result); callers treat that as a zero contribution. `outEnvNee`
 /// is kept separate from `outIndirect` so the firefly clamp never biases the sun term.
-bool estimateGiSample(SurfaceHit primary, RngState seed, float adaptiveClamp,
-                      out float3 outIndirect, out float3 outEnvNee) {
+bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp, bool includePrimaryEnvNee,
+                          out float3 outIndirect, out float3 outEnvNee) {
     outIndirect = 0.0.xxx;
     outEnvNee = 0.0.xxx;
 
@@ -772,9 +869,11 @@ bool estimateGiSample(SurfaceHit primary, RngState seed, float adaptiveClamp,
     //   • IBL-only scenes (emissiveTriangleCount == 0): env NEE moved to the reservoir
     //     (restirDiDirect) — giving it spatial+temporal reuse for the first time.
     // The gate is the scene property emissiveTriangleCount, not a knob.
+    // GI2 full PT: path-reservoir candidates pass includePrimaryEnvNee = false — the
+    // env NEE term is owned outside the walk, so the reservoir never double-counts it.
     float3 primaryEnvNee = 0.0.xxx;
     if (!primaryPassThrough) {
-        if (envImportance && emissiveTriangleCount > 0u) {
+        if (includePrimaryEnvNee && envImportance && emissiveTriangleCount > 0u) {
             float3 sum = 0.0.xxx;
             const uint count = 4u;
             for (uint i = 0u; i < count; ++i) {
@@ -933,6 +1032,162 @@ bool estimateGiSample(SurfaceHit primary, RngState seed, float adaptiveClamp,
     return true;
 }
 
+bool estimateGiSample(SurfaceHit primary, RngState seed, float adaptiveClamp,
+                      out float3 outIndirect, out float3 outEnvNee) {
+    return estimateGiSampleCore(primary, seed, adaptiveClamp, true, outIndirect, outEnvNee);
+}
+
+/// GI2 full PT: one replayable multi-bounce indirect path candidate. Returns the
+/// walk's full indirect estimate g (throughput carries 1/pdf → g is the per-seed
+/// path-integral estimator value). Primary env NEE is excluded — it is owned by
+/// estimateGiSample's envNee channel (emissive scenes) or the DI reservoir
+/// (IBL-only scenes), so the path reservoir never double-counts it.
+bool traceGiPathCandidate(SurfaceHit primary, RngState seed, float adaptiveClamp, out float3 outG) {
+    float3 envNeeUnused;
+    return estimateGiSampleCore(primary, seed, adaptiveClamp, false, outG, envNeeUnused);
+}
+
+/// GI2 full PT: primary-vertex env NEE WITHOUT the multi-bounce walk, for the
+/// path-reservoir mode. Mirrors the opacity gate + 4-sample env NEE block of
+/// estimateGiSampleCore exactly (emissive-lit scenes only; IBL-only scenes route
+/// env through the DI reservoir). The opacity pass-through draw is independent
+/// from the path candidates' — marginally unbiased per term.
+float3 primaryEnvNeeOnly(SurfaceHit primary, RngState seed) {
+    const bool envEnabled = (hasEnvMap != 0u);
+    const bool envImportance = envEnabled && envImportanceWidth > 0u && envImportanceHeight > 0u;
+    if (!envImportance || emissiveTriangleCount == 0u) {
+        return 0.0.xxx;
+    }
+    TheiaTracer tracer;
+    const float primaryOpacity = saturate(primary.mat.opacityFlagsPad.x);
+    if (randFloat(seed) < (1.0 - primaryOpacity)) {
+        return 0.0.xxx; // stochastic geometry_opacity pass-through: no primary shading
+    }
+    float3 sum = 0.0.xxx;
+    const uint count = 4u;
+    for (uint i = 0u; i < count; ++i) {
+        EnvNeeSample envNee = evalEnvNEESample(
+            tracer, primary,
+            envMarginalCdf, envConditionalCdf,
+            envImportanceWidth, envImportanceHeight, envEnabled, envLuminanceScale,
+            t_envMap, s_env, seed);
+        sum += envNee.contribution;
+    }
+    float3 result = (sum / float(count)) * exposure;
+    if (!all(isfinite(result)) || any(isnan(result))) {
+        return 0.0.xxx;
+    }
+    return result;
+}
+
+/// GI2 full PT: multi-bounce path reservoir for the indirect term (ReSTIR PT,
+/// GRIS random-replay shift). RIS over replayable path candidates: local walks +
+/// spatial reuse (G-buffer gated neighbours), all replayed at the CURRENT primary
+/// surface. Returns float4(indirectContribution, reservoirM).
+///
+/// NO TEMPORAL MERGE — by design. A streamed temporal merge feeds yesterday's
+/// MERGED reservoir back as today's input (feedback recursion); with heavy-tailed
+/// path candidates the re-selected history double-counts and the per-frame
+/// estimator drifts a few % (measured: −2.8% darker on cornell indirect at
+/// 1024 frames, confirmed by Monte-Carlo simulation of the merge; M-cap sweeps
+/// do not fix it). Theia's progressive accumulation already integrates the
+/// temporal axis unbiasedly, so temporal reservoir reuse is redundant here.
+/// Instead, spatial reuse reads neighbours' UNMERGED local reservoirs (written
+/// last frame, never the merged output): a neighbour's local candidate replayed
+/// at this surface is statistically identical to a fresh local candidate
+/// (seed-space uniformity), so the merged estimator is plain unbiased RIS over
+/// ≤ 1+3 independent candidates and the frame average converges to ground truth.
+float4 restirPtIndirect(SurfaceHit primary, uint2 px, float adaptiveClamp, inout RngState rng) {
+    const uint kPathLocalCandidates = 1u;   // local walks per pixel per frame
+    const uint pixelIdx = px.y * screenWidth + px.x;
+
+    // ── Local candidates — stored UNMERGED for next frame's spatial reuse. ──
+    PathReservoir rLocal = makeEmptyPathReservoir();
+    for (uint i = 0u; i < kPathLocalCandidates; ++i) {
+        const RngState candSeed = pathCandidateSeed(px, i);
+        float3 g;
+        const bool valid = traceGiPathCandidate(primary, candSeed, adaptiveClamp, g);
+        pathReservoirUpdate(rLocal, candSeed, g, valid, rng);
+    }
+    // Unbiased weight of the local reservoir (neighbours merge with w = p̂·W·M).
+    {
+        const float pHatL = restirTargetLuma(rLocal.g);
+        rLocal.W = (rLocal.M > 0u && pHatL > 0.0)
+            ? rLocal.w_sum / max(float(rLocal.M) * pHatL, 1.0e-10) : 0.0;
+    }
+    t_pathReservoirsCur[pixelIdx] = rLocal;
+
+    // ── Spatial reuse: merge neighbours' LOCAL reservoirs (independent candidates). ──
+    PathReservoir r = rLocal;
+    if (restirDiSpatial != 0u) {
+        const uint  kPathSpatialNeighbors = 3u;
+        const float kSpatialRadius        = 32.0;
+        const float kPosThresholdRel      = 0.01;
+        const float kNormalThreshold      = 0.98;
+
+        const float3 curWorldPos = t_giBuffer.Load(int3(int(px.x), int(px.y), 0)).xyz;
+        const float3 curViewN    = t_gbuffer.Load(int3(int(px.x), int(px.y), 0)).xyz * 2.0 - 1.0;
+        const float  viewDist    = length(curWorldPos - cameraPos.xyz);
+        const float  posThresh   = max(viewDist * kPosThresholdRel, 1.0e-3);
+
+        // Duplication map (GI2.5): skip a neighbour whose selected candidate was
+        // already merged from a different neighbour (same replay token).
+        uint seenHashes[4]; // 1 (own) + up to 3 neighbours
+        seenHashes[0] = r.candidateHash;
+        uint seenCount = 1u;
+
+        for (uint n = 0u; n < kPathSpatialNeighbors; ++n) {
+            const float2 off = (float2(randFloat(rng), randFloat(rng)) * 2.0 - 1.0) * kSpatialRadius;
+            const int2 nCoord = int2(int(px.x) + int(round(off.x)), int(px.y) + int(round(off.y)));
+            if (nCoord.x < 0 || nCoord.y < 0 ||
+                nCoord.x >= int(screenWidth) || nCoord.y >= int(screenHeight)) {
+                continue;
+            }
+            const float3 nWorldPos = t_giBuffer.Load(int3(nCoord.x, nCoord.y, 0)).xyz;
+            const float3 nViewN    = t_gbuffer.Load(int3(nCoord.x, nCoord.y, 0)).xyz * 2.0 - 1.0;
+            if (length(curWorldPos - nWorldPos) > posThresh) continue;
+            if (dot(curViewN, nViewN) < kNormalThreshold) continue;
+
+            PathReservoir neighbor = t_pathReservoirsPrev[uint(nCoord.y) * screenWidth + uint(nCoord.x)];
+            if (neighbor.M == 0u) continue;
+            if (neighbor.W == 0.0) {
+                // Empty local reservoir (dark walk): counts as a candidate attempt
+                // but carries no sample — no replay walk needed.
+                r.M += neighbor.M;
+                continue;
+            }
+            bool duplicate = false;
+            for (uint h = 0u; h < seenCount; ++h) {
+                if (seenHashes[h] == neighbor.candidateHash) { duplicate = true; break; }
+            }
+            if (duplicate) continue;
+            if (seenCount < 4u) seenHashes[seenCount++] = neighbor.candidateHash;
+
+            float3 gN;
+            const bool vn = traceGiPathCandidate(primary, pathReplaySeed(neighbor.rngKey, neighbor.rngIndex),
+                                                 adaptiveClamp, gN);
+            pathReservoirCombine(r, neighbor, gN, vn, rng);
+        }
+    }
+
+    // ── Final unbiased weight W = w_sum / (M · p̂(y)); contribution = g(y)·W. ──
+    float3 contribution = 0.0.xxx;
+    const float pHat = restirTargetLuma(r.g);
+    if (r.M > 0u && pHat > 0.0) {
+        r.W = r.w_sum / max(float(r.M) * pHat, 1.0e-10);
+        contribution = r.g * r.W;
+    } else {
+        r.W = 0.0;
+    }
+    if (!all(isfinite(contribution)) || any(isnan(contribution))) {
+        contribution = 0.0.xxx;
+    }
+    // Hard firefly ceiling matching the DI reservoir / indirect path.
+    contribution = clamp(contribution, 0.0.xxx, (adaptiveClamp * 3.0).xxx);
+
+    return float4(contribution, float(r.M));
+}
+
 [numthreads(8, 8, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
     if (tid.x >= screenWidth || tid.y >= screenHeight) {
@@ -1080,12 +1335,29 @@ void main(uint3 tid : SV_DispatchThreadID) {
         restirDirect = clamp(restirDirect, 0.0.xxx, (adaptiveClamp * 3.0).xxx);
     }
 
+    // GI2 full PT: multi-bounce path reservoir owns the indirect walk. Replaces the
+    // per-sample estimateGiSample multi-bounce loop below; primary env NEE (emissive
+    // scenes) still runs per-sample via primaryEnvNeeOnly. The M channel accumulates
+    // the path reservoir's M alongside the DI reservoir's for the M-aware denoiser.
+    float3 restirPathIndirect = 0.0.xxx;
+    if (restirPtPathEnabled != 0u) {
+        RngState pathSeed = composeRngSeed(px, frameSampleIndex, 0xB7u, rngBaseSeed);
+        const float4 pathResult = restirPtIndirect(primary, px, adaptiveClamp, pathSeed);
+        restirPathIndirect = pathResult.xyz;
+        restirM += pathResult.w;
+    }
+
     float3 sumIndirect = 0.0.xxx;
     float3 sumEnvNee = 0.0.xxx;
     for (uint s = 0u; s < sampleCount; ++s) {
         // Decorrelate each extra sample with a distinct Sobol' index. Reserving maxSamples
         // indices per frame keeps samples from overlapping across frames or within a pixel.
         RngState sampleSeed = composeRngSeed(px, frameSampleIndex * maxSamples + s, 0u, rngBaseSeed);
+        if (restirPtPathEnabled != 0u) {
+            // Path reservoir owns the multi-bounce walk; only primary env NEE remains.
+            sumEnvNee += primaryEnvNeeOnly(primary, sampleSeed);
+            continue;
+        }
         float3 sampleIndirect;
         float3 sampleEnvNee;
         const bool valid = estimateGiSample(primary, sampleSeed, adaptiveClamp, sampleIndirect, sampleEnvNee);
@@ -1110,5 +1382,5 @@ void main(uint3 tid : SV_DispatchThreadID) {
     const float invN = 1.0 / float(sampleCount);
     // GI2.7: M in alpha — OVERWRITE (not +=) so the forward pass's indirectWeight
     // doesn't pollute the M channel. RGB still adds to the forward pass's base color.
-    hdrImage[px] = float4(hdrImage[px].xyz + (sumIndirect + sumEnvNee) * invN + restirDirect, restirM);
+    hdrImage[px] = float4(hdrImage[px].xyz + (sumIndirect + sumEnvNee) * invN + restirDirect + restirPathIndirect, restirM);
 }

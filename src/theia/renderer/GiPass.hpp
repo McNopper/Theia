@@ -90,6 +90,11 @@ class GiPass {
         /// DI's semantic). Temporal/spatial reuse of path reservoirs is layered on top
         /// (Phase 2+); the Phase 1 stub is unbiased but high-variance.
         bool useRestirPt = true;
+        /// GI2 full PT: multi-bounce path reservoir for the INDIRECT term (GRIS
+        /// random-replay shift). Replaces the per-sample estimateGiSample multi-bounce
+        /// walk with RIS over replayable path candidates (local + temporal + spatial).
+        /// Only meaningful with useRestirPt; the application gates it accordingly.
+        bool useRestirPtPath = true;
         /// A4: enable the (optional) spatial reuse follow-on. Default off — initial
         /// candidates + temporal reuse only, which avoids the single-pass spatial race.
         bool useRestirDiSpatial = false;
@@ -142,8 +147,9 @@ class GiPass {
         uint32_t restirDiSpatial = 0;              ///< A4: 1 = enable spatial reuse (default 0 = initial+temporal only)
         uint32_t restirHasMotion = 0;              ///< A4: 1 = real motion image bound; 0 = dummy (skip reprojection)
         uint32_t restirPtEnabled = 0;              ///< GI2: 1 = ReSTIR PT (path integrator owns primary emissive NEE); 0 = legacy DI path
+        uint32_t restirPtPathEnabled = 0;          ///< GI2 full PT: 1 = multi-bounce path reservoir owns the indirect walk
     };
-    static_assert(sizeof(GiPushConstants) == 220);
+    static_assert(sizeof(GiPushConstants) == 224);
 
     [[nodiscard]] bool createDescriptors();
     [[nodiscard]] bool createPipeline(const char* giSpv);
@@ -183,6 +189,11 @@ class GiPass {
     Buffer m_reservoirBuf[2]{};
     uint32_t m_reservoirPingPong = 0;  ///< index of the buffer written THIS frame
     bool m_reservoirsCleared = false;  ///< one-time zero-fill of both reservoir buffers
+    /// GI2 full PT: path reservoir ping-pong buffers (bindings 20 = cur, 21 = prev).
+    static constexpr VkDeviceSize kPathReservoirStride = 64; ///< >= Slang PathReservoir stride
+    Buffer m_pathReservoirBuf[2]{};
+    uint32_t m_pathReservoirPingPong = 0;
+    bool m_pathReservoirsCleared = false;
     Image m_dummyMotionVectors{};      ///< 1×1 R32G32F zero placeholder for binding 18
     bool m_dummyMotionReady = false;
     VkImageView m_boundMotionVectorView = VK_NULL_HANDLE;

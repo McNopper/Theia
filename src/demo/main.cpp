@@ -20,6 +20,10 @@ int main(int argc, char* const argv[]) {
     // exclusive with ReSTIR DI (the unified reservoir absorbs the separate DI path).
     // `--no-restir-pt` falls back to the legacy ReSTIR DI direct-illumination path.
     bool restirPtEnabled = true;
+    // GI2 full PT: multi-bounce path reservoir for the indirect term (default on,
+    // only effective with PT). `--no-restir-pt-path` keeps PT but runs the classic
+    // per-sample multi-bounce walk instead.
+    bool restirPtPathEnabled = true;
     // TAA is a real-time *window* feature: it temporally reprojects fresh, non-accumulated
     // frames during camera motion. It is on by default for the interactive window but does
     // NOT run under offscreen capture, which uses progressive accumulation instead (the two
@@ -39,6 +43,10 @@ int main(int argc, char* const argv[]) {
         }
         if (arg == "--no-restir-pt") {
             restirPtEnabled = false;
+            continue;
+        }
+        if (arg == "--no-restir-pt-path") {
+            restirPtPathEnabled = false;
             continue;
         }
         if (arg == "--no-taa") {
@@ -70,6 +78,7 @@ int main(int argc, char* const argv[]) {
     app.setCameraJitterEnabled(cameraJitterEnabled);
     app.setRestirDiEnabled(restirDiEnabled);
     app.setRestirPtEnabled(restirPtEnabled);
+    app.setRestirPtPathEnabled(restirPtPathEnabled);
     // GI2 Phase 4: A-SVGF correlation awareness. ReSTIR PT's spatial reuse introduces
     // inter-pixel sample correlation (neighbours share reservoir samples). The à-trous
     // filter's per-pixel variance estimate (from the gradient/variance guide) under-counts
@@ -77,8 +86,8 @@ int main(int argc, char* const argv[]) {
     // Temporal accumulation is unaffected — per-frame RNG reseeding keeps temporal paths
     // independent. Only tune the interactive-window denoiser; the parity/accumulation path
     // attenuates the denoiser to identity regardless.
-    // Full M-aware denoising (denoiser reads the reservoir's effective sample count) is
-    // future work — it needs a new G-buffer image + Harmonia denoiser shader changes.
+    // M-aware denoising (GI2.7) is shipped: the denoiser reads the reservoirs' effective
+    // sample count M via the HDR alpha channel.
     if (restirPtEnabled && config.denoiser.strength == 0.45F) {
         config.denoiser.strength = 0.55F;
     }

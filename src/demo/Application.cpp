@@ -399,6 +399,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         // correct for the static offscreen audit).
         gp.useRestirDi = m_useRestirDi && !m_useRestirPt;
         gp.useRestirPt = m_useRestirPt;
+        gp.useRestirPtPath = m_useRestirPtPath && m_useRestirPt;
         gp.motionVectorView = VK_NULL_HANDLE;
         m_pendingMvp.curViewProj  = curViewProj;
         m_pendingMvp.prevViewProj = m_prevViewProjValid ? m_prevViewProj : curViewProj;
@@ -575,6 +576,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         // is guaranteed GENERAL before GiPass (binding 18 is fully in place).
         gp.useRestirDi = m_useRestirDi && !m_useRestirPt;
         gp.useRestirPt = m_useRestirPt;
+        gp.useRestirPtPath = m_useRestirPtPath && m_useRestirPt;
         gp.motionVectorView = VK_NULL_HANDLE;
         m_giPass.record(cmd, gp);
 

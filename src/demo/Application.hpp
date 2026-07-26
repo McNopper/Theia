@@ -39,6 +39,9 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     /// Mutually exclusive with ReSTIR DI: when PT is on, DI is forced off and the path
     /// integrator owns primary emissive NEE (Hyperion bit-identical in expectation).
     void setRestirPtEnabled(bool enabled) noexcept { m_useRestirPt = enabled; }
+    /// GI2 full PT: toggle the multi-bounce path reservoir for the indirect term
+    /// (default on, only effective with PT). Off → per-sample multi-bounce walk.
+    void setRestirPtPathEnabled(bool enabled) noexcept { m_useRestirPtPath = enabled; }
     void setTaaEnabled(bool enabled) noexcept { m_useTaa = enabled; }
     // harmonia::IRenderer
     void record(VkCommandBuffer cmd, const harmonia::RenderTarget& target) noexcept override;
@@ -136,6 +139,9 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     /// emissive NEE and ReSTIR DI is skipped. The forward pass's rect-light skip is
     /// shared (same semantic — GiPass owns emissive direct either way).
     bool m_useRestirPt = true;
+    /// GI2 full PT: multi-bounce path reservoir for the indirect term (default on).
+    /// Gated by m_useRestirPt at the GiPass wiring (legacy DI mode has no path reservoir).
+    bool m_useRestirPtPath = true;
     bool m_useTaa      = true;
     uint32_t m_sceneMaxDepth = 3u;
 

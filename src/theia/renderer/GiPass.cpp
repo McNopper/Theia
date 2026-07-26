@@ -107,9 +107,27 @@ bool GiPass::initialize(const DeviceContext& ctx, const Config& cfg, const char*
             }
             m_reservoirBuf[i] = std::move(*buf);
         }
+        // GI2 full PT: path reservoir ping-pong buffers (same per-pixel stride policy).
+        const VkDeviceSize pathReservoirBytes =
+            static_cast<VkDeviceSize>(cfg.width) * static_cast<VkDeviceSize>(cfg.height) * kPathReservoirStride;
+        for (int i = 0; i < 2; ++i) {
+            auto buf = Buffer::create(ctx,
+                                      pathReservoirBytes,
+                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                      VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                      "theia.gi.restirPathReservoir");
+            if (!buf) {
+                Logger::error("GiPass: failed to create ReSTIR path reservoir buffer: VkResult {}",
+                              static_cast<int>(buf.error()));
+                return false;
+            }
+            m_pathReservoirBuf[i] = std::move(*buf);
+        }
     }
     m_reservoirPingPong = 0;
     m_reservoirsCleared = false;
+    m_pathReservoirPingPong = 0;
+    m_pathReservoirsCleared = false;
     m_dummyMotionReady = false;
     m_boundMotionVectorView = VK_NULL_HANDLE;
 
@@ -135,6 +153,10 @@ void GiPass::shutdown() {
     m_reservoirBuf[1] = {};
     m_reservoirsCleared = false;
     m_reservoirPingPong = 0;
+    m_pathReservoirBuf[0] = {};
+    m_pathReservoirBuf[1] = {};
+    m_pathReservoirsCleared = false;
+    m_pathReservoirPingPong = 0;
     m_boundMotionVectorView = VK_NULL_HANDLE;
     if (m_pipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(device, m_pipeline, nullptr);
@@ -163,7 +185,7 @@ void GiPass::shutdown() {
 }
 
 bool GiPass::createDescriptors() {
-    const std::array<VkDescriptorSetLayoutBinding, 20> bindings{{
+    const std::array<VkDescriptorSetLayoutBinding, 22> bindings{{
         {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // TLAS
         {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // hdr (RW)
         {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // giBuffer
@@ -184,16 +206,19 @@ bool GiPass::createDescriptors() {
         {17, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},            // A4 reservoirs (prev, RO)
         {18, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},             // A4 motion vectors
         {19, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},            // instance transforms
+        {20, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},            // GI2 PT path reservoirs (cur, RW)
+        {21, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},            // GI2 PT path reservoirs (prev, RO)
     }};
 
     constexpr VkDescriptorBindingFlags kUpdateAfterBind = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
     constexpr VkDescriptorBindingFlags kTextureFlags =
         VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
-    const std::array<VkDescriptorBindingFlags, 20> bindingFlags{
+    const std::array<VkDescriptorBindingFlags, 22> bindingFlags{
         kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind,
         kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind,
         kUpdateAfterBind, kTextureFlags, kUpdateAfterBind, kUpdateAfterBind,
-        kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind};
+        kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind,
+        kUpdateAfterBind, kUpdateAfterBind};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = static_cast<uint32_t>(bindingFlags.size()),
@@ -217,7 +242,7 @@ bool GiPass::createDescriptors() {
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
         {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 5},   // 2,3,4,15 + 18 (motion)
         {VK_DESCRIPTOR_TYPE_SAMPLER, 1},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 11}, // 6,7,8,9,10,11,12,14 + 16,17 (reservoirs) + 19 (instance transforms)
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 13}, // 6,7,8,9,10,11,12,14 + 16,17 (reservoirs) + 19 (instance transforms) + 20,21 (path reservoirs)
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures},
     }};
     const VkDescriptorPoolCreateInfo poolInfo{
@@ -405,13 +430,19 @@ void GiPass::updateRestirDescriptors(const FrameParams& params) {
     // A4: bindings 16 (cur reservoir, written this frame), 17 (prev reservoir, read for
     // temporal reuse) and 18 (motion vectors). Rewritten every frame because the reservoir
     // ping-pong flips and the motion view can change; all three are UPDATE_AFTER_BIND.
-    if (!m_reservoirBuf[0].isValid() || !m_reservoirBuf[1].isValid()) {
+    // GI2 full PT: bindings 20/21 mirror 16/17 for the path reservoir ping-pong.
+    if (!m_reservoirBuf[0].isValid() || !m_reservoirBuf[1].isValid() ||
+        !m_pathReservoirBuf[0].isValid() || !m_pathReservoirBuf[1].isValid()) {
         return;
     }
     const uint32_t cur = m_reservoirPingPong;
     const uint32_t prev = 1u - m_reservoirPingPong;
     const VkDescriptorBufferInfo curInfo{m_reservoirBuf[cur].handle(), 0, VK_WHOLE_SIZE};
     const VkDescriptorBufferInfo prevInfo{m_reservoirBuf[prev].handle(), 0, VK_WHOLE_SIZE};
+    const uint32_t pathCur = m_pathReservoirPingPong;
+    const uint32_t pathPrev = 1u - m_pathReservoirPingPong;
+    const VkDescriptorBufferInfo pathCurInfo{m_pathReservoirBuf[pathCur].handle(), 0, VK_WHOLE_SIZE};
+    const VkDescriptorBufferInfo pathPrevInfo{m_pathReservoirBuf[pathPrev].handle(), 0, VK_WHOLE_SIZE};
 
     const VkImageView motionView =
         (params.motionVectorView != VK_NULL_HANDLE) ? params.motionVectorView : m_dummyMotionVectors.view();
@@ -420,13 +451,17 @@ void GiPass::updateRestirDescriptors(const FrameParams& params) {
         .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
     };
 
-    const std::array<VkWriteDescriptorSet, 3> writes{{
+    const std::array<VkWriteDescriptorSet, 5> writes{{
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 16, 0, 1,
          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &curInfo, nullptr},
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 17, 0, 1,
          VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &prevInfo, nullptr},
         {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 18, 0, 1,
          VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &motionInfo, nullptr, nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 20, 0, 1,
+         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &pathCurInfo, nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 21, 0, 1,
+         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &pathPrevInfo, nullptr},
     }};
     vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     m_boundMotionVectorView = motionView;
@@ -480,10 +515,14 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
 
     // A4: one-time zero-fill of both reservoir buffers so uninitialized entries read as
     // empty (M == 0 → skipped by temporal reuse; no garbage samples injected).
-    if (!m_reservoirsCleared && m_reservoirBuf[0].isValid() && m_reservoirBuf[1].isValid()) {
+    // GI2 full PT: same for the path reservoir buffers.
+    if (!m_reservoirsCleared && m_reservoirBuf[0].isValid() && m_reservoirBuf[1].isValid() &&
+        m_pathReservoirBuf[0].isValid() && m_pathReservoirBuf[1].isValid()) {
         vkCmdFillBuffer(cmd, m_reservoirBuf[0].handle(), 0, VK_WHOLE_SIZE, 0u);
         vkCmdFillBuffer(cmd, m_reservoirBuf[1].handle(), 0, VK_WHOLE_SIZE, 0u);
-        const std::array<VkBufferMemoryBarrier2, 2> fillBarriers{{
+        vkCmdFillBuffer(cmd, m_pathReservoirBuf[0].handle(), 0, VK_WHOLE_SIZE, 0u);
+        vkCmdFillBuffer(cmd, m_pathReservoirBuf[1].handle(), 0, VK_WHOLE_SIZE, 0u);
+        const std::array<VkBufferMemoryBarrier2, 4> fillBarriers{{
             {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
              .srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT, .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
              .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
@@ -496,6 +535,18 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
              .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
              .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
              .buffer = m_reservoirBuf[1].handle(), .offset = 0, .size = VK_WHOLE_SIZE},
+            {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+             .srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT, .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+             .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+             .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
+             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+             .buffer = m_pathReservoirBuf[0].handle(), .offset = 0, .size = VK_WHOLE_SIZE},
+            {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+             .srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT, .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+             .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+             .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
+             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+             .buffer = m_pathReservoirBuf[1].handle(), .offset = 0, .size = VK_WHOLE_SIZE},
         }};
         const VkDependencyInfo fillDep{
             .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
@@ -504,6 +555,7 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         };
         vkCmdPipelineBarrier2(cmd, &fillDep);
         m_reservoirsCleared = true;
+        m_pathReservoirsCleared = true;
     }
 
     // A4: rebind the reservoir ping-pong + motion vectors for this frame.
@@ -569,6 +621,10 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         .restirDiSpatial = (params.useRestirDiSpatial || params.useRestirPt) ? 1u : 0u,
         .restirHasMotion = (params.motionVectorView != VK_NULL_HANDLE) ? 1u : 0u,
         .restirPtEnabled = params.useRestirPt ? 1u : 0u,
+        // GI2 full PT: path reservoir for the indirect term. Independent of
+        // useRestirPt at this level (the application gates it), but requires the
+        // path reservoir buffers.
+        .restirPtPathEnabled = (params.useRestirPtPath && m_pathReservoirBuf[0].isValid()) ? 1u : 0u,
     };
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
@@ -581,6 +637,7 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
 
     // A4: flip the reservoir ping-pong so this frame's "current" becomes next frame's "prev".
     m_reservoirPingPong = 1u - m_reservoirPingPong;
+    m_pathReservoirPingPong = 1u - m_pathReservoirPingPong;
 }
 
 } // namespace theia
