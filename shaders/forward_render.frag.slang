@@ -586,7 +586,7 @@ float3 shadeHitRadiance(RayHitData hit, float3 viewPos, float shadowBias) {
 }
 
 [shader("fragment")]
-FS_OUT main(FS_IN input) {
+FS_OUT main(FS_IN input, bool isFrontFace : SV_IsFrontFace) {
     GpuMaterial mat = materials[input.materialIdx];
 
     // 26b debug modes (primary-ray hit reconstruction), gated and off by default:
@@ -709,8 +709,15 @@ FS_OUT main(FS_IN input) {
 
     // Match Hyperion emissive-hit behavior: emissive triangles are one-sided and
     // terminate primary shading when seen from their emitting side.
+    // B1 fix: gate on the WINDING (geometric) side, matching Hyperion's
+    // `dot(surf.wo, surf.geoNormal) > 0` test (path_integrator.slang:309), instead of
+    // the interpolated vertex normal. With frontFace=CCW + projection y-flip
+    // (proj[1][1] *= -1, Application.cpp:320) the rasterizer's SV_IsFrontFace is true
+    // exactly when the fragment is viewed from the triangle's winding-normal side — the
+    // same side CommittedTriangleFrontFace() reports in the ray-query path (line 508).
+    // The old vertex-normal gate darkened emitters whose normals disagree with winding.
     const float3 rawEmission = mat.emissionColorLum.xyz * mat.emissionColorLum.w;
-    const float3 emission = (dot(wo, input.normal) > 0.0) ? rawEmission : 0..xxx;
+    const float3 emission = isFrontFace ? rawEmission : 0..xxx;
     const bool hitVisibleEmitter = max(emission.x, max(emission.y, emission.z)) > 0.0;
 
     float3 directLo = 0..xxx;
@@ -781,6 +788,9 @@ FS_OUT main(FS_IN input) {
 
     // Carry an indirect-light weight in alpha so post-fx can damp ambient/IBL
     // without dimming direct lighting. The tone mapper ignores alpha.
+    // NOTE (GI2.7): when the GI compute stage runs it OVERWRITES alpha with the
+    // ReSTIR reservoir M for the M-aware denoiser; no current consumer reads
+    // indirectWeight downstream, so the overwrite is safe today.
     float indirectWeight = 0.0;
     if (!hitVisibleEmitter) {
         const float directLum = dot(max(directLo, 0.0.xxx), kRec2020Luma);

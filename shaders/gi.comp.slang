@@ -62,7 +62,7 @@ cbuffer GiPC {
 // only the shader's own read/write consistency and a large-enough allocation
 // matter.
 struct Reservoir {
-    uint   lightIdx;       // emissive-triangle index; 0xFFFFFFFF = empty / env
+    uint   lightIdx;       // emissive-triangle index; 0xFFFFFFFF = empty, 0xFFFFFFFE = env (GI2.6)
     float3 samplePoint;    // world-space point on the chosen light
     float3 sampleNormal;   // light surface normal at samplePoint
     float  W;              // unbiased contribution weight = w_sum / (M * p_hat(y))
@@ -576,14 +576,20 @@ float4 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
         // MotionVectorPass runs AFTER GiPass in the pipeline). The math is identical
         // to MotionVectorPass's, but evaluated only where temporal reuse needs it.
         float4 prevClip = mul(prevViewProj, float4(primary.position, 1.0));
-        float  prevW    = max(abs(prevClip.w), 1.0e-6);
-        float2 prevNdc  = prevClip.xy / prevW;
+        // Points behind the previous camera (w <= 0) have no valid reprojection — the
+        // perspective divide would mirror them to a meaningless screen position. Skip
+        // temporal reuse for those (standard practice; was previously abs(w), which
+        // mirrored them into plausible-but-wrong pixels).
+        if (prevClip.w > 1.0e-6) {
+        float2 prevNdc  = prevClip.xy / prevClip.w;
         float2 prevPixel = (prevNdc * 0.5 + 0.5) * float2(screenWidth, screenHeight);
         // B2 fix: use floor (not round) for pixel index. The NDC→pixel mapping produces
-        // pixel-center coordinates (px + 0.5); round() with banker's rounding gives the
-        // wrong pixel for odd px (round(1.5)=2, round(3.5)=4). floor() correctly recovers
-        // the integer pixel index. v0.7.0 used exact integer subtraction (px - 0 = px)
-        // via the nulled motion vectors; this floor() path reproduces that exactly.
+        // pixel-center coordinates (px + 0.5); round()'s halfway direction is
+        // implementation-defined in SPIR-V (HLSL semantics: away from zero), so it picked
+        // a wrong pixel for at least half of all integer positions on any vendor.
+        // floor() recovers the integer pixel index unambiguously. v0.7.0 used exact
+        // integer subtraction (px - 0 = px) via the nulled motion vectors; this floor()
+        // path reproduces that exactly.
         int2 prevCoord = int2(int(floor(prevPixel.x)), int(floor(prevPixel.y)));
         if (prevCoord.x >= 0 && prevCoord.y >= 0 &&
             prevCoord.x < int(screenWidth) && prevCoord.y < int(screenHeight)) {
@@ -598,6 +604,7 @@ float4 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
                     r.M += prev.M; // account for history even if its sample is now invalid
                 }
             }
+        }
         }
     }
 
