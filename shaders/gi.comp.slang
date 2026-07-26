@@ -1071,7 +1071,10 @@ void main(uint3 tid : SV_DispatchThreadID) {
         // even when the GI bounce degenerates.
         if (maxSamples == 1u && !valid) {
             if (restirDirect.x != 0.0 || restirDirect.y != 0.0 || restirDirect.z != 0.0) {
-                hdrImage[px] += float4(restirDirect, restirM);  // GI2.7: M in alpha
+                // GI2.7: M in alpha — OVERWRITE (not +=) so the forward pass's
+                // indirectWeight doesn't pollute the M channel. RGB still adds to
+                // the forward pass's base color via the read in the same expression.
+                hdrImage[px] = float4(hdrImage[px].xyz + restirDirect, restirM);
             }
             return;
         }
@@ -1081,5 +1084,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     }
 
     const float invN = 1.0 / float(sampleCount);
-    hdrImage[px] += float4((sumIndirect + sumEnvNee) * invN + restirDirect, restirM);  // GI2.7: M in alpha
+    // GI2.7: M in alpha — OVERWRITE (not +=) so the forward pass's indirectWeight
+    // doesn't pollute the M channel. RGB still adds to the forward pass's base color.
+    hdrImage[px] = float4(hdrImage[px].xyz + (sumIndirect + sumEnvNee) * invN + restirDirect, restirM);
 }
