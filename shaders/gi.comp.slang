@@ -62,24 +62,40 @@ cbuffer GiPC {
 // only the shader's own read/write consistency and a large-enough allocation
 // matter.
 struct Reservoir {
-    uint   lightIdx;     // emissive-triangle index; 0xFFFFFFFF = empty / env
-    float3 samplePoint;  // world-space point on the chosen light
-    float3 sampleNormal; // light surface normal at samplePoint
-    float  W;            // unbiased contribution weight = w_sum / (M * p_hat(y))
-    float  w_sum;        // running sum of resampling weights
-    uint   M;            // number of candidates this reservoir has seen
+    uint   lightIdx;       // emissive-triangle index; 0xFFFFFFFF = empty / env
+    float3 samplePoint;    // world-space point on the chosen light
+    float3 sampleNormal;   // light surface normal at samplePoint
+    float  W;              // unbiased contribution weight = w_sum / (M * p_hat(y))
+    float  w_sum;          // running sum of resampling weights
+    uint   M;              // number of candidates this reservoir has seen
+    uint   candidateHash;  // GI2.5: hash of the initial candidate (duplication map)
 };
 
 static const uint kReservoirEmpty = 0xFFFFFFFFu;
 
+// GI2.5: Candidate hash for the duplication map. Two reservoirs that sampled the
+// same point on the same light produce the same hash — detected during spatial
+// reuse to prevent the same initial candidate from being merged twice (which
+// inflates nominal M without proportional independent information → small bias).
+// Quantized to ~0.5mm so floating-point jitter doesn't create false negatives.
+uint restirCandidateHash(uint lightIdx, float3 samplePoint) {
+    int3 q = int3(floor(samplePoint * 2048.0));
+    uint h = lightIdx;
+    h ^= uint(q.x) + 0x9e3779b9u + (h << 6) + (h >> 2);
+    h ^= uint(q.y) + 0x9e3779b9u + (h << 6) + (h >> 2);
+    h ^= uint(q.z) + 0x9e3779b9u + (h << 6) + (h >> 2);
+    return h;
+}
+
 Reservoir makeEmptyReservoir() {
     Reservoir r;
-    r.lightIdx     = kReservoirEmpty;
-    r.samplePoint  = float3(0.0);
-    r.sampleNormal = float3(0.0, 1.0, 0.0);
-    r.W            = 0.0;
-    r.w_sum        = 0.0;
-    r.M            = 0u;
+    r.lightIdx       = kReservoirEmpty;
+    r.samplePoint    = float3(0.0);
+    r.sampleNormal   = float3(0.0, 1.0, 0.0);
+    r.W              = 0.0;
+    r.w_sum          = 0.0;
+    r.M              = 0u;
+    r.candidateHash  = 0u;
     return r;
 }
 
@@ -89,9 +105,10 @@ bool reservoirUpdate(inout Reservoir r, uint lightIdx, float3 samplePt, float3 s
     r.w_sum += weight;
     r.M += 1u;
     if (weight > 0.0 && randFloat(rng) < (weight / max(r.w_sum, 1.0e-10))) {
-        r.lightIdx     = lightIdx;
-        r.samplePoint  = samplePt;
-        r.sampleNormal = sampleN;
+        r.lightIdx      = lightIdx;
+        r.samplePoint   = samplePt;
+        r.sampleNormal  = sampleN;
+        r.candidateHash = restirCandidateHash(lightIdx, samplePt); // GI2.5: track chosen candidate
         return true;
     }
     return false;
@@ -443,9 +460,10 @@ void combineTwoReservoirs(inout Reservoir r_dst, Reservoir r_src,
     r_dst.M += r_src.M;
     r_dst.w_sum += w;
     if (w > 0.0 && randFloat(rng) < w / max(r_dst.w_sum, 1.0e-10)) {
-        r_dst.lightIdx     = r_src.lightIdx;
-        r_dst.samplePoint  = r_src.samplePoint;
-        r_dst.sampleNormal = r_src.sampleNormal;
+        r_dst.lightIdx      = r_src.lightIdx;
+        r_dst.samplePoint   = r_src.samplePoint;
+        r_dst.sampleNormal  = r_src.sampleNormal;
+        r_dst.candidateHash = r_src.candidateHash; // GI2.5: propagate chosen candidate's hash
     }
 }
 
@@ -535,6 +553,14 @@ float3 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
         const float  viewDist    = length(curWorldPos - cameraPos.xyz);
         const float  posThresh   = max(viewDist * kPosThresholdRel, 1.0e-3);
 
+        // GI2.5: duplication map — track hashes of candidates already merged this
+        // spatial pass. Prevents the same initial candidate from being counted twice
+        // (e.g. neighbour A and neighbour B both merged neighbour C's sample last
+        // frame → merging both A and B into this pixel double-counts C's candidate).
+        uint seenHashes[6]; // 1 (own) + up to 5 neighbours
+        seenHashes[0] = r.candidateHash;
+        uint seenCount = 1u;
+
         for (uint n = 0u; n < kSpatialNeighbors; ++n) {
             // Random offset in [-radius, +radius]^2 (Bitterli 2020 §5.2 random neighbour).
             const float2 off = (float2(randFloat(rng), randFloat(rng)) * 2.0 - 1.0) * kSpatialRadius;
@@ -552,6 +578,15 @@ float3 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
             const uint nIdx = uint(nCoord.y) * screenWidth + uint(nCoord.x);
             Reservoir neighbor = t_reservoirsPrev[nIdx];
             if (neighbor.lightIdx != kReservoirEmpty && neighbor.M > 0u) {
+                // GI2.5: duplication check — skip if this neighbour's candidate was
+                // already merged from a different neighbour (same hash).
+                bool duplicate = false;
+                for (uint h = 0u; h < seenCount; ++h) {
+                    if (seenHashes[h] == neighbor.candidateHash) { duplicate = true; break; }
+                }
+                if (duplicate) continue;
+                if (seenCount < 6u) seenHashes[seenCount++] = neighbor.candidateHash;
+
                 neighbor.M = min(neighbor.M, kRestirMCap);
                 RestirSampleEval ne = evalReservoirSample(primary, neighbor.lightIdx,
                                                           neighbor.samplePoint, neighbor.sampleNormal);
