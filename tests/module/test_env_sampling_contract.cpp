@@ -107,7 +107,7 @@ TEST(TheiaEnvSamplingContract, DeterministicReplayProducesStableSequence) {
     uint32_t s0 = Rng::composeSeed({19U, 7U}, 3U, 2U, 123U);
     uint32_t s1 = Rng::composeSeed({19U, 7U}, 3U, 2U, 123U);
 
-    for (int i = 0; i < 32; ++i) {
+    for (std::size_t i = 0; i < 32; ++i) {
         float p0 = 0.0F;
         float p1 = 0.0F;
         const sm::float3 d0 = sampleEnvImportanceDir(marginal, conditional, W, H, Rng::nextFloat2(s0), p0);
@@ -135,7 +135,7 @@ TEST(TheiaEnvSamplingContract, PdfEvaluationMatchesSampledDirections) {
     }
 
     uint32_t state = Rng::composeSeed({3U, 5U}, 2U, 1U, 77U);
-    for (int i = 0; i < 64; ++i) {
+    for (std::size_t i = 0; i < 64; ++i) {
         float sampledPdf = 0.0F;
         const sm::float3 dir = sampleEnvImportanceDir(marginal, conditional, W, H, Rng::nextFloat2(state), sampledPdf);
         const float evalPdf = evalEnvImportancePdfDir(marginal, conditional, W, H, dir);

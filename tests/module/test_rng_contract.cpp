@@ -20,7 +20,7 @@ TEST(TheiaRngContract, DeterministicReplayReproducesSequence) {
     uint32_t s0 = Rng::composeSeed({7U, 5U}, 2U, 0U, 777U);
     uint32_t s1 = Rng::composeSeed({7U, 5U}, 2U, 0U, 777U);
 
-    for (int i = 0; i < 8; ++i) {
+    for (std::size_t i = 0; i < 8; ++i) {
         EXPECT_FLOAT_EQ(Rng::nextFloat(s0), Rng::nextFloat(s1));
     }
 }

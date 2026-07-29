@@ -36,9 +36,9 @@ TEST(TheiaBsdfSamplingContract, FresnelBranchProbabilityTracksExpectation) {
     const float expectedF = fresnelDielectric(cosTheta, eta);
 
     uint32_t state = Rng::composeSeed({23U, 11U}, 7U, 0U, 2026U);
-    constexpr int kSamples = 100000;
-    int reflectCount = 0;
-    for (int i = 0; i < kSamples; ++i) {
+    constexpr std::size_t kSamples = 100000;
+    std::size_t reflectCount = 0;
+    for (std::size_t i = 0; i < kSamples; ++i) {
         if (Rng::nextFloat(state) < expectedF) {
             ++reflectCount;
         }
@@ -56,7 +56,7 @@ TEST(TheiaBsdfSamplingContract, DeterministicReplayKeepsFresnelBranchSequence) {
     uint32_t s0 = Rng::composeSeed({9U, 4U}, 2U, 3U, 77U);
     uint32_t s1 = Rng::composeSeed({9U, 4U}, 2U, 3U, 77U);
 
-    for (int i = 0; i < 256; ++i) {
+    for (std::size_t i = 0; i < 256; ++i) {
         const bool b0 = Rng::nextFloat(s0) < expectedF;
         const bool b1 = Rng::nextFloat(s1) < expectedF;
         EXPECT_EQ(b0, b1);

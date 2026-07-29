@@ -30,7 +30,7 @@ Application::~Application() {
         commandPool().free(m_stagesCmdBufs[1]);
         m_stagesCmdBufs[1] = VK_NULL_HANDLE;
     }
-    for (int i = 0; i < 2; ++i) {
+    for (std::size_t i = 0; i < 2; ++i) {
         if (m_asyncFences[i] != VK_NULL_HANDLE) {
             vkDestroyFence(dev, m_asyncFences[i], nullptr);
             m_asyncFences[i] = VK_NULL_HANDLE;
@@ -177,7 +177,7 @@ bool Application::onInitialize() {
         }
 
         if (ok) {
-            for (int i = 0; i < 2 && ok; ++i) {
+            for (std::size_t i = 0; i < 2 && ok; ++i) {
                 auto r = commandPool().allocate();
                 if (r) {
                     m_stagesCmdBufs[i] = *r;

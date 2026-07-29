@@ -85,7 +85,7 @@ TEST_F(RtFixture, Scene_BuildWithMultipleInstancesOfOneMesh) {
     const uint32_t mesh = scene.addMesh(deviceCtx(), commandPool(), std::move(box), "test.shared");
     ASSERT_NE(mesh, std::numeric_limits<uint32_t>::max());
 
-    for (int i = 0; i < 4; ++i) {
+    for (std::size_t i = 0; i < 4; ++i) {
         const Xform xform{.translation = sm::float3(static_cast<float>(i) * 2.0F, 0.0F, 0.0F)};
         ASSERT_NE(scene.addInstance(mesh, xform, mat), std::numeric_limits<uint32_t>::max()) << "instance " << i;
     }

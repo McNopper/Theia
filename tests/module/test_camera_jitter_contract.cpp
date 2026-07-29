@@ -36,8 +36,8 @@ TEST(TheiaCameraJitterContract, ProjectionJitterOnlyShiftsProjectionCenter) {
     const sm::float4x4 jittered = theia::applyProjectionJitter(proj, jitterNdc);
 
     // In row-major slang-math, m[row][col]. applyProjectionJitter modifies [0][2] and [1][2].
-    for (int row = 0; row < 4; ++row) {
-        for (int col = 0; col < 4; ++col) {
+    for (std::int32_t row = 0; row < 4; ++row) {
+        for (std::int32_t col = 0; col < 4; ++col) {
             if (col == 2 && (row == 0 || row == 1)) {
                 continue;
             }
@@ -48,8 +48,8 @@ TEST(TheiaCameraJitterContract, ProjectionJitterOnlyShiftsProjectionCenter) {
     EXPECT_NEAR(jittered[1][2], proj[1][2] + jitterNdc.y, 1.0e-6f);
 
     const sm::float4x4 unchanged = theia::applyProjectionJitter(proj, sm::float2(0.0f));
-    for (int row = 0; row < 4; ++row) {
-        for (int col = 0; col < 4; ++col) {
+    for (std::int32_t row = 0; row < 4; ++row) {
+        for (std::int32_t col = 0; col < 4; ++col) {
             EXPECT_NEAR(unchanged[row][col], proj[row][col], 1.0e-6f);
         }
     }
