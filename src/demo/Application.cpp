@@ -3,10 +3,12 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <slang-math/slang-math.hpp>
 #include <string>
 #include <tuple>
 
+#include "demo/Application.hpp"
 #include "harmonia/core/Barrier.hpp"
 #include "harmonia/core/Logger.hpp"
 #include "harmonia/renderer/Camera.hpp"
@@ -171,7 +173,7 @@ bool Application::onInitialize() {
                 .pNext = nullptr,
                 .commandPool = m_asyncCmdPool,
                 .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-                .commandBufferCount = static_cast<uint32_t>(m_asyncCmdBufs.size()),
+                .commandBufferCount = static_cast<std::uint32_t>(m_asyncCmdBufs.size()),
             };
             ok = (vkAllocateCommandBuffers(dev, &allocInfo, m_asyncCmdBufs.data()) == VK_SUCCESS);
         }
@@ -269,9 +271,9 @@ bool Application::onSceneLoaded(const SceneLoader::SceneConfig& sceneConfig) {
     // CDF buffers for env importance sampling in the diffuse irradiance precompute.
     const VkBuffer marginalCdf = hasEnv ? iblProbe()->marginalCdfBuffer().handle() : VK_NULL_HANDLE;
     const VkBuffer conditionalCdf = hasEnv ? iblProbe()->conditionalCdfBuffer().handle() : VK_NULL_HANDLE;
-    const uint32_t cdfW = hasEnv ? iblProbe()->cdfWidth() : 0u;
-    const uint32_t cdfH = hasEnv ? iblProbe()->cdfHeight() : 0u;
-    const uint32_t diffuseRes = std::max(1u, config().iblDiffuseResolution);
+    const std::uint32_t cdfW = hasEnv ? iblProbe()->cdfWidth() : 0u;
+    const std::uint32_t cdfH = hasEnv ? iblProbe()->cdfHeight() : 0u;
+    const std::uint32_t diffuseRes = std::max(1u, config().iblDiffuseResolution);
     const VkExtent2D diffuseExtent{diffuseRes, std::max(1u, diffuseRes / 2u)};
 
     if (!m_ibl.initialize(deviceContext(),
@@ -356,7 +358,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
     m_renderer->recordFrame(cmd);
 
     const bool giEnabled = giActive();
-    const uint32_t slot = frameIndex() % 2U;
+    const std::uint32_t slot = frameIndex() % 2U;
 
     if (m_asyncComputeEnabled && giEnabled) {
         // ── Async path: GiPass + MotionVectorPass run on the dedicated compute queue ──
@@ -404,8 +406,8 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         m_pendingMvp.invCurViewProj = sm::inverse(curViewProj);
         m_pendingMvp.prevInstanceTransformBuffer = m_scene->prevInstanceTransformBuffer().handle();
 
-        const uint32_t gfxFamily = deviceContext().graphicsFamily;
-        const uint32_t asyncFamily = deviceContext().asyncComputeQueueFamily;
+        const std::uint32_t gfxFamily = deviceContext().graphicsFamily;
+        const std::uint32_t asyncFamily = deviceContext().asyncComputeQueueFamily;
 
         // GRAPHICS RELEASE: transfer giBuffer, gbuffer, hdr ownership to async compute.
         // The release barrier performs the layout transition (Vulkan spec §7.7.5: both release
@@ -780,9 +782,9 @@ std::pair<VkCommandBuffer, VkSemaphore> Application::onBeforeSceneStages(VkComma
         return {renderCmd, VK_NULL_HANDLE};
     }
 
-    const uint32_t slot = frameIndex() % 2U;
-    const uint32_t gfxFamily = deviceContext().graphicsFamily;
-    const uint32_t asyncFamily = deviceContext().asyncComputeQueueFamily;
+    const std::uint32_t slot = frameIndex() % 2U;
+    const std::uint32_t gfxFamily = deviceContext().graphicsFamily;
+    const std::uint32_t asyncFamily = deviceContext().asyncComputeQueueFamily;
 
     // ── Submit 1: graphics (raster + release barriers) ──
     vkEndCommandBuffer(renderCmd);
@@ -1081,10 +1083,10 @@ void Application::onUpdate(float dtSeconds) {
     m_cameraMoving = viewChanged;
 
     // Update window title with FPS every second
-    static uint64_t fpsLastTick = SDL_GetTicksNS();
-    static uint32_t fpsFrames = 0;
+    static std::uint64_t fpsLastTick = SDL_GetTicksNS();
+    static std::uint32_t fpsFrames = 0;
     ++fpsFrames;
-    const uint64_t fpsDelta = SDL_GetTicksNS() - fpsLastTick;
+    const std::uint64_t fpsDelta = SDL_GetTicksNS() - fpsLastTick;
     if (fpsDelta >= 1'000'000'000ULL) {
         const float fps = static_cast<float>(fpsFrames) * 1e9f / static_cast<float>(fpsDelta);
         const float ms = 1000.0f / fps;

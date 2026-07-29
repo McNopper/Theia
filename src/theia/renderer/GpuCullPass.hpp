@@ -3,6 +3,7 @@
 
 #include <volk/volk.h>
 
+#include <cstdint>
 #include <slang-math/slang-math.hpp>
 
 #include "harmonia/DeviceContext.hpp"
@@ -39,7 +40,7 @@ class GpuCullPass {
   public:
     /// Maximum number of instances supported per allocation.
     /// Sized conservatively; covers all current test scenes with room to spare.
-    static constexpr uint32_t kMaxInstances = 4096;
+    static constexpr std::uint32_t kMaxInstances = 4096;
 
     GpuCullPass() = default;
     ~GpuCullPass();
@@ -69,7 +70,7 @@ class GpuCullPass {
     void dispatch(VkCommandBuffer cmd,
                   VkBuffer instanceBuf,
                   VkBuffer instanceBoundsBuf,
-                  uint32_t instanceCount,
+                  std::uint32_t instanceCount,
                   const sm::float4x4& viewProj);
 
     /// GPU buffer of visible instance indices (uint[kMaxInstances]).

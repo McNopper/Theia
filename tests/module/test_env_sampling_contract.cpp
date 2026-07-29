@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <gtest/gtest.h>
 #include <slang-math/slang-math.hpp>
 #include <vector>
@@ -11,11 +12,11 @@ namespace {
 constexpr float kPi = 3.14159265359F;
 constexpr float kInvPi = 0.31830988618F;
 
-uint32_t sampleCdf1D(const std::vector<float>& cdf, uint32_t base, uint32_t n, float r) {
-    uint32_t lo = 0U;
-    uint32_t hi = n - 1U;
+std::uint32_t sampleCdf1D(const std::vector<float>& cdf, std::uint32_t base, std::uint32_t n, float r) {
+    std::uint32_t lo = 0U;
+    std::uint32_t hi = n - 1U;
     while (lo < hi) {
-        const uint32_t mid = (lo + hi) >> 1U;
+        const std::uint32_t mid = (lo + hi) >> 1U;
         if (cdf[base + mid + 1U] <= r) {
             lo = mid + 1U;
         } else {
@@ -27,18 +28,18 @@ uint32_t sampleCdf1D(const std::vector<float>& cdf, uint32_t base, uint32_t n, f
 
 sm::float3 sampleEnvImportanceDir(const std::vector<float>& marginalCdf,
                                   const std::vector<float>& conditionalCdf,
-                                  uint32_t W,
-                                  uint32_t H,
+                                  std::uint32_t W,
+                                  std::uint32_t H,
                                   sm::float2 xi,
                                   float& pdfOmega) {
-    const uint32_t row = sampleCdf1D(marginalCdf, 0U, H, xi.x);
-    const uint32_t col = sampleCdf1D(conditionalCdf, row * (W + 1U), W, xi.y);
+    const std::uint32_t row = sampleCdf1D(marginalCdf, 0U, H, xi.x);
+    const std::uint32_t col = sampleCdf1D(conditionalCdf, row * (W + 1U), W, xi.y);
 
     const float rowLo = marginalCdf[row];
     const float rowHi = marginalCdf[row + 1U];
     const float tRow = (rowHi > rowLo) ? std::clamp((xi.x - rowLo) / (rowHi - rowLo), 0.0F, 1.0F) : 0.5F;
 
-    const uint32_t cBase = row * (W + 1U);
+    const std::uint32_t cBase = row * (W + 1U);
     const float colLo = conditionalCdf[cBase + col];
     const float colHi = conditionalCdf[cBase + col + 1U];
     const float tCol = (colHi > colLo) ? std::clamp((xi.y - colLo) / (colHi - colLo), 0.0F, 1.0F) : 0.5F;
@@ -61,15 +62,15 @@ sm::float3 sampleEnvImportanceDir(const std::vector<float>& marginalCdf,
 
 float evalEnvImportancePdfDir(const std::vector<float>& marginalCdf,
                               const std::vector<float>& conditionalCdf,
-                              uint32_t W,
-                              uint32_t H,
+                              std::uint32_t W,
+                              std::uint32_t H,
                               sm::float3 dir) {
     const sm::float3 d = sm::normalize(dir);
     const float u = std::atan2(d.z, d.x) * (0.5F * kInvPi) + 0.5F;
     const float v = std::acos(std::clamp(d.y, -1.0F, 1.0F)) * kInvPi;
 
-    const uint32_t col = std::min(static_cast<uint32_t>(u * static_cast<float>(W)), W - 1U);
-    const uint32_t row = std::min(static_cast<uint32_t>(v * static_cast<float>(H)), H - 1U);
+    const std::uint32_t col = std::min(static_cast<std::uint32_t>(u * static_cast<float>(W)), W - 1U);
+    const std::uint32_t row = std::min(static_cast<std::uint32_t>(v * static_cast<float>(H)), H - 1U);
 
     const float pRow = marginalCdf[row + 1U] - marginalCdf[row];
     const float pCol = conditionalCdf[row * (W + 1U) + col + 1U] - conditionalCdf[row * (W + 1U) + col];
@@ -88,8 +89,8 @@ float balanceHeuristic(float pA, float pB) {
 } // namespace
 
 TEST(TheiaEnvSamplingContract, DeterministicReplayProducesStableSequence) {
-    constexpr uint32_t W = 4U;
-    constexpr uint32_t H = 2U;
+    constexpr std::uint32_t W = 4U;
+    constexpr std::uint32_t H = 2U;
     const std::vector<float> marginal{0.0F, 0.5F, 1.0F};
     const std::vector<float> conditional{
         0.0F,
@@ -104,8 +105,8 @@ TEST(TheiaEnvSamplingContract, DeterministicReplayProducesStableSequence) {
         1.0F,
     };
 
-    uint32_t s0 = Rng::composeSeed({19U, 7U}, 3U, 2U, 123U);
-    uint32_t s1 = Rng::composeSeed({19U, 7U}, 3U, 2U, 123U);
+    std::uint32_t s0 = Rng::composeSeed({19U, 7U}, 3U, 2U, 123U);
+    std::uint32_t s1 = Rng::composeSeed({19U, 7U}, 3U, 2U, 123U);
 
     for (std::size_t i = 0; i < 32; ++i) {
         float p0 = 0.0F;
@@ -122,19 +123,19 @@ TEST(TheiaEnvSamplingContract, DeterministicReplayProducesStableSequence) {
 }
 
 TEST(TheiaEnvSamplingContract, PdfEvaluationMatchesSampledDirections) {
-    constexpr uint32_t W = 8U;
-    constexpr uint32_t H = 4U;
+    constexpr std::uint32_t W = 8U;
+    constexpr std::uint32_t H = 4U;
     const std::vector<float> marginal{0.0F, 0.1F, 0.35F, 0.7F, 1.0F};
     std::vector<float> conditional;
-    conditional.reserve(static_cast<size_t>(H) * (W + 1U));
-    for (uint32_t row = 0U; row < H; ++row) {
+    conditional.reserve(static_cast<std::size_t>(H) * (W + 1U));
+    for (std::uint32_t row = 0U; row < H; ++row) {
         conditional.push_back(0.0F);
-        for (uint32_t col = 0U; col < W; ++col) {
+        for (std::uint32_t col = 0U; col < W; ++col) {
             conditional.push_back(static_cast<float>(col + 1U) / static_cast<float>(W));
         }
     }
 
-    uint32_t state = Rng::composeSeed({3U, 5U}, 2U, 1U, 77U);
+    std::uint32_t state = Rng::composeSeed({3U, 5U}, 2U, 1U, 77U);
     for (std::size_t i = 0; i < 64; ++i) {
         float sampledPdf = 0.0F;
         const sm::float3 dir = sampleEnvImportanceDir(marginal, conditional, W, H, Rng::nextFloat2(state), sampledPdf);

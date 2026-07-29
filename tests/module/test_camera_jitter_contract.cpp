@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <gtest/gtest.h>
 #include <slang-math/slang-math.hpp>
 
@@ -19,7 +20,7 @@ TEST(TheiaCameraJitterContract, Halton23SequenceIsDeterministicBySampleIndex) {
 }
 
 TEST(TheiaCameraJitterContract, JitterStaysWithinSubPixelFootprint) {
-    for (uint32_t i = 0U; i < 1024U; ++i) {
+    for (std::uint32_t i = 0U; i < 1024U; ++i) {
         const sm::float2 jitter = theia::cameraJitterPixels(i);
         EXPECT_GE(jitter.x, -0.5f);
         EXPECT_LT(jitter.x, 0.5f);

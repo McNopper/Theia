@@ -3,6 +3,7 @@
 
 #include <volk/volk.h>
 
+#include <cstdint>
 #include <vector>
 
 #include "harmonia/DeviceContext.hpp"
@@ -43,8 +44,8 @@ class IblPrecompute {
                     VkExtent2D diffuseExtent = VkExtent2D{256, 128},
                     VkBuffer marginalCdf = VK_NULL_HANDLE,
                     VkBuffer conditionalCdf = VK_NULL_HANDLE,
-                    uint32_t cdfWidth = 0,
-                    uint32_t cdfHeight = 0);
+                    std::uint32_t cdfWidth = 0,
+                    std::uint32_t cdfHeight = 0);
     void shutdown();
 
     const IblResources& resources() const { return m_res; }
@@ -59,7 +60,7 @@ class IblPrecompute {
     bool runSpecularPass(VkCommandBuffer cmd);
     bool createComputePipeline(const char* spirvPath,
                                VkDescriptorSetLayout layout,
-                               uint32_t pushConstantSize,
+                               std::uint32_t pushConstantSize,
                                VkPipeline& outPipeline,
                                VkPipelineLayout& outLayout);
     void destroyTemporaryObjects() noexcept;
@@ -70,8 +71,8 @@ class IblPrecompute {
     VkSampler m_envSampler = VK_NULL_HANDLE;
     VkBuffer m_marginalCdf = VK_NULL_HANDLE;
     VkBuffer m_conditionalCdf = VK_NULL_HANDLE;
-    uint32_t m_cdfWidth = 0;
-    uint32_t m_cdfHeight = 0;
+    std::uint32_t m_cdfWidth = 0;
+    std::uint32_t m_cdfHeight = 0;
     VkExtent2D m_diffuseExtent{256, 128};
     IblResources m_res;
     float m_envUnitNits = 1.0f;

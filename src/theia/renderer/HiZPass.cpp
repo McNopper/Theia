@@ -3,9 +3,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 
 #include "harmonia/core/Logger.hpp"
 #include "harmonia/core/ShaderModule.hpp"
+#include "theia/renderer/HiZPass.hpp"
 #include "theia/renderer/ShaderPath.hpp"
 
 #ifdef __clang__
@@ -17,16 +19,16 @@ namespace theia {
 
 namespace {
 
-[[nodiscard]] uint32_t mipCountFor(uint32_t w, uint32_t h) noexcept {
-    const uint32_t maxDim = std::max(w, h);
-    uint32_t levels = 1;
+[[nodiscard]] std::uint32_t mipCountFor(std::uint32_t w, std::uint32_t h) noexcept {
+    const std::uint32_t maxDim = std::max(w, h);
+    std::uint32_t levels = 1;
     while ((maxDim >> (levels - 1)) > 1u) {
         ++levels;
     }
     return levels;
 }
 
-[[nodiscard]] uint32_t mipExtent(uint32_t base, uint32_t level) noexcept {
+[[nodiscard]] std::uint32_t mipExtent(std::uint32_t base, std::uint32_t level) noexcept {
     return std::max(1u, base >> level);
 }
 
@@ -36,7 +38,7 @@ HiZPass::~HiZPass() {
     shutdown();
 }
 
-bool HiZPass::initialize(const DeviceContext& ctx, uint32_t width, uint32_t height, const char* spvName) {
+bool HiZPass::initialize(const DeviceContext& ctx, std::uint32_t width, std::uint32_t height, const char* spvName) {
     shutdown();
     m_ctx = &ctx;
     m_width = width;
@@ -110,7 +112,7 @@ bool HiZPass::createImage() noexcept {
 
     // One single-mip storage view per level (used as reduction source/destination).
     m_mipViews.assign(m_mipLevels, VK_NULL_HANDLE);
-    for (uint32_t level = 0; level < m_mipLevels; ++level) {
+    for (std::uint32_t level = 0; level < m_mipLevels; ++level) {
         const VkImageViewCreateInfo viewInfo{
             .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
             .image = m_image.handle(),
@@ -150,7 +152,7 @@ bool HiZPass::createPipeline(const char* spvName) noexcept {
     const VkDescriptorSetLayoutCreateInfo setInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT,
-        .bindingCount = static_cast<uint32_t>(bindings.size()),
+        .bindingCount = static_cast<std::uint32_t>(bindings.size()),
         .pBindings = bindings.data(),
     };
     if (vkCreateDescriptorSetLayout(m_ctx->device, &setInfo, nullptr, &m_setLayout) != VK_SUCCESS) {
@@ -236,12 +238,12 @@ void HiZPass::build(VkCommandBuffer cmd, VkImageView depthView) noexcept {
         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
     };
 
-    for (uint32_t level = 0; level < m_mipLevels; ++level) {
-        const uint32_t dstW = mipExtent(m_width, level);
-        const uint32_t dstH = mipExtent(m_height, level);
-        const uint32_t srcLevel = (level == 0) ? 0 : (level - 1);
-        const uint32_t srcW = (level == 0) ? m_width : mipExtent(m_width, level - 1);
-        const uint32_t srcH = (level == 0) ? m_height : mipExtent(m_height, level - 1);
+    for (std::uint32_t level = 0; level < m_mipLevels; ++level) {
+        const std::uint32_t dstW = mipExtent(m_width, level);
+        const std::uint32_t dstH = mipExtent(m_height, level);
+        const std::uint32_t srcLevel = (level == 0) ? 0 : (level - 1);
+        const std::uint32_t srcW = (level == 0) ? m_width : mipExtent(m_width, level - 1);
+        const std::uint32_t srcH = (level == 0) ? m_height : mipExtent(m_height, level - 1);
 
         const VkDescriptorImageInfo srcMipInfo{
             .imageView = m_mipViews[srcLevel],
@@ -278,7 +280,7 @@ void HiZPass::build(VkCommandBuffer cmd, VkImageView depthView) noexcept {
                                VK_PIPELINE_BIND_POINT_COMPUTE,
                                m_pipelineLayout,
                                0,
-                               static_cast<uint32_t>(writes.size()),
+                               static_cast<std::uint32_t>(writes.size()),
                                writes.data());
 
         const HiZPC pc{

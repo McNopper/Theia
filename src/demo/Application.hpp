@@ -4,6 +4,7 @@
 #include <volk/volk.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <memory>
 #include <slang-math/slang-math.hpp>
 
@@ -76,7 +77,7 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     void onUpdate(float dtSeconds) override;
     // Theia is a real-time renderer: default offscreen warmup is 4 frames, but
     // allow overrides via the shared host flag `--offscreen-frames`.
-    [[nodiscard]] uint32_t offscreenFrameCount() const noexcept override {
+    [[nodiscard]] std::uint32_t offscreenFrameCount() const noexcept override {
         return std::max(config().offscreenFrames, 1U);
     }
     [[nodiscard]] std::pair<VkCommandBuffer, VkSemaphore>
@@ -122,8 +123,8 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     VkSampler m_envSampler = VK_NULL_HANDLE;
     VkBuffer m_envMarginalCdf = VK_NULL_HANDLE;
     VkBuffer m_envConditionalCdf = VK_NULL_HANDLE;
-    uint32_t m_envCdfWidth = 0;
-    uint32_t m_envCdfHeight = 0;
+    std::uint32_t m_envCdfWidth = 0;
+    std::uint32_t m_envCdfHeight = 0;
     bool m_hasEnv = false;
     float m_envNits = 1.0f;
 
@@ -144,7 +145,7 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     /// Gated by m_useRestirPt at the GiPass wiring (legacy DI mode has no path reservoir).
     bool m_useRestirPtPath = true;
     bool m_useTaa = true;
-    uint32_t m_sceneMaxDepth = 3u;
+    std::uint32_t m_sceneMaxDepth = 3u;
 
     /// Previous frame's row-major view-projection matrix for motion vector computation.
     sm::float4x4 m_prevViewProj{1.0f};

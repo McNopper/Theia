@@ -3,6 +3,7 @@
 
 #include <volk/volk.h>
 
+#include <cstdint>
 #include <slang-math/slang-math.hpp>
 
 #include "harmonia/DeviceContext.hpp"
@@ -23,8 +24,8 @@ namespace theia {
 class MotionVectorPass {
   public:
     struct Config {
-        uint32_t width = 0;
-        uint32_t height = 0;
+        std::uint32_t width = 0;
+        std::uint32_t height = 0;
         VkImage giBufferImage = VK_NULL_HANDLE; ///< GI G-buffer: xyz = worldPos, w = matIdx+1
         VkImageView giBufferView = VK_NULL_HANDLE;
     };

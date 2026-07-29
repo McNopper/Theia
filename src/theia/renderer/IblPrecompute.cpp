@@ -2,10 +2,12 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <vector>
 
 #include "harmonia/core/Logger.hpp"
 #include "harmonia/core/ShaderModule.hpp"
+#include "theia/renderer/IblPrecompute.hpp"
 #include "theia/renderer/ShaderPath.hpp"
 
 #ifdef __clang__
@@ -17,7 +19,7 @@ namespace {
 
 constexpr VkExtent2D kSheenExtent{512, 512};
 constexpr VkExtent2D kSpecularExtent{1024, 512};
-constexpr uint32_t kSpecularMipLevels = 8;
+constexpr std::uint32_t kSpecularMipLevels = 8;
 
 VkShaderModule loadShaderModule(const DeviceContext& ctx, const char* filename) {
     auto module = harmonia::createShaderModule(ctx.device, theia::shaderPath(filename));
@@ -28,7 +30,7 @@ VkShaderModule loadShaderModule(const DeviceContext& ctx, const char* filename) 
     return *module;
 }
 
-VkImageView createMipView(const DeviceContext& ctx, const Image& image, uint32_t mipLevel) {
+VkImageView createMipView(const DeviceContext& ctx, const Image& image, std::uint32_t mipLevel) {
     const VkImageViewCreateInfo viewInfo{
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
         .image = image.handle(),
@@ -91,7 +93,7 @@ void clearNeutralAmbientImage(VkCommandBuffer cmd, const Image& image) {
                      VK_ACCESS_2_SHADER_READ_BIT);
 }
 
-uint32_t dispatchCount(uint32_t extent) {
+std::uint32_t dispatchCount(std::uint32_t extent) {
     return (extent + 7u) / 8u;
 }
 
@@ -111,8 +113,8 @@ bool IblPrecompute::initialize(const DeviceContext& ctx,
                                VkExtent2D diffuseExtent,
                                VkBuffer marginalCdf,
                                VkBuffer conditionalCdf,
-                               uint32_t cdfWidth,
-                               uint32_t cdfHeight) {
+                               std::uint32_t cdfWidth,
+                               std::uint32_t cdfHeight) {
     shutdown();
 
     m_ctx = &ctx;
@@ -489,7 +491,7 @@ bool IblPrecompute::runDiffusePass(VkCommandBuffer cmd) {
     };
     const VkDescriptorSetLayoutCreateInfo layoutInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .bindingCount = static_cast<uint32_t>(bindings.size()),
+        .bindingCount = static_cast<std::uint32_t>(bindings.size()),
         .pBindings = bindings.data(),
     };
 
@@ -510,7 +512,7 @@ bool IblPrecompute::runDiffusePass(VkCommandBuffer cmd) {
     const VkDescriptorPoolCreateInfo poolInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
         .maxSets = 1,
-        .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
+        .poolSizeCount = static_cast<std::uint32_t>(poolSizes.size()),
         .pPoolSizes = poolSizes.data(),
     };
 
@@ -523,9 +525,9 @@ bool IblPrecompute::runDiffusePass(VkCommandBuffer cmd) {
 
     struct DiffusePC {
         float envScale{};
-        uint32_t cdfWidth{};
-        uint32_t cdfHeight{};
-        uint32_t _pad{0};
+        std::uint32_t cdfWidth{};
+        std::uint32_t cdfHeight{};
+        std::uint32_t _pad{0};
     };
     VkPipeline pipeline = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
@@ -611,7 +613,7 @@ bool IblPrecompute::runDiffusePass(VkCommandBuffer cmd) {
                              &conditionalInfo,
                              nullptr},
     };
-    vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    vkUpdateDescriptorSets(m_ctx->device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
@@ -635,7 +637,7 @@ bool IblPrecompute::runSpecularPass(VkCommandBuffer cmd) {
         return true;
     }
 
-    const uint32_t mipCount = m_res.specularMipped.mipLevels();
+    const std::uint32_t mipCount = m_res.specularMipped.mipLevels();
 
     const std::array<VkDescriptorSetLayoutBinding, 3> bindings{
         VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
@@ -644,7 +646,7 @@ bool IblPrecompute::runSpecularPass(VkCommandBuffer cmd) {
     };
     const VkDescriptorSetLayoutCreateInfo layoutInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .bindingCount = static_cast<uint32_t>(bindings.size()),
+        .bindingCount = static_cast<std::uint32_t>(bindings.size()),
         .pBindings = bindings.data(),
     };
 
@@ -665,7 +667,7 @@ bool IblPrecompute::runSpecularPass(VkCommandBuffer cmd) {
     const VkDescriptorPoolCreateInfo poolInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
         .maxSets = mipCount,
-        .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
+        .poolSizeCount = static_cast<std::uint32_t>(poolSizes.size()),
         .pPoolSizes = poolSizes.data(),
     };
 
@@ -700,7 +702,7 @@ bool IblPrecompute::runSpecularPass(VkCommandBuffer cmd) {
     const VkDescriptorImageInfo envImageInfo{VK_NULL_HANDLE, m_envImageView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     const VkDescriptorImageInfo envSamplerInfo{m_envSampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
 
-    for (uint32_t mip = 0; mip < mipCount; ++mip) {
+    for (std::uint32_t mip = 0; mip < mipCount; ++mip) {
         VkImageView mipView = createMipView(*m_ctx, m_res.specularMipped, mip);
         if (mipView == VK_NULL_HANDLE) {
             return false;
@@ -740,7 +742,7 @@ bool IblPrecompute::runSpecularPass(VkCommandBuffer cmd) {
                                  nullptr,
                                  nullptr},
         };
-        vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+        vkUpdateDescriptorSets(m_ctx->device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
 
     // All descriptors are now written — safe to record commands.
@@ -754,10 +756,10 @@ bool IblPrecompute::runSpecularPass(VkCommandBuffer cmd) {
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
 
-    for (uint32_t mip = 0; mip < mipCount; ++mip) {
+    for (std::uint32_t mip = 0; mip < mipCount; ++mip) {
         const float roughness = (mipCount > 1) ? static_cast<float>(mip) / static_cast<float>(mipCount - 1) : 0.0f;
-        const uint32_t mipWidth = std::max(1u, kSpecularExtent.width >> mip);
-        const uint32_t mipHeight = std::max(1u, kSpecularExtent.height >> mip);
+        const std::uint32_t mipWidth = std::max(1u, kSpecularExtent.width >> mip);
+        const std::uint32_t mipHeight = std::max(1u, kSpecularExtent.height >> mip);
 
         // cppcheck-suppress unusedStructMember; both fields are read by the GPU via vkCmdPushConstants
         const struct {
@@ -781,7 +783,7 @@ bool IblPrecompute::runSpecularPass(VkCommandBuffer cmd) {
 
 bool IblPrecompute::createComputePipeline(const char* spirvPath,
                                           VkDescriptorSetLayout layout,
-                                          uint32_t pushConstantSize,
+                                          std::uint32_t pushConstantSize,
                                           VkPipeline& outPipeline,
                                           VkPipelineLayout& outLayout) {
     VkShaderModule module = loadShaderModule(*m_ctx, spirvPath);

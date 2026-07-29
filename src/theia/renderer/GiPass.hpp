@@ -3,6 +3,7 @@
 
 #include <volk/volk.h>
 
+#include <cstdint>
 #include <slang-math/slang-math.hpp>
 
 #include "harmonia/DeviceContext.hpp"
@@ -26,11 +27,11 @@ namespace theia {
 /// pass emits direct + emission only (giEnabled push-constant disables IBL/ambient).
 class GiPass {
   public:
-    static constexpr uint32_t kMaxBindlessTextures = 256;
+    static constexpr std::uint32_t kMaxBindlessTextures = 256;
 
     struct Config {
-        uint32_t width = 0;
-        uint32_t height = 0;
+        std::uint32_t width = 0;
+        std::uint32_t height = 0;
         VkImage hdrImage = VK_NULL_HANDLE;      ///< externally owned HDR render target (read+write)
         VkImageView hdrView = VK_NULL_HANDLE;   ///< storage view for the HDR image
         VkImage giBufferImage = VK_NULL_HANDLE; ///< forward G-buffer: worldPos + materialIdx
@@ -48,8 +49,8 @@ class GiPass {
         VkSampler envSampler = VK_NULL_HANDLE;
         VkBuffer envMarginalCdf = VK_NULL_HANDLE;    ///< may be VK_NULL_HANDLE (no env importance)
         VkBuffer envConditionalCdf = VK_NULL_HANDLE; ///< may be VK_NULL_HANDLE
-        uint32_t envImportanceWidth = 0;
-        uint32_t envImportanceHeight = 0;
+        std::uint32_t envImportanceWidth = 0;
+        std::uint32_t envImportanceHeight = 0;
         bool hasEnvMap = false;
         float envLuminanceScale = 1.0f;
 
@@ -58,9 +59,9 @@ class GiPass {
             1.0f}; ///< GI2: previous-frame view-projection for inline motion-vector reprojection (temporal reuse)
         sm::float3 cameraPos{0.0f};
         float exposure = 1.0f;
-        uint32_t frameSampleIndex = 0;
-        uint32_t rngBaseSeed = 0;
-        uint32_t maxDepth = 3;
+        std::uint32_t frameSampleIndex = 0;
+        std::uint32_t rngBaseSeed = 0;
+        std::uint32_t maxDepth = 3;
 
         /// A3(b): optional A-SVGF gradient/variance guide (R32G32F, R = gradient,
         /// G = variance) for the variance-aware adaptive firefly clamp. When
@@ -76,7 +77,7 @@ class GiPass {
         /// independent samples keeps the estimator unbiased. 1 disables adaptive sampling.
         /// Only takes effect when gradientVarianceView is bound; otherwise the shader forces 1
         /// (bit-identical to the legacy single-sample path).
-        uint32_t adaptiveMaxSamples = 4;
+        std::uint32_t adaptiveMaxSamples = 4;
 
         /// A4: ReSTIR DI — spatiotemporal reservoir resampling for emissive-triangle
         /// direct lighting at the primary vertex. When true the shader replaces the
@@ -131,27 +132,27 @@ class GiPass {
         sm::float4x4 prevViewProj{1.0f}; ///< GI2: prev-frame VP for inline temporal reprojection
         sm::float4 cameraPos{0.0f};
         float exposure = 1.0f;
-        uint32_t frameSampleIndex = 0;
-        uint32_t rngBaseSeed = 0;
-        uint32_t emissiveTriangleCount = 0;
-        uint32_t envImportanceWidth = 0;
-        uint32_t envImportanceHeight = 0;
-        uint32_t hasEnvMap = 0;
+        std::uint32_t frameSampleIndex = 0;
+        std::uint32_t rngBaseSeed = 0;
+        std::uint32_t emissiveTriangleCount = 0;
+        std::uint32_t envImportanceWidth = 0;
+        std::uint32_t envImportanceHeight = 0;
+        std::uint32_t hasEnvMap = 0;
         float envLuminanceScale = 1.0f;
-        uint32_t maxDepth = 3;
-        uint32_t screenWidth = 0;
-        uint32_t screenHeight = 0;
-        uint32_t _pad0 = 0;
-        uint32_t a3RegularizationEnabled = 1; ///< A3(a): secondary-bounce roughness regularization
-        uint32_t hasGradientVariance = 0;     ///< A3(b): 1 when a real A-SVGF guide is bound
-        uint32_t giAdaptiveMaxSamples =
-            1;                        ///< c1: max GI samples/pixel (1 = adaptive sampling off / behavior-preserving)
-        uint32_t restirDiEnabled = 0; ///< A4: 1 = spatiotemporal reservoir DI; 0 = bit-identical fallback
-        uint32_t restirDiSpatial = 0; ///< A4: 1 = enable spatial reuse (default 0 = initial+temporal only)
-        uint32_t restirHasMotion = 0; ///< A4: 1 = real motion image bound; 0 = dummy (skip reprojection)
-        uint32_t restirPtEnabled =
+        std::uint32_t maxDepth = 3;
+        std::uint32_t screenWidth = 0;
+        std::uint32_t screenHeight = 0;
+        std::uint32_t _pad0 = 0;
+        std::uint32_t a3RegularizationEnabled = 1; ///< A3(a): secondary-bounce roughness regularization
+        std::uint32_t hasGradientVariance = 0;     ///< A3(b): 1 when a real A-SVGF guide is bound
+        std::uint32_t giAdaptiveMaxSamples =
+            1; ///< c1: max GI samples/pixel (1 = adaptive sampling off / behavior-preserving)
+        std::uint32_t restirDiEnabled = 0; ///< A4: 1 = spatiotemporal reservoir DI; 0 = bit-identical fallback
+        std::uint32_t restirDiSpatial = 0; ///< A4: 1 = enable spatial reuse (default 0 = initial+temporal only)
+        std::uint32_t restirHasMotion = 0; ///< A4: 1 = real motion image bound; 0 = dummy (skip reprojection)
+        std::uint32_t restirPtEnabled =
             0; ///< GI2: 1 = ReSTIR PT (path integrator owns primary emissive NEE); 0 = legacy DI path
-        uint32_t restirPtPathEnabled = 0; ///< GI2 full PT: 1 = multi-bounce path reservoir owns the indirect walk
+        std::uint32_t restirPtPathEnabled = 0; ///< GI2 full PT: 1 = multi-bounce path reservoir owns the indirect walk
     };
     static_assert(sizeof(GiPushConstants) == 224);
 
@@ -191,12 +192,12 @@ class GiPass {
     // layout Slang picks — the CPU never indexes the contents.
     static constexpr VkDeviceSize kReservoirStride = 64; ///< >= Slang Reservoir stride (float3 may be 16-aligned)
     Buffer m_reservoirBuf[2]{};
-    uint32_t m_reservoirPingPong = 0; ///< index of the buffer written THIS frame
-    bool m_reservoirsCleared = false; ///< one-time zero-fill of both reservoir buffers
+    std::uint32_t m_reservoirPingPong = 0; ///< index of the buffer written THIS frame
+    bool m_reservoirsCleared = false;      ///< one-time zero-fill of both reservoir buffers
     /// GI2 full PT: path reservoir ping-pong buffers (bindings 20 = cur, 21 = prev).
     static constexpr VkDeviceSize kPathReservoirStride = 64; ///< >= Slang PathReservoir stride
     Buffer m_pathReservoirBuf[2]{};
-    uint32_t m_pathReservoirPingPong = 0;
+    std::uint32_t m_pathReservoirPingPong = 0;
     bool m_pathReservoirsCleared = false;
     Image m_dummyMotionVectors{}; ///< 1×1 R32G32F zero placeholder for binding 18
     bool m_dummyMotionReady = false;

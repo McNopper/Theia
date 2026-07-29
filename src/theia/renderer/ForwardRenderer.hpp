@@ -4,6 +4,7 @@
 #include <volk/volk.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <slang-math/slang-math.hpp>
 
 #include "harmonia/DeviceContext.hpp"
@@ -29,8 +30,8 @@ namespace theia {
 class ForwardRenderer {
   public:
     struct Config {
-        uint32_t width = 1024;
-        uint32_t height = 768;
+        std::uint32_t width = 1024;
+        std::uint32_t height = 768;
         VkFormat outputFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
         VkImage hdrImage = VK_NULL_HANDLE; ///< externally owned HDR color target
         VkImageView hdrImageView = VK_NULL_HANDLE;
@@ -55,7 +56,7 @@ class ForwardRenderer {
 
     /// Resize to a new extent after the host (App) has recreated the HDR image.
     /// Recreates depth/GBuffer targets; the pipeline and descriptors are unchanged.
-    bool resize(uint32_t width, uint32_t height, VkImage hdrImage, VkImageView hdrImageView) noexcept;
+    bool resize(std::uint32_t width, std::uint32_t height, VkImage hdrImage, VkImageView hdrImageView) noexcept;
 
     void setScene(const Scene* scene) {
         m_scene = scene;
@@ -69,8 +70,10 @@ class ForwardRenderer {
     /// harmless placeholder).
     void setIbl(const IblResources& res, VkImageView rawEnvView = VK_NULL_HANDLE, float envUnitNits = 1.0f);
     /// Bind env-importance CDF buffers used by transparent-path stochastic env sampling.
-    void
-    setEnvImportanceSampling(VkBuffer marginalCdf, VkBuffer conditionalCdf, uint32_t width, uint32_t height) noexcept {
+    void setEnvImportanceSampling(VkBuffer marginalCdf,
+                                  VkBuffer conditionalCdf,
+                                  std::uint32_t width,
+                                  std::uint32_t height) noexcept {
         m_envMarginalCdf = marginalCdf;
         m_envConditionalCdf = conditionalCdf;
         m_envImportanceWidth = width;
@@ -98,9 +101,9 @@ class ForwardRenderer {
     /// Encoded as bit 1 of the `giEnabled` push constant. Punctual lights are unaffected.
     void setRestirDiActive(bool active) noexcept { m_giEnabled = (m_giEnabled & ~2U) | (active ? 2U : 0U); }
     /// Max transparent gather depth for coverage/transmission rays (scene max_depth).
-    void setTransparentMaxDepth(uint32_t depth) noexcept { m_transparentMaxDepth = std::max(1u, depth); }
+    void setTransparentMaxDepth(std::uint32_t depth) noexcept { m_transparentMaxDepth = std::max(1u, depth); }
     /// Per-frame RNG state plumbed into shader push constants.
-    void setRngState(uint32_t frameSampleIndex, uint32_t baseSeed, bool deterministicReplay) noexcept {
+    void setRngState(std::uint32_t frameSampleIndex, std::uint32_t baseSeed, bool deterministicReplay) noexcept {
         m_frameSampleIndex = frameSampleIndex;
         m_rngBaseSeed = baseSeed;
         m_deterministicReplay = deterministicReplay;
@@ -113,7 +116,8 @@ class ForwardRenderer {
     void setHiZTestEnabled(bool enabled) noexcept { m_hiZTestEnabled = enabled; }
 
     /// Update tile light list buffers (called by LightCuller each frame before recordFrame).
-    void setTileBuffers(VkBuffer tileLightCounts, VkBuffer tileLightIndices, uint32_t tilesX, uint32_t tilesY);
+    void
+    setTileBuffers(VkBuffer tileLightCounts, VkBuffer tileLightIndices, std::uint32_t tilesX, std::uint32_t tilesY);
 
     /// Record scene geometry rendering into cmd.
     /// Transitions hdrImage UNDEFINED/GENERAL -> ATTACHMENT_OPTIMAL, renders, leaves it there.
@@ -135,24 +139,24 @@ class ForwardRenderer {
         sm::float4x4 view;
         sm::float4 cameraPos;  ///< xyz = world-space camera position
         float exposure = 0.0f; ///< 1 / (1.2 * 2^EV100) — same as Hyperion
-        uint32_t lightCount = 0;
-        uint32_t emissiveTriangleCount = 0;
-        uint32_t tilesX = 0; ///< screen width / 16
-        uint32_t tilesY = 0; ///< screen height / 16
-        uint32_t screenWidth = 0;
-        uint32_t screenHeight = 0;
-        uint32_t transparentMaxDepth = 2; ///< transparent gather depth
-        uint32_t frameSampleIndex = 0;    ///< per-frame sample counter for stochastic stages
-        uint32_t rngBaseSeed = 0;         ///< base seed for composeRngSeed(pixel, frame, bounce, seed)
-        uint32_t rngFlags = 0;            ///< bit0 = deterministic replay, bit1 = RNG debug view
-        uint32_t cullPhase = 0;           ///< Hi-Z pass: 0 = draw all, 1 = prev-visible, 2 = remaining + Hi-Z
-        uint32_t envImportanceWidth = 0;  ///< CDF width; 0 disables env importance sampling
-        uint32_t envImportanceHeight = 0; ///< CDF height
-        uint32_t hiZMipCount = 0;         ///< Hi-Z mip levels; 0 disables the occlusion test
-        uint32_t giEnabled = 0;           ///< 1 when GiPass supplies indirect; disables forward IBL/ambient
-        sm::float4 sunDirection;          ///< xyz = world dir toward sun, w = shadow strength (0 disables)
-        sm::float4 shadowParams;          ///< x = ray tMin, y = sky ambient floor, z = env_unit_nits, w = |proj[0][0]|
-        sm::float4 presentationParams;    ///< x = indirect ambient, y = pass flag, z = debug ray-hit, w = |proj[1][1]|
+        std::uint32_t lightCount = 0;
+        std::uint32_t emissiveTriangleCount = 0;
+        std::uint32_t tilesX = 0; ///< screen width / 16
+        std::uint32_t tilesY = 0; ///< screen height / 16
+        std::uint32_t screenWidth = 0;
+        std::uint32_t screenHeight = 0;
+        std::uint32_t transparentMaxDepth = 2; ///< transparent gather depth
+        std::uint32_t frameSampleIndex = 0;    ///< per-frame sample counter for stochastic stages
+        std::uint32_t rngBaseSeed = 0;         ///< base seed for composeRngSeed(pixel, frame, bounce, seed)
+        std::uint32_t rngFlags = 0;            ///< bit0 = deterministic replay, bit1 = RNG debug view
+        std::uint32_t cullPhase = 0;           ///< Hi-Z pass: 0 = draw all, 1 = prev-visible, 2 = remaining + Hi-Z
+        std::uint32_t envImportanceWidth = 0;  ///< CDF width; 0 disables env importance sampling
+        std::uint32_t envImportanceHeight = 0; ///< CDF height
+        std::uint32_t hiZMipCount = 0;         ///< Hi-Z mip levels; 0 disables the occlusion test
+        std::uint32_t giEnabled = 0;           ///< 1 when GiPass supplies indirect; disables forward IBL/ambient
+        sm::float4 sunDirection;               ///< xyz = world dir toward sun, w = shadow strength (0 disables)
+        sm::float4 shadowParams;       ///< x = ray tMin, y = sky ambient floor, z = env_unit_nits, w = |proj[0][0]|
+        sm::float4 presentationParams; ///< x = indirect ambient, y = pass flag, z = debug ray-hit, w = |proj[1][1]|
     };
     static_assert(sizeof(MeshPushConstants) == 256);
     bool createDepthTarget();
@@ -161,7 +165,10 @@ class ForwardRenderer {
     /// clear both to 0 on the first frame. Called when the bound scene changes.
     bool ensureVisibilityBuffers();
     /// Record one opaque meshlet draw for the given cull phase / Hi-Z mip count.
-    void drawOpaque(VkCommandBuffer cmd, const MeshPushConstants& pcBase, uint32_t cullPhase, uint32_t hiZMipCount);
+    void drawOpaque(VkCommandBuffer cmd,
+                    const MeshPushConstants& pcBase,
+                    std::uint32_t cullPhase,
+                    std::uint32_t hiZMipCount);
 
     Config m_config{};
     CameraParams m_camera{};
@@ -185,9 +192,9 @@ class ForwardRenderer {
         sm::float4x4 invViewProj;
         sm::float4 cameraPos;
         float exposure = 0.0f;
-        uint32_t hasEnv = 0;
+        std::uint32_t hasEnv = 0;
         float envScale = 0.0f; ///< env_unit_nits — physical cd/m² per raw EXR unit
-        uint32_t _pad1 = 0;
+        std::uint32_t _pad1 = 0;
     };
     static_assert(sizeof(SkyPushConstants) == 96);
     VkPipelineLayout m_skyPipelineLayout = VK_NULL_HANDLE;
@@ -196,14 +203,14 @@ class ForwardRenderer {
     sm::float3 m_sunDir{0.0f, 1.0f, 0.0f}; ///< world dir toward dominant IBL light
     float m_sunStrength = 0.0f;            ///< [0,1] ray-traced sun shadow strength
     float m_indirectAmbientStrength = 0.0f;
-    uint32_t m_giEnabled = 0;       ///< 1 when GiPass is active (forward skips IBL/ambient)
+    std::uint32_t m_giEnabled = 0;  ///< 1 when GiPass is active (forward skips IBL/ambient)
     float m_debugRayHitMode = 0.0f; ///< 0=off, 1=ray-hit albedo, 2=ray-hit radiance (debug only)
-    uint32_t m_transparentMaxDepth = 2;
-    uint32_t m_frameSampleIndex = 0;
-    uint32_t m_rngBaseSeed = 0x12345678U;
+    std::uint32_t m_transparentMaxDepth = 2;
+    std::uint32_t m_frameSampleIndex = 0;
+    std::uint32_t m_rngBaseSeed = 0x12345678U;
     bool m_deterministicReplay = false;
     bool m_cameraJitterEnabled = true;
-    uint32_t m_rngDebug = 0;
+    std::uint32_t m_rngDebug = 0;
 
     // Set 0: geometry buffers (vertex/instance/index/meshlet data — task + mesh stages)
     VkDescriptorSetLayout m_meshSetLayout = VK_NULL_HANDLE;
@@ -218,7 +225,7 @@ class ForwardRenderer {
     VkDescriptorSet m_iblSet = VK_NULL_HANDLE;
 
     // Set 3: bindless material textures (base_color/normal/ORM/emission — fragment stage)
-    static constexpr uint32_t kMaxBindlessTextures = 256;
+    static constexpr std::uint32_t kMaxBindlessTextures = 256;
     VkDescriptorSetLayout m_textureSetLayout = VK_NULL_HANDLE;
     VkDescriptorSet m_textureSet = VK_NULL_HANDLE;
     const Scene* m_texturesBoundFor = nullptr; ///< scene the bindless set was last written for
@@ -233,15 +240,15 @@ class ForwardRenderer {
     VkDescriptorImageInfo m_iblEnvRawInfo{};
     VkBuffer m_envMarginalCdf = VK_NULL_HANDLE;
     VkBuffer m_envConditionalCdf = VK_NULL_HANDLE;
-    uint32_t m_envImportanceWidth = 0;
-    uint32_t m_envImportanceHeight = 0;
+    std::uint32_t m_envImportanceWidth = 0;
+    std::uint32_t m_envImportanceHeight = 0;
     float m_envUnitNits = 1.0f; ///< env_unit_nits for the raw-env sky background
 
     // Tile-based light culling buffers (set by LightCuller before each recordFrame).
     VkBuffer m_tileLightCountsBuf = VK_NULL_HANDLE;
     VkBuffer m_tileLightIndicesBuf = VK_NULL_HANDLE;
-    uint32_t m_tilesX = 0;
-    uint32_t m_tilesY = 0;
+    std::uint32_t m_tilesX = 0;
+    std::uint32_t m_tilesY = 0;
     // Dummy 1-element buffers bound when no tile data is available (fallback to full light loop).
     Buffer m_dummyTileCounts;
     Buffer m_dummyTileIndices;
@@ -268,8 +275,8 @@ class ForwardRenderer {
     // Two-pass Hi-Z occlusion culling (B4).
     HiZPass m_hiZPass;                    ///< current-frame depth pyramid builder
     Buffer m_meshletVisibility[2];        ///< ping-pong per-meshlet visibility (uint per meshlet)
-    uint32_t m_visFrame = 0;              ///< index of the buffer holding PREVIOUS-frame visibility
-    uint32_t m_visMeshletCount = 0;       ///< meshlet count the visibility buffers were sized for
+    std::uint32_t m_visFrame = 0;         ///< index of the buffer holding PREVIOUS-frame visibility
+    std::uint32_t m_visMeshletCount = 0;  ///< meshlet count the visibility buffers were sized for
     const Scene* m_visBuiltFor = nullptr; ///< scene the visibility buffers were built for
     bool m_hiZTestEnabled = true;         ///< set false for one frame on a camera cut
     bool m_visClearPrev = false;          ///< clear PREV visibility next frame (freshly (re)built)

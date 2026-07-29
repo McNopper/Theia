@@ -2,12 +2,14 @@
 
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <slang-math/slang-math.hpp>
 #include <utility>
 #include <vector>
 
 #include "harmonia/core/Logger.hpp"
 #include "harmonia/core/ShaderModule.hpp"
+#include "theia/renderer/LightCuller.hpp"
 #include "theia/renderer/ShaderPath.hpp"
 
 #ifdef __clang__
@@ -19,7 +21,7 @@ namespace theia {
 
 namespace {
 
-[[nodiscard]] std::vector<uint32_t> readSpirv(const char* filename) {
+[[nodiscard]] std::vector<std::uint32_t> readSpirv(const char* filename) {
     auto code = harmonia::readSpirv(shaderPath(filename));
     if (!code)
         return {};
@@ -68,7 +70,7 @@ LightCuller& LightCuller::operator=(LightCuller&& o) noexcept {
     return *this;
 }
 
-bool LightCuller::initialize(const DeviceContext& ctx, uint32_t w, uint32_t h, const char* spvFilename) {
+bool LightCuller::initialize(const DeviceContext& ctx, std::uint32_t w, std::uint32_t h, const char* spvFilename) {
     shutdown();
     m_ctx = &ctx;
     m_screenWidth = w;
@@ -76,9 +78,9 @@ bool LightCuller::initialize(const DeviceContext& ctx, uint32_t w, uint32_t h, c
     m_tilesX = (w + kTileSize - 1) / kTileSize;
     m_tilesY = (h + kTileSize - 1) / kTileSize;
 
-    const VkDeviceSize countsBufSize = static_cast<VkDeviceSize>(m_tilesX * m_tilesY) * sizeof(uint32_t);
+    const VkDeviceSize countsBufSize = static_cast<VkDeviceSize>(m_tilesX * m_tilesY) * sizeof(std::uint32_t);
     const VkDeviceSize indicesBufSize =
-        static_cast<VkDeviceSize>(m_tilesX * m_tilesY) * kMaxLightsPerTile * sizeof(uint32_t);
+        static_cast<VkDeviceSize>(m_tilesX * m_tilesY) * kMaxLightsPerTile * sizeof(std::uint32_t);
 
     auto counts = Buffer::create(ctx,
                                  countsBufSize,
@@ -107,14 +109,14 @@ bool LightCuller::initialize(const DeviceContext& ctx, uint32_t w, uint32_t h, c
     constexpr std::array<VkDescriptorBindingFlags, 3> bindingFlags{kUAB, kUAB, kUAB};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
-        .bindingCount = static_cast<uint32_t>(bindingFlags.size()),
+        .bindingCount = static_cast<std::uint32_t>(bindingFlags.size()),
         .pBindingFlags = bindingFlags.data(),
     };
     const VkDescriptorSetLayoutCreateInfo setLayoutInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = &bindingFlagsInfo,
         .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
-        .bindingCount = static_cast<uint32_t>(bindings.size()),
+        .bindingCount = static_cast<std::uint32_t>(bindings.size()),
         .pBindings = bindings.data(),
     };
     if (vkCreateDescriptorSetLayout(ctx.device, &setLayoutInfo, nullptr, &m_setLayout) != VK_SUCCESS) {
@@ -148,7 +150,7 @@ bool LightCuller::initialize(const DeviceContext& ctx, uint32_t w, uint32_t h, c
     }
     const VkShaderModuleCreateInfo shaderInfo{
         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-        .codeSize = spirv.size() * sizeof(uint32_t),
+        .codeSize = spirv.size() * sizeof(std::uint32_t),
         .pCode = spirv.data(),
     };
     VkShaderModule shaderModule = VK_NULL_HANDLE;
@@ -266,7 +268,7 @@ void LightCuller::shutdown() {
 
 void LightCuller::dispatch(VkCommandBuffer cmd,
                            VkBuffer lightBuffer,
-                           uint32_t lightCount,
+                           std::uint32_t lightCount,
                            const sm::float4x4& proj,
                            const sm::float4x4& view,
                            float nearZ,
@@ -321,10 +323,10 @@ void LightCuller::dispatch(VkCommandBuffer cmd,
         sm::float4x4 view;
         sm::uint2 tilesXY;
         sm::uint2 screenSize;
-        uint32_t lightCount{};
+        std::uint32_t lightCount{};
         float nearZ{};
         float farZ{};
-        uint32_t _pad{};
+        std::uint32_t _pad{};
     };
     static_assert(sizeof(LightCullPC) == 160);
 
@@ -341,7 +343,7 @@ void LightCuller::dispatch(VkCommandBuffer cmd,
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
 
     // Dispatch: one thread per light, round up to 64
-    const uint32_t groups = (lightCount + 63) / 64;
+    const std::uint32_t groups = (lightCount + 63) / 64;
     if (groups > 0) {
         vkCmdDispatch(cmd, groups, 1, 1);
     }
@@ -371,7 +373,7 @@ void LightCuller::dispatch(VkCommandBuffer cmd,
     };
     const VkDependencyInfo readDep{
         .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-        .bufferMemoryBarrierCount = static_cast<uint32_t>(readBarriers.size()),
+        .bufferMemoryBarrierCount = static_cast<std::uint32_t>(readBarriers.size()),
         .pBufferMemoryBarriers = readBarriers.data(),
     };
     vkCmdPipelineBarrier2(cmd, &readDep);

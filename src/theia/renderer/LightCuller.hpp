@@ -3,6 +3,7 @@
 
 #include <volk/volk.h>
 
+#include <cstdint>
 #include <slang-math/slang-math.hpp>
 
 #include "harmonia/DeviceContext.hpp"
@@ -17,8 +18,8 @@ namespace theia {
 /// Ref: Olsson & Assarsson — "Tiled Shading" (J. Graphics, GPU, and Game Tools 15(4), 2011)
 class LightCuller {
   public:
-    static constexpr uint32_t kTileSize = 16;
-    static constexpr uint32_t kMaxLightsPerTile = 128;
+    static constexpr std::uint32_t kTileSize = 16;
+    static constexpr std::uint32_t kMaxLightsPerTile = 128;
 
     LightCuller() = default;
     ~LightCuller();
@@ -31,8 +32,8 @@ class LightCuller {
     /// Initialize for a given render resolution.
     /// @param spvFilename  SPIR-V filename resolved against THEIA_SHADER_DIR.
     [[nodiscard]] bool initialize(const DeviceContext& ctx,
-                                  uint32_t screenWidth,
-                                  uint32_t screenHeight,
+                                  std::uint32_t screenWidth,
+                                  std::uint32_t screenHeight,
                                   const char* spvFilename = "light_cull.comp.spv");
 
     void shutdown();
@@ -42,7 +43,7 @@ class LightCuller {
     /// projView: projection and view matrices for this frame.
     void dispatch(VkCommandBuffer cmd,
                   VkBuffer lightBuffer,
-                  uint32_t lightCount,
+                  std::uint32_t lightCount,
                   const sm::float4x4& proj,
                   const sm::float4x4& view,
                   float nearZ,
@@ -51,8 +52,8 @@ class LightCuller {
     // GPU buffers read by ForwardRenderer
     [[nodiscard]] VkBuffer tileLightCountsBuffer() const noexcept { return m_tileLightCountsBuf.handle(); }
     [[nodiscard]] VkBuffer tileLightIndicesBuffer() const noexcept { return m_tileLightIndicesBuf.handle(); }
-    [[nodiscard]] uint32_t tilesX() const noexcept { return m_tilesX; }
-    [[nodiscard]] uint32_t tilesY() const noexcept { return m_tilesY; }
+    [[nodiscard]] std::uint32_t tilesX() const noexcept { return m_tilesX; }
+    [[nodiscard]] std::uint32_t tilesY() const noexcept { return m_tilesY; }
 
   private:
     const DeviceContext* m_ctx = nullptr;
@@ -66,10 +67,10 @@ class LightCuller {
     Buffer m_tileLightCountsBuf;  // uint[tilesX*tilesY]
     Buffer m_tileLightIndicesBuf; // uint[tilesX*tilesY * kMaxLightsPerTile]
 
-    uint32_t m_tilesX = 0;
-    uint32_t m_tilesY = 0;
-    uint32_t m_screenWidth = 0;
-    uint32_t m_screenHeight = 0;
+    std::uint32_t m_tilesX = 0;
+    std::uint32_t m_tilesY = 0;
+    std::uint32_t m_screenWidth = 0;
+    std::uint32_t m_screenHeight = 0;
 };
 
 } // namespace theia

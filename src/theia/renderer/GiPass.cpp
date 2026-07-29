@@ -2,12 +2,15 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <harmonia/core/Logger.hpp>
 #include <harmonia/core/ShaderModule.hpp>
 #include <slang-math/slang-math.hpp>
 #include <theia/renderer/ShaderPath.hpp>
 #include <theia/scene/Scene.hpp>
 #include <vector>
+
+#include "theia/renderer/GiPass.hpp"
 
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -226,7 +229,7 @@ bool GiPass::createDescriptors() {
         kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
-        .bindingCount = static_cast<uint32_t>(bindingFlags.size()),
+        .bindingCount = static_cast<std::uint32_t>(bindingFlags.size()),
         .pBindingFlags = bindingFlags.data(),
     };
 
@@ -234,7 +237,7 @@ bool GiPass::createDescriptors() {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = &bindingFlagsInfo,
         .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
-        .bindingCount = static_cast<uint32_t>(bindings.size()),
+        .bindingCount = static_cast<std::uint32_t>(bindings.size()),
         .pBindings = bindings.data(),
     };
     if (vkCreateDescriptorSetLayout(m_ctx->device, &setInfo, nullptr, &m_setLayout) != VK_SUCCESS) {
@@ -255,7 +258,7 @@ bool GiPass::createDescriptors() {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
         .flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
         .maxSets = 1,
-        .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
+        .poolSizeCount = static_cast<std::uint32_t>(poolSizes.size()),
         .pPoolSizes = poolSizes.data(),
     };
     if (vkCreateDescriptorPool(m_ctx->device, &poolInfo, nullptr, &m_pool) != VK_SUCCESS) {
@@ -536,10 +539,10 @@ void GiPass::updateDescriptors(const FrameParams& params) {
     std::vector<VkWriteDescriptorSet> allWrites(writes.begin(), writes.end());
     if (m_texturesBoundFor != scene) {
         const auto& sceneTextures = scene->textures();
-        const uint32_t texCount = std::min(static_cast<uint32_t>(sceneTextures.size()), kMaxBindlessTextures);
+        const std::uint32_t texCount = std::min(static_cast<std::uint32_t>(sceneTextures.size()), kMaxBindlessTextures);
         if (texCount > 0) {
             std::vector<VkDescriptorImageInfo> imageInfos(texCount);
-            for (uint32_t i = 0; i < texCount; ++i) {
+            for (std::uint32_t i = 0; i < texCount; ++i) {
                 imageInfos[i] = VkDescriptorImageInfo{
                     .sampler = sceneTextures[i].sampler(),
                     .imageView = sceneTextures[i].image().view(),
@@ -558,7 +561,7 @@ void GiPass::updateDescriptors(const FrameParams& params) {
         }
         m_texturesBoundFor = scene;
     }
-    vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(allWrites.size()), allWrites.data(), 0, nullptr);
+    vkUpdateDescriptorSets(m_ctx->device, static_cast<std::uint32_t>(allWrites.size()), allWrites.data(), 0, nullptr);
 }
 
 void GiPass::updateRestirDescriptors(const FrameParams& params) {
@@ -570,12 +573,12 @@ void GiPass::updateRestirDescriptors(const FrameParams& params) {
         !m_pathReservoirBuf[1].isValid()) {
         return;
     }
-    const uint32_t cur = m_reservoirPingPong;
-    const uint32_t prev = 1u - m_reservoirPingPong;
+    const std::uint32_t cur = m_reservoirPingPong;
+    const std::uint32_t prev = 1u - m_reservoirPingPong;
     const VkDescriptorBufferInfo curInfo{m_reservoirBuf[cur].handle(), 0, VK_WHOLE_SIZE};
     const VkDescriptorBufferInfo prevInfo{m_reservoirBuf[prev].handle(), 0, VK_WHOLE_SIZE};
-    const uint32_t pathCur = m_pathReservoirPingPong;
-    const uint32_t pathPrev = 1u - m_pathReservoirPingPong;
+    const std::uint32_t pathCur = m_pathReservoirPingPong;
+    const std::uint32_t pathPrev = 1u - m_pathReservoirPingPong;
     const VkDescriptorBufferInfo pathCurInfo{m_pathReservoirBuf[pathCur].handle(), 0, VK_WHOLE_SIZE};
     const VkDescriptorBufferInfo pathPrevInfo{m_pathReservoirBuf[pathPrev].handle(), 0, VK_WHOLE_SIZE};
 
@@ -638,7 +641,7 @@ void GiPass::updateRestirDescriptors(const FrameParams& params) {
          &pathPrevInfo,
          nullptr},
     }};
-    vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    vkUpdateDescriptorSets(m_ctx->device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
     m_boundMotionVectorView = motionView;
 }
 
@@ -742,7 +745,7 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         }};
         const VkDependencyInfo fillDep{
             .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-            .bufferMemoryBarrierCount = static_cast<uint32_t>(fillBarriers.size()),
+            .bufferMemoryBarrierCount = static_cast<std::uint32_t>(fillBarriers.size()),
             .pBufferMemoryBarriers = fillBarriers.data(),
         };
         vkCmdPipelineBarrier2(cmd, &fillDep);
@@ -779,7 +782,7 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         }};
         const VkDependencyInfo preDep{
             .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-            .imageMemoryBarrierCount = static_cast<uint32_t>(preBarriers.size()),
+            .imageMemoryBarrierCount = static_cast<std::uint32_t>(preBarriers.size()),
             .pImageMemoryBarriers = preBarriers.data(),
         };
         vkCmdPipelineBarrier2(cmd, &preDep);
@@ -823,8 +826,8 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout, 0, 1, &m_set, 0, nullptr);
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
 
-    const uint32_t gx = (m_cfg.width + 7u) / 8u;
-    const uint32_t gy = (m_cfg.height + 7u) / 8u;
+    const std::uint32_t gx = (m_cfg.width + 7u) / 8u;
+    const std::uint32_t gy = (m_cfg.height + 7u) / 8u;
     vkCmdDispatch(cmd, gx, gy, 1);
 
     // A4: flip the reservoir ping-pong so this frame's "current" becomes next frame's "prev".

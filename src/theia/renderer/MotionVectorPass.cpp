@@ -1,10 +1,12 @@
 #include "theia/renderer/MotionVectorPass.hpp"
 
 #include <array>
+#include <cstdint>
 
 #include "harmonia/core/Barrier.hpp"
 #include "harmonia/core/Logger.hpp"
 #include "harmonia/core/ShaderModule.hpp"
+#include "theia/renderer/MotionVectorPass.hpp"
 #include "theia/renderer/ShaderPath.hpp"
 
 #ifdef __clang__
@@ -108,7 +110,7 @@ bool MotionVectorPass::createPipeline(const char* spvName) noexcept {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = nullptr,
         .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT,
-        .bindingCount = static_cast<uint32_t>(bindings.size()),
+        .bindingCount = static_cast<std::uint32_t>(bindings.size()),
         .pBindings = bindings.data(),
     };
     if (vkCreateDescriptorSetLayout(m_ctx->device, &setInfo, nullptr, &m_setLayout) != VK_SUCCESS) {
@@ -161,7 +163,7 @@ bool MotionVectorPass::createPipeline(const char* spvName) noexcept {
     }
 
     m_ctx->setDebugName(
-        VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<uint64_t>(m_pipeline), "theia.motionVectors.pipeline");
+        VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<std::uint64_t>(m_pipeline), "theia.motionVectors.pipeline");
     return true;
 }
 
@@ -254,12 +256,16 @@ void MotionVectorPass::record(VkCommandBuffer cmd, const FrameParams& params) no
     };
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
-    vkCmdPushDescriptorSet(
-        cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout, 0, static_cast<uint32_t>(writes.size()), writes.data());
+    vkCmdPushDescriptorSet(cmd,
+                           VK_PIPELINE_BIND_POINT_COMPUTE,
+                           m_pipelineLayout,
+                           0,
+                           static_cast<std::uint32_t>(writes.size()),
+                           writes.data());
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
 
-    const uint32_t gx = (m_cfg.width + 7u) / 8u;
-    const uint32_t gy = (m_cfg.height + 7u) / 8u;
+    const std::uint32_t gx = (m_cfg.width + 7u) / 8u;
+    const std::uint32_t gy = (m_cfg.height + 7u) / 8u;
     vkCmdDispatch(cmd, gx, gy, 1);
 
     // Make motion-vector writes visible to subsequent COMPUTE_SHADER reads

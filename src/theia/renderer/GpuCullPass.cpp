@@ -1,12 +1,14 @@
 #include "theia/renderer/GpuCullPass.hpp"
 
 #include <array>
+#include <cstdint>
 #include <slang-math/slang-math.hpp>
 #include <utility>
 #include <vector>
 
 #include "harmonia/core/Logger.hpp"
 #include "harmonia/core/ShaderModule.hpp"
+#include "theia/renderer/GpuCullPass.hpp"
 #include "theia/renderer/ShaderPath.hpp"
 
 #ifdef __clang__
@@ -18,9 +20,9 @@ namespace theia {
 
 // Push constant block matching forward_cull.comp.slang CullPC (80 bytes).
 struct alignas(4) CullPC {
-    sm::float4x4 viewProj;                    // 64 bytes — row-major VP matrix
-    uint32_t instanceCount{};                 // 4 bytes
-    uint32_t _pad0 = 0, _pad1 = 0, _pad2 = 0; // 12 bytes pad
+    sm::float4x4 viewProj;                         // 64 bytes — row-major VP matrix
+    std::uint32_t instanceCount{};                 // 4 bytes
+    std::uint32_t _pad0 = 0, _pad1 = 0, _pad2 = 0; // 12 bytes pad
 };
 static_assert(sizeof(CullPC) == 80);
 
@@ -61,7 +63,7 @@ bool GpuCullPass::initialize(const DeviceContext& ctx, const char* spvFilename) 
     m_ctx = &ctx;
 
     // --- Output buffers ---
-    const VkDeviceSize kCompactListSize = static_cast<VkDeviceSize>(kMaxInstances) * sizeof(uint32_t);
+    const VkDeviceSize kCompactListSize = static_cast<VkDeviceSize>(kMaxInstances) * sizeof(std::uint32_t);
     // Single VkDrawMeshTasksIndirectCommandEXT = 3×uint = 12 bytes.
     // vkCmdFillBuffer zeros all 12 bytes before each dispatch; the compute shader then
     // restores groupCountY=1 and groupCountZ=1, and accumulates groupCountX atomically.
@@ -101,14 +103,14 @@ bool GpuCullPass::initialize(const DeviceContext& ctx, const char* spvFilename) 
     constexpr std::array<VkDescriptorBindingFlags, 4> bindingFlags{kUAB, kUAB, kUAB, kUAB};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
-        .bindingCount = static_cast<uint32_t>(bindingFlags.size()),
+        .bindingCount = static_cast<std::uint32_t>(bindingFlags.size()),
         .pBindingFlags = bindingFlags.data(),
     };
     const VkDescriptorSetLayoutCreateInfo setLayoutInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = &flagsInfo,
         .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
-        .bindingCount = static_cast<uint32_t>(bindings.size()),
+        .bindingCount = static_cast<std::uint32_t>(bindings.size()),
         .pBindings = bindings.data(),
     };
     if (vkCreateDescriptorSetLayout(ctx.device, &setLayoutInfo, nullptr, &m_setLayout) != VK_SUCCESS) {
@@ -120,7 +122,7 @@ bool GpuCullPass::initialize(const DeviceContext& ctx, const char* spvFilename) 
     const VkPushConstantRange pcRange{
         .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
         .offset = 0,
-        .size = static_cast<uint32_t>(sizeof(CullPC)),
+        .size = static_cast<std::uint32_t>(sizeof(CullPC)),
     };
     const VkPipelineLayoutCreateInfo layoutInfo{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -142,7 +144,7 @@ bool GpuCullPass::initialize(const DeviceContext& ctx, const char* spvFilename) 
     }
     const VkShaderModuleCreateInfo shaderInfo{
         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-        .codeSize = spirv->size() * sizeof(uint32_t),
+        .codeSize = spirv->size() * sizeof(std::uint32_t),
         .pCode = spirv->data(),
     };
     VkShaderModule shaderModule = VK_NULL_HANDLE;
@@ -218,7 +220,8 @@ bool GpuCullPass::initialize(const DeviceContext& ctx, const char* spvFilename) 
                              &indirectInfo,
                              nullptr},
     };
-    vkUpdateDescriptorSets(ctx.device, static_cast<uint32_t>(staticWrites.size()), staticWrites.data(), 0, nullptr);
+    vkUpdateDescriptorSets(
+        ctx.device, static_cast<std::uint32_t>(staticWrites.size()), staticWrites.data(), 0, nullptr);
 
     Logger::info("GpuCullPass: initialized (max {} instances)", kMaxInstances);
     return true;
@@ -254,7 +257,7 @@ void GpuCullPass::shutdown() {
 void GpuCullPass::dispatch(VkCommandBuffer cmd,
                            VkBuffer instanceBuf,
                            VkBuffer instanceBoundsBuf,
-                           uint32_t instanceCount,
+                           std::uint32_t instanceCount,
                            const sm::float4x4& viewProj) {
     if (!m_ctx || m_pipeline == VK_NULL_HANDLE || instanceCount == 0)
         return;
@@ -306,7 +309,7 @@ void GpuCullPass::dispatch(VkCommandBuffer cmd,
                              &boundsInfo,
                              nullptr},
     };
-    vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(dynWrites.size()), dynWrites.data(), 0, nullptr);
+    vkUpdateDescriptorSets(m_ctx->device, static_cast<std::uint32_t>(dynWrites.size()), dynWrites.data(), 0, nullptr);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout, 0, 1, &m_set, 0, nullptr);
@@ -314,7 +317,7 @@ void GpuCullPass::dispatch(VkCommandBuffer cmd,
     const CullPC pc{viewProj, instanceCount};
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(CullPC), &pc);
 
-    const uint32_t groups = (instanceCount + 63u) / 64u;
+    const std::uint32_t groups = (instanceCount + 63u) / 64u;
     vkCmdDispatch(cmd, groups, 1, 1);
 }
 

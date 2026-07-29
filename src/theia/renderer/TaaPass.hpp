@@ -3,6 +3,8 @@
 
 #include <volk/volk.h>
 
+#include <cstdint>
+
 #include "harmonia/DeviceContext.hpp"
 #include "harmonia/core/Image.hpp"
 
@@ -21,8 +23,8 @@ namespace theia {
 class TaaPass {
   public:
     struct Config {
-        uint32_t width = 0;
-        uint32_t height = 0;
+        std::uint32_t width = 0;
+        std::uint32_t height = 0;
         VkImage hdrImage = VK_NULL_HANDLE; ///< shared HDR image (R32G32B32A32_SFLOAT)
         VkImageView hdrView = VK_NULL_HANDLE;
         VkImageView motionVecView = VK_NULL_HANDLE; ///< from MotionVectorPass (R32G32_SFLOAT)
@@ -50,10 +52,10 @@ class TaaPass {
 
   private:
     struct TaaPushConstants {
-        uint32_t screenWidth = 0;
-        uint32_t screenHeight = 0;
+        std::uint32_t screenWidth = 0;
+        std::uint32_t screenHeight = 0;
         float alpha = 0.1f;
-        uint32_t firstFrame = 0;
+        std::uint32_t firstFrame = 0;
     };
     static_assert(sizeof(TaaPushConstants) == 16);
 
@@ -73,7 +75,7 @@ class TaaPass {
     VkPipelineLayout m_pipeLayout = VK_NULL_HANDLE;
     VkPipeline m_pipeline = VK_NULL_HANDLE;
 
-    uint32_t m_frameCount = 0;
+    std::uint32_t m_frameCount = 0;
 };
 
 } // namespace theia

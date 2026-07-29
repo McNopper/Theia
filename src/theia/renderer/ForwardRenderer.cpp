@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <harmonia/core/Logger.hpp>
 #include <harmonia/core/ShaderModule.hpp>
@@ -12,6 +13,8 @@
 #include <theia/renderer/ShaderPath.hpp>
 #include <theia/scene/Scene.hpp>
 #include <vector>
+
+#include "theia/renderer/ForwardRenderer.hpp"
 
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -54,7 +57,7 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
     bool forceGd3 = false;
     {
         char* forceGd3Raw = nullptr;
-        size_t forceGd3Len = 0;
+        std::size_t forceGd3Len = 0;
         if (_dupenv_s(&forceGd3Raw, &forceGd3Len, "THEIA_FORCE_GD3") == 0 && forceGd3Raw != nullptr) {
             forceGd3 = (forceGd3Raw[0] != '\0' && forceGd3Raw[0] != '0');
             std::free(forceGd3Raw);
@@ -149,7 +152,7 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
     }
 
     char* debugModeRaw = nullptr;
-    size_t debugModeLen = 0;
+    std::size_t debugModeLen = 0;
     if (_dupenv_s(&debugModeRaw, &debugModeLen, "THEIA_DEBUG_RAY_HIT_MODE") == 0 && debugModeRaw != nullptr) {
         m_debugRayHitMode = std::clamp(std::strtof(debugModeRaw, nullptr), 0.0f, 6.0f);
         std::free(debugModeRaw);
@@ -161,7 +164,7 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
     // Debug/A-B toggle: set THEIA_DISABLE_HIZ to draw all meshlets (two passes, no occlusion
     // test). Used to verify Hi-Z culling is visually equivalent to the uncullered path.
     char* hiZDisableRaw = nullptr;
-    size_t hiZDisableLen = 0;
+    std::size_t hiZDisableLen = 0;
     if (_dupenv_s(&hiZDisableRaw, &hiZDisableLen, "THEIA_DISABLE_HIZ") == 0 && hiZDisableRaw != nullptr) {
         m_hiZDebugDisabled = (hiZDisableRaw[0] != '\0' && hiZDisableRaw[0] != '0');
         std::free(hiZDisableRaw);
@@ -171,7 +174,7 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
     }
 
     char* singlePassRaw = nullptr;
-    size_t singlePassLen = 0;
+    std::size_t singlePassLen = 0;
     if (_dupenv_s(&singlePassRaw, &singlePassLen, "THEIA_SINGLE_PASS") == 0 && singlePassRaw != nullptr) {
         m_forceSinglePass = (singlePassRaw[0] != '\0' && singlePassRaw[0] != '0');
         std::free(singlePassRaw);
@@ -181,7 +184,7 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
     }
 
     // Create 1-element dummy buffers for tile light slots (fallback when LightCuller hasn't run).
-    constexpr VkDeviceSize kDummySize = sizeof(uint32_t) * 128; // >= kMaxLightsPerTile
+    constexpr VkDeviceSize kDummySize = sizeof(std::uint32_t) * 128; // >= kMaxLightsPerTile
     auto dummyCounts = Buffer::create(ctx,
                                       kDummySize,
                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -200,16 +203,16 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
     // Identity instance list [0,1,...,kMaxInstances-1] for binding 10 fallback when
     // GpuCullPass fails to initialize. Written once; GPU reads it as a pass-through index map.
     {
-        const uint32_t kIdCount = GpuCullPass::kMaxInstances;
-        std::vector<uint32_t> identity(kIdCount);
+        const std::uint32_t kIdCount = GpuCullPass::kMaxInstances;
+        std::vector<std::uint32_t> identity(kIdCount);
         std::iota(identity.begin(), identity.end(), 0u);
         auto identBuf = Buffer::create(ctx,
-                                       static_cast<VkDeviceSize>(kIdCount) * sizeof(uint32_t),
+                                       static_cast<VkDeviceSize>(kIdCount) * sizeof(std::uint32_t),
                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                        VMA_MEMORY_USAGE_CPU_TO_GPU,
                                        "theia.identityInstanceList");
         if (identBuf) {
-            identBuf->uploadData(identity.data(), static_cast<VkDeviceSize>(kIdCount) * sizeof(uint32_t), 0);
+            identBuf->uploadData(identity.data(), static_cast<VkDeviceSize>(kIdCount) * sizeof(std::uint32_t), 0);
             m_identityInstanceList = std::move(*identBuf);
         }
     }
@@ -319,7 +322,10 @@ void ForwardRenderer::shutdown() {
     m_initialized = false;
 }
 
-bool ForwardRenderer::resize(uint32_t width, uint32_t height, VkImage hdrImage, VkImageView hdrImageView) noexcept {
+bool ForwardRenderer::resize(std::uint32_t width,
+                             std::uint32_t height,
+                             VkImage hdrImage,
+                             VkImageView hdrImageView) noexcept {
     if (!m_ctx) {
         return false;
     }
@@ -339,8 +345,8 @@ bool ForwardRenderer::resize(uint32_t width, uint32_t height, VkImage hdrImage, 
 
 void ForwardRenderer::setTileBuffers(VkBuffer tileLightCounts,
                                      VkBuffer tileLightIndices,
-                                     uint32_t tilesX,
-                                     uint32_t tilesY) {
+                                     std::uint32_t tilesX,
+                                     std::uint32_t tilesY) {
     m_tileLightCountsBuf = tileLightCounts;
     m_tileLightIndicesBuf = tileLightIndices;
     m_tilesX = tilesX;
@@ -428,7 +434,7 @@ void ForwardRenderer::setIbl(const IblResources& res, VkImageView rawEnvView, fl
                              nullptr,
                              nullptr},
     };
-    vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    vkUpdateDescriptorSets(m_ctx->device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
 }
 
 bool ForwardRenderer::createDepthTarget() {
@@ -485,8 +491,8 @@ bool ForwardRenderer::ensureVisibilityBuffers() {
     if (m_visBuiltFor == m_scene && m_meshletVisibility[0].handle() != VK_NULL_HANDLE) {
         return true;
     }
-    const uint32_t meshletCount = std::max(1u, m_scene->meshletCount());
-    const VkDeviceSize size = static_cast<VkDeviceSize>(meshletCount) * sizeof(uint32_t);
+    const std::uint32_t meshletCount = std::max(1u, m_scene->meshletCount());
+    const VkDeviceSize size = static_cast<VkDeviceSize>(meshletCount) * sizeof(std::uint32_t);
     for (auto& buf : m_meshletVisibility) {
         auto created = Buffer::create(*m_ctx,
                                       size,
@@ -509,9 +515,9 @@ bool ForwardRenderer::ensureVisibilityBuffers() {
 
 void ForwardRenderer::drawOpaque(VkCommandBuffer cmd,
                                  const MeshPushConstants& pcBase,
-                                 uint32_t cullPhase,
-                                 uint32_t hiZMipCount) {
-    const uint32_t instanceCount = m_scene->instanceCount();
+                                 std::uint32_t cullPhase,
+                                 std::uint32_t hiZMipCount) {
+    const std::uint32_t instanceCount = m_scene->instanceCount();
     if (instanceCount == 0 || vkCmdDrawMeshTasksEXT == nullptr) {
         return;
     }
@@ -634,14 +640,14 @@ bool ForwardRenderer::createPipeline() {
         kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo meshBindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
-        .bindingCount = static_cast<uint32_t>(meshBindingFlags.size()),
+        .bindingCount = static_cast<std::uint32_t>(meshBindingFlags.size()),
         .pBindingFlags = meshBindingFlags.data(),
     };
     const VkDescriptorSetLayoutCreateInfo meshSetLayoutInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = &meshBindingFlagsInfo,
         .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
-        .bindingCount = static_cast<uint32_t>(meshBindings.size()),
+        .bindingCount = static_cast<std::uint32_t>(meshBindings.size()),
         .pBindings = meshBindings.data(),
     };
     if (vkCreateDescriptorSetLayout(m_ctx->device, &meshSetLayoutInfo, nullptr, &m_meshSetLayout) != VK_SUCCESS) {
@@ -668,14 +674,14 @@ bool ForwardRenderer::createPipeline() {
     const std::array<VkDescriptorBindingFlags, 6> matBindingFlags{kUAB, kUAB, kUAB, kUAB, kUAB, kUAB};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo matBindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
-        .bindingCount = static_cast<uint32_t>(matBindingFlags.size()),
+        .bindingCount = static_cast<std::uint32_t>(matBindingFlags.size()),
         .pBindingFlags = matBindingFlags.data(),
     };
     const VkDescriptorSetLayoutCreateInfo matSetLayoutInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = &matBindingFlagsInfo,
         .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
-        .bindingCount = static_cast<uint32_t>(matBindings.size()),
+        .bindingCount = static_cast<std::uint32_t>(matBindings.size()),
         .pBindings = matBindings.data(),
     };
     if (vkCreateDescriptorSetLayout(m_ctx->device, &matSetLayoutInfo, nullptr, &m_matSetLayout) != VK_SUCCESS) {
@@ -704,14 +710,14 @@ bool ForwardRenderer::createPipeline() {
     const std::array<VkDescriptorBindingFlags, 8> iblBindingFlags{kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo iblBindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
-        .bindingCount = static_cast<uint32_t>(iblBindingFlags.size()),
+        .bindingCount = static_cast<std::uint32_t>(iblBindingFlags.size()),
         .pBindingFlags = iblBindingFlags.data(),
     };
     const VkDescriptorSetLayoutCreateInfo iblSetLayoutInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = &iblBindingFlagsInfo,
         .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
-        .bindingCount = static_cast<uint32_t>(iblBindings.size()),
+        .bindingCount = static_cast<std::uint32_t>(iblBindings.size()),
         .pBindings = iblBindings.data(),
     };
     if (vkCreateDescriptorSetLayout(m_ctx->device, &iblSetLayoutInfo, nullptr, &m_iblSetLayout) != VK_SUCCESS) {
@@ -772,7 +778,7 @@ bool ForwardRenderer::createPipeline() {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
         .flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
         .maxSets = 4,
-        .poolSizeCount = static_cast<uint32_t>(poolSizes.size()),
+        .poolSizeCount = static_cast<std::uint32_t>(poolSizes.size()),
         .pPoolSizes = poolSizes.data(),
     };
     if (vkCreateDescriptorPool(m_ctx->device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) {
@@ -796,7 +802,7 @@ bool ForwardRenderer::createPipeline() {
     const VkDescriptorSetAllocateInfo allocInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
         .descriptorPool = m_descriptorPool,
-        .descriptorSetCount = static_cast<uint32_t>(setLayouts.size()),
+        .descriptorSetCount = static_cast<std::uint32_t>(setLayouts.size()),
         .pSetLayouts = setLayouts.data(),
     };
     std::array<VkDescriptorSet, 4> sets{};
@@ -826,7 +832,7 @@ bool ForwardRenderer::createPipeline() {
         m_meshSetLayout, m_matSetLayout, m_iblSetLayout, m_textureSetLayout};
     const VkPipelineLayoutCreateInfo layoutInfo{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-        .setLayoutCount = static_cast<uint32_t>(pipelineSetLayouts.size()),
+        .setLayoutCount = static_cast<std::uint32_t>(pipelineSetLayouts.size()),
         .pSetLayouts = pipelineSetLayouts.data(),
         .pushConstantRangeCount = 1,
         .pPushConstantRanges = &pushConstantRange,
@@ -911,7 +917,7 @@ bool ForwardRenderer::createPipeline() {
         colorAttachment, gbufferAttachment, giBufferAttachment};
     const VkPipelineColorBlendStateCreateInfo colorBlend{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-        .attachmentCount = static_cast<uint32_t>(colorAttachments.size()),
+        .attachmentCount = static_cast<std::uint32_t>(colorAttachments.size()),
         .pAttachments = colorAttachments.data(),
     };
     const VkPipelineColorBlendAttachmentState transparentGbufferAttachment{
@@ -926,7 +932,7 @@ bool ForwardRenderer::createPipeline() {
         colorAttachment, transparentGbufferAttachment, giBufferAttachment};
     const VkPipelineColorBlendStateCreateInfo transparentColorBlend{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-        .attachmentCount = static_cast<uint32_t>(transparentColorAttachments.size()),
+        .attachmentCount = static_cast<std::uint32_t>(transparentColorAttachments.size()),
         .pAttachments = transparentColorAttachments.data(),
     };
     const VkPipelineVertexInputStateCreateInfo vertexInput{
@@ -935,7 +941,7 @@ bool ForwardRenderer::createPipeline() {
     const std::array<VkDynamicState, 2> dynamicStates{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
     const VkPipelineDynamicStateCreateInfo dynamicState{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-        .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
+        .dynamicStateCount = static_cast<std::uint32_t>(dynamicStates.size()),
         .pDynamicStates = dynamicStates.data(),
     };
     constexpr VkFormat kGbufferFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -943,7 +949,7 @@ bool ForwardRenderer::createPipeline() {
     const std::array<VkFormat, 3> colorFormats{m_config.outputFormat, kGbufferFormat, kGiBufferFormat};
     const VkPipelineRenderingCreateInfo rendering{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
-        .colorAttachmentCount = static_cast<uint32_t>(colorFormats.size()),
+        .colorAttachmentCount = static_cast<std::uint32_t>(colorFormats.size()),
         .pColorAttachmentFormats = colorFormats.data(),
         .depthAttachmentFormat = VK_FORMAT_D32_SFLOAT,
     };
@@ -951,7 +957,7 @@ bool ForwardRenderer::createPipeline() {
     const VkGraphicsPipelineCreateInfo pipelineInfo{
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .pNext = &rendering,
-        .stageCount = static_cast<uint32_t>(graphicsStages.size()),
+        .stageCount = static_cast<std::uint32_t>(graphicsStages.size()),
         .pStages = graphicsStages.data(),
         .pVertexInputState = &vertexInput,
         .pInputAssemblyState = nullptr,
@@ -985,7 +991,7 @@ bool ForwardRenderer::createPipeline() {
     const VkGraphicsPipelineCreateInfo transparentPipelineInfo{
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .pNext = &rendering,
-        .stageCount = static_cast<uint32_t>(graphicsStages.size()),
+        .stageCount = static_cast<std::uint32_t>(graphicsStages.size()),
         .pStages = graphicsStages.data(),
         .pVertexInputState = &vertexInput,
         .pInputAssemblyState = nullptr,
@@ -1096,14 +1102,14 @@ bool ForwardRenderer::createPipeline() {
         const std::array<VkPipelineColorBlendAttachmentState, 3> skyBlends{skyHdrBlend, skyGbufBlend, skyGbufBlend};
         const VkPipelineColorBlendStateCreateInfo skyColorBlend{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-            .attachmentCount = static_cast<uint32_t>(skyBlends.size()),
+            .attachmentCount = static_cast<std::uint32_t>(skyBlends.size()),
             .pAttachments = skyBlends.data(),
         };
 
         const VkGraphicsPipelineCreateInfo skyPipelineInfo{
             .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
             .pNext = &rendering,
-            .stageCount = static_cast<uint32_t>(skyStages.size()),
+            .stageCount = static_cast<std::uint32_t>(skyStages.size()),
             .pStages = skyStages.data(),
             .pVertexInputState = &vertexInput,
             .pInputAssemblyState = &skyInputAsm,
@@ -1203,7 +1209,7 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
     };
     const VkDependencyInfo hdrDep{
         .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-        .imageMemoryBarrierCount = static_cast<uint32_t>(imageBarriers.size()),
+        .imageMemoryBarrierCount = static_cast<std::uint32_t>(imageBarriers.size()),
         .pImageMemoryBarriers = imageBarriers.data(),
     };
     vkCmdPipelineBarrier2(cmd, &hdrDep);
@@ -1503,16 +1509,16 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
             .pBufferInfo = &instanceTransformInfo,
         },
     };
-    vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    vkUpdateDescriptorSets(m_ctx->device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
 
     // Set 3: bindless material textures. Written only when the scene changes (textures are
     // immutable per scene). Each scene texture carries its own view + sampler.
     if (m_scene != m_texturesBoundFor) {
         const auto& sceneTextures = m_scene->textures();
-        const uint32_t texCount = std::min(static_cast<uint32_t>(sceneTextures.size()), kMaxBindlessTextures);
+        const std::uint32_t texCount = std::min(static_cast<std::uint32_t>(sceneTextures.size()), kMaxBindlessTextures);
         if (texCount > 0) {
             std::vector<VkDescriptorImageInfo> imageInfos(texCount);
-            for (uint32_t i = 0; i < texCount; ++i) {
+            for (std::uint32_t i = 0; i < texCount; ++i) {
                 imageInfos[i] = VkDescriptorImageInfo{
                     .sampler = sceneTextures[i].sampler(),
                     .imageView = sceneTextures[i].image().view(),
@@ -1622,7 +1628,7 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
             .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
             .renderArea{{0, 0}, {m_config.width, m_config.height}},
             .layerCount = 1,
-            .colorAttachmentCount = static_cast<uint32_t>(atts.size()),
+            .colorAttachmentCount = static_cast<std::uint32_t>(atts.size()),
             .pColorAttachments = atts.data(),
             .pDepthAttachment = &depth,
         };
@@ -1683,7 +1689,7 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
                            0,
                            sizeof(MeshPushConstants),
                            &pc);
-        const uint32_t instCnt = m_scene->instanceCount();
+        const std::uint32_t instCnt = m_scene->instanceCount();
         if (m_gpuCullPass.isInitialized() && m_dgcLayout != VK_NULL_HANDLE) {
             const VkGeneratedCommandsPipelineInfoEXT dgcPipelineInfo{
                 .sType = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_PIPELINE_INFO_EXT,
@@ -1725,7 +1731,7 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
     VkRect2D scissor{{0, 0}, {m_config.width, m_config.height}};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    const uint32_t instanceCount = m_scene->instanceCount();
+    const std::uint32_t instanceCount = m_scene->instanceCount();
     const bool canDraw = (instanceCount > 0) && (vkCmdDrawMeshTasksEXT != nullptr);
 
     // GPU-driven frustum cull (must run outside dynamic rendering — compute cannot run
@@ -1765,14 +1771,14 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         };
         const VkDependencyInfo cullDep{
             .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-            .bufferMemoryBarrierCount = static_cast<uint32_t>(cullBarriers.size()),
+            .bufferMemoryBarrierCount = static_cast<std::uint32_t>(cullBarriers.size()),
             .pBufferMemoryBarriers = cullBarriers.data(),
         };
         vkCmdPipelineBarrier2(cmd, &cullDep);
     }
 
     const bool twoPass = canDraw && visReady && !m_forceSinglePass;
-    const uint32_t hiZMip =
+    const std::uint32_t hiZMip =
         (twoPass && m_hiZPass.isInitialized() && m_hiZTestEnabled && !m_hiZDebugDisabled) ? m_hiZPass.mipLevels() : 0u;
 
     if (!twoPass) {
@@ -1827,7 +1833,7 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
     };
     const VkDependencyInfo visFillDep{
         .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-        .bufferMemoryBarrierCount = static_cast<uint32_t>(visFillBarriers.size()),
+        .bufferMemoryBarrierCount = static_cast<std::uint32_t>(visFillBarriers.size()),
         .pBufferMemoryBarriers = visFillBarriers.data(),
     };
     vkCmdPipelineBarrier2(cmd, &visFillDep);

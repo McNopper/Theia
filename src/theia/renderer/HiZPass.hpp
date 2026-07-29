@@ -35,8 +35,10 @@ class HiZPass {
 
     /// Create the Hi-Z image (mip chain sized to width/height) and the reduction pipeline.
     /// @param spvName SPIR-V filename resolved against THEIA_SHADER_DIR.
-    [[nodiscard]] bool
-    initialize(const DeviceContext& ctx, uint32_t width, uint32_t height, const char* spvName = "hiz_build.comp.spv");
+    [[nodiscard]] bool initialize(const DeviceContext& ctx,
+                                  std::uint32_t width,
+                                  std::uint32_t height,
+                                  const char* spvName = "hiz_build.comp.spv");
     void shutdown();
 
     /// Ensure the Hi-Z image is in SHADER_READ_ONLY_OPTIMAL so the mesh shader may sample
@@ -56,25 +58,25 @@ class HiZPass {
         return m_image.isValid() ? m_image.view() : VK_NULL_HANDLE;
     }
     [[nodiscard]] VkImage image() const noexcept { return m_image.handle(); }
-    [[nodiscard]] uint32_t mipLevels() const noexcept { return m_mipLevels; }
-    [[nodiscard]] uint32_t width() const noexcept { return m_width; }
-    [[nodiscard]] uint32_t height() const noexcept { return m_height; }
+    [[nodiscard]] std::uint32_t mipLevels() const noexcept { return m_mipLevels; }
+    [[nodiscard]] std::uint32_t width() const noexcept { return m_width; }
+    [[nodiscard]] std::uint32_t height() const noexcept { return m_height; }
 
   private:
     struct HiZPC {
-        uint32_t srcSize[2];
-        uint32_t dstSize[2];
-        uint32_t copyMode;
-        uint32_t _pad;
+        std::uint32_t srcSize[2];
+        std::uint32_t dstSize[2];
+        std::uint32_t copyMode;
+        std::uint32_t _pad;
     };
 
     [[nodiscard]] bool createImage() noexcept;
     [[nodiscard]] bool createPipeline(const char* spvName) noexcept;
 
     const DeviceContext* m_ctx = nullptr;
-    uint32_t m_width = 0;
-    uint32_t m_height = 0;
-    uint32_t m_mipLevels = 1;
+    std::uint32_t m_width = 0;
+    std::uint32_t m_height = 0;
+    std::uint32_t m_mipLevels = 1;
 
     Image m_image{};                     ///< R32F max-depth pyramid (STORAGE + SAMPLED)
     std::vector<VkImageView> m_mipViews; ///< one single-level storage view per mip
