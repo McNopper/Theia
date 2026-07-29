@@ -16,6 +16,7 @@
 #include "theia/renderer/GpuCullPass.hpp"
 #include "theia/renderer/HiZPass.hpp"
 #include "theia/renderer/IblPrecompute.hpp"
+#include "theia/renderer/RendererConstants.hpp"
 
 class Scene;
 
@@ -254,7 +255,6 @@ class ForwardRenderer {
     VkDescriptorSet m_iblSet = VK_NULL_HANDLE;
 
     // Set 3: bindless material textures (base_color/normal/ORM/emission — fragment stage)
-    static constexpr std::uint32_t kMaxBindlessTextures = 256;
     VkDescriptorSetLayout m_textureSetLayout = VK_NULL_HANDLE;
     VkDescriptorSet m_textureSet = VK_NULL_HANDLE;
     const Scene* m_texturesBoundFor = nullptr; ///< scene the bindless set was last written for

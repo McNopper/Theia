@@ -56,6 +56,7 @@ class IblPrecompute {
     bool createSamplers();
     bool runBrdfLutPass(VkCommandBuffer cmd);
     bool runSheenLutPass(VkCommandBuffer cmd);
+    bool runLutPass(VkCommandBuffer cmd, Image& targetImage, const char* shaderName, const char* logLabel);
     bool runDiffusePass(VkCommandBuffer cmd);
     bool runSpecularPass(VkCommandBuffer cmd);
     bool createComputePipeline(const char* spirvPath,

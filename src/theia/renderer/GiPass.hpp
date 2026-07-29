@@ -9,6 +9,7 @@
 #include "harmonia/DeviceContext.hpp"
 #include "harmonia/core/Buffer.hpp"
 #include "harmonia/core/Image.hpp"
+#include "theia/renderer/RendererConstants.hpp"
 
 class Scene;
 
@@ -27,8 +28,6 @@ namespace theia {
 /// pass emits direct + emission only (giEnabled push-constant disables IBL/ambient).
 class GiPass {
   public:
-    static constexpr std::uint32_t kMaxBindlessTextures = 256;
-
     struct Config {
         std::uint32_t width = 0;
         std::uint32_t height = 0;
@@ -98,9 +97,6 @@ class GiPass {
         /// walk with RIS over replayable path candidates (local + temporal + spatial).
         /// Only meaningful with useRestirPt; the application gates it accordingly.
         bool useRestirPtPath = true;
-        /// A4: enable the (optional) spatial reuse follow-on. Default off — initial
-        /// candidates + temporal reuse only, which avoids the single-pass spatial race.
-        bool useRestirDiSpatial = false;
         /// A4: screen-space motion vectors (R32G32F, pixel-space dx/dy) for temporal
         /// reprojection. VK_NULL_HANDLE → a 1×1 zero dummy is bound (static-history
         /// reuse: previous reservoir read at the same pixel).

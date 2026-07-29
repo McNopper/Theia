@@ -7,7 +7,6 @@
 
 #include "harmonia/core/Logger.hpp"
 #include "harmonia/core/ShaderModule.hpp"
-#include "theia/renderer/HiZPass.hpp"
 #include "theia/renderer/ShaderPath.hpp"
 
 #ifdef __clang__

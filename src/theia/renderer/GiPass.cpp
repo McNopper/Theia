@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <harmonia/core/Barrier.hpp>
 #include <harmonia/core/Logger.hpp>
 #include <harmonia/core/ShaderModule.hpp>
 #include <slang-math/slang-math.hpp>
@@ -10,40 +11,12 @@
 #include <theia/scene/Scene.hpp>
 #include <vector>
 
-#include "theia/renderer/GiPass.hpp"
-
 #ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
 #endif
 
 namespace theia {
-
-namespace {
-
-[[nodiscard]] VkImageMemoryBarrier2 imgBarrier(VkImage image,
-                                               VkImageLayout oldLayout,
-                                               VkImageLayout newLayout,
-                                               VkPipelineStageFlags2 srcStage,
-                                               VkAccessFlags2 srcAccess,
-                                               VkPipelineStageFlags2 dstStage,
-                                               VkAccessFlags2 dstAccess) {
-    return VkImageMemoryBarrier2{
-        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-        .srcStageMask = srcStage,
-        .srcAccessMask = srcAccess,
-        .dstStageMask = dstStage,
-        .dstAccessMask = dstAccess,
-        .oldLayout = oldLayout,
-        .newLayout = newLayout,
-        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .image = image,
-        .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
-    };
-}
-
-} // namespace
 
 GiPass::~GiPass() {
     shutdown();
@@ -758,27 +731,27 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
     // ---- Barriers: forward attachments -> compute inputs/outputs ----
     if (!skipPreBarriers) {
         const std::array<VkImageMemoryBarrier2, 3> preBarriers{{
-            imgBarrier(m_cfg.giBufferImage,
-                       VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                       VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                       VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                       VK_ACCESS_2_SHADER_READ_BIT),
-            imgBarrier(m_cfg.gbufferImage,
-                       VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                       VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                       VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                       VK_ACCESS_2_SHADER_READ_BIT),
-            imgBarrier(m_cfg.hdrImage,
-                       VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-                       VK_IMAGE_LAYOUT_GENERAL,
-                       VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                       VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                       VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT),
+            harmonia::imageBarrier(m_cfg.giBufferImage,
+                                   VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                   VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                   VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                   VK_ACCESS_2_SHADER_READ_BIT),
+            harmonia::imageBarrier(m_cfg.gbufferImage,
+                                   VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                   VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                   VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                   VK_ACCESS_2_SHADER_READ_BIT),
+            harmonia::imageBarrier(m_cfg.hdrImage,
+                                   VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                                   VK_IMAGE_LAYOUT_GENERAL,
+                                   VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                   VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                   VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT),
         }};
         const VkDependencyInfo preDep{
             .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
@@ -811,9 +784,9 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         // GI2 Phase 2: the reservoir path serves both legacy ReSTIR DI and ReSTIR PT
         // (PT absorbs DI — sprint plan GI2 conflict resolution). restirDiEnabled here
         // means "reservoir active"; restirDiSpatial enables the Phase 2 neighbour-reuse
-        // pass (on by default for PT; opt-in for legacy DI via useRestirDiSpatial).
+        // pass (on by default for PT).
         .restirDiEnabled = ((params.useRestirDi || params.useRestirPt) && m_reservoirBuf[0].isValid()) ? 1u : 0u,
-        .restirDiSpatial = (params.useRestirDiSpatial || params.useRestirPt) ? 1u : 0u,
+        .restirDiSpatial = params.useRestirPt ? 1u : 0u,
         .restirHasMotion = (params.motionVectorView != VK_NULL_HANDLE) ? 1u : 0u,
         .restirPtEnabled = params.useRestirPt ? 1u : 0u,
         // GI2 full PT: path reservoir for the indirect term. Independent of

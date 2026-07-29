@@ -8,13 +8,17 @@
 #include <string>
 #include <tuple>
 
-#include "demo/Application.hpp"
 #include "harmonia/core/Barrier.hpp"
 #include "harmonia/core/Logger.hpp"
 #include "harmonia/renderer/Camera.hpp"
 #include "theia/renderer/CameraJitter.hpp"
 
 namespace theia {
+
+namespace {
+constexpr float kCameraCutAngleThreshold = 0.1745f;
+constexpr float kTaaBlendAlpha = 0.1f;
+} // namespace
 
 Application::~Application() {
     const VkDevice dev = deviceContext().device;
@@ -331,7 +335,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
             const float posDelta = sm::length(m_camera.position - m_hiZPrevPos);
             const float cosAng = sm::clamp(sm::dot(curDir, m_hiZPrevDir), -1.0f, 1.0f);
             const float angle = std::acos(cosAng);
-            cut = (angle > 0.1745f /* ~10 deg */) || (posDelta > 0.5f * std::max(focusDist, 1e-3f));
+            cut = (angle > kCameraCutAngleThreshold) || (posDelta > 0.5f * std::max(focusDist, 1e-3f));
         }
         m_renderer->setHiZTestEnabled(!cut);
         m_hiZPrevPos = m_camera.position;
@@ -661,7 +665,7 @@ void Application::submitSingleQueueGI(VkCommandBuffer cmd,
     if (m_taaPass.isInitialized() && m_useTaa && m_cameraMoving) {
         m_taaPass.record(cmd,
                          TaaPass::FrameParams{
-                             .alpha = 0.1f,
+                             .alpha = kTaaBlendAlpha,
                              .firstFrame = false,
                          });
     }
@@ -914,7 +918,7 @@ std::pair<VkCommandBuffer, VkSemaphore> Application::onBeforeSceneStages(VkComma
     if (m_taaPass.isInitialized() && m_useTaa && m_cameraMoving) {
         m_taaPass.record(stagesCmd,
                          TaaPass::FrameParams{
-                             .alpha = 0.1f,
+                             .alpha = kTaaBlendAlpha,
                              .firstFrame = false,
                          });
     }

@@ -8,7 +8,7 @@
 
 #include "harmonia/core/Logger.hpp"
 #include "harmonia/core/ShaderModule.hpp"
-#include "theia/renderer/GpuCullPass.hpp"
+#include "theia/renderer/RendererConstants.hpp"
 #include "theia/renderer/ShaderPath.hpp"
 
 #ifdef __clang__
@@ -64,10 +64,9 @@ bool GpuCullPass::initialize(const DeviceContext& ctx, const char* spvFilename) 
 
     // --- Output buffers ---
     const VkDeviceSize kCompactListSize = static_cast<VkDeviceSize>(kMaxInstances) * sizeof(std::uint32_t);
-    // Single VkDrawMeshTasksIndirectCommandEXT = 3×uint = 12 bytes.
     // vkCmdFillBuffer zeros all 12 bytes before each dispatch; the compute shader then
     // restores groupCountY=1 and groupCountZ=1, and accumulates groupCountX atomically.
-    constexpr VkDeviceSize kIndirectBufSize = 12;
+    constexpr VkDeviceSize kIndirectBufSize = kMeshTaskIndirectCmdSize;
 
     auto compactBuf = Buffer::create(ctx,
                                      kCompactListSize,

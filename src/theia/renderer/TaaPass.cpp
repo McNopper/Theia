@@ -7,7 +7,6 @@
 #include "harmonia/core/Logger.hpp"
 #include "harmonia/core/ShaderModule.hpp"
 #include "theia/renderer/ShaderPath.hpp"
-#include "theia/renderer/TaaPass.hpp"
 
 #ifdef __clang__
 #pragma clang diagnostic push

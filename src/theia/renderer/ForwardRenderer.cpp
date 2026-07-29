@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <harmonia/core/Barrier.hpp>
 #include <harmonia/core/Logger.hpp>
 #include <harmonia/core/ShaderModule.hpp>
 #include <numeric>
@@ -13,8 +14,6 @@
 #include <theia/renderer/ShaderPath.hpp>
 #include <theia/scene/Scene.hpp>
 #include <vector>
-
-#include "theia/renderer/ForwardRenderer.hpp"
 
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -80,7 +79,7 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
             .sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_CREATE_INFO_EXT,
             .flags = 0,
             .shaderStages = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            .indirectStride = 12u,            // sizeof(VkDrawMeshTasksIndirectCommandEXT)
+            .indirectStride = kMeshTaskIndirectCmdSize,
             .pipelineLayout = VK_NULL_HANDLE, // no push-constant token
             .tokenCount = 1,
             .pTokens = &dgcToken,
@@ -551,7 +550,7 @@ void ForwardRenderer::drawOpaque(VkCommandBuffer cmd,
             .indirectExecutionSet = VK_NULL_HANDLE,
             .indirectCommandsLayout = m_dgcLayout,
             .indirectAddress = m_gpuCullPass.indirectDrawAddress(),
-            .indirectAddressSize = 12u, // one VkDrawMeshTasksIndirectCommandEXT
+            .indirectAddressSize = kMeshTaskIndirectCmdSize,
             .preprocessAddress = m_dgcPreprocessAddr,
             .preprocessSize = m_dgcPreprocessSize,
             .maxSequenceCount = 1u,    // single GPU-generated draw
@@ -564,8 +563,8 @@ void ForwardRenderer::drawOpaque(VkCommandBuffer cmd,
         vkCmdDrawMeshTasksIndirectEXT(cmd,
                                       m_gpuCullPass.indirectDrawBuffer(),
                                       0,
-                                      1,    // exactly one indirect command entry
-                                      12u); // stride = sizeof(VkDrawMeshTasksIndirectCommandEXT)
+                                      1, // exactly one indirect command entry
+                                      kMeshTaskIndirectCmdSize);
     } else {
         vkCmdDrawMeshTasksEXT(cmd, instanceCount, 1, 1);
     }
@@ -1332,19 +1331,13 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
 
 void ForwardRenderer::prepareAttachments(VkCommandBuffer cmd) {
     const std::array imageBarriers{
-        VkImageMemoryBarrier2{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-            .srcStageMask = m_hdrFirstUse ? VK_PIPELINE_STAGE_2_NONE : VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-            .srcAccessMask = 0,
-            .dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-            .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-            .oldLayout = m_hdrFirstUse ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL,
-            .newLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = m_config.hdrImage,
-            .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
-        },
+        harmonia::imageBarrier(m_config.hdrImage,
+                               m_hdrFirstUse ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL,
+                               VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                               m_hdrFirstUse ? VK_PIPELINE_STAGE_2_NONE : VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                               0,
+                               VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                               VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT),
         VkImageMemoryBarrier2{
             .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
             .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
@@ -1359,32 +1352,20 @@ void ForwardRenderer::prepareAttachments(VkCommandBuffer cmd) {
             .image = m_depthTarget.handle(),
             .subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1},
         },
-        VkImageMemoryBarrier2{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-            .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
-            .srcAccessMask = 0,
-            .dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-            .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .newLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = m_gbufferTarget.handle(),
-            .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
-        },
-        VkImageMemoryBarrier2{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-            .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
-            .srcAccessMask = 0,
-            .dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-            .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .newLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = m_giBufferTarget.handle(),
-            .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
-        },
+        harmonia::imageBarrier(m_gbufferTarget.handle(),
+                               VK_IMAGE_LAYOUT_UNDEFINED,
+                               VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                               VK_PIPELINE_STAGE_2_NONE,
+                               0,
+                               VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                               VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT),
+        harmonia::imageBarrier(m_giBufferTarget.handle(),
+                               VK_IMAGE_LAYOUT_UNDEFINED,
+                               VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                               VK_PIPELINE_STAGE_2_NONE,
+                               0,
+                               VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                               VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT),
     };
     const VkDependencyInfo hdrDep{
         .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
@@ -1842,7 +1823,7 @@ void ForwardRenderer::recordTransparent(VkCommandBuffer cmd, const MeshPushConst
             .indirectExecutionSet = VK_NULL_HANDLE,
             .indirectCommandsLayout = m_dgcLayout,
             .indirectAddress = m_gpuCullPass.indirectDrawAddress(),
-            .indirectAddressSize = 12u,
+            .indirectAddressSize = kMeshTaskIndirectCmdSize,
             .preprocessAddress = m_dgcPreprocessAddr,
             .preprocessSize = m_dgcPreprocessSize,
             .maxSequenceCount = 1u,
@@ -1851,7 +1832,7 @@ void ForwardRenderer::recordTransparent(VkCommandBuffer cmd, const MeshPushConst
         };
         vkCmdExecuteGeneratedCommandsEXT(cmd, VK_FALSE, &dgcInfo);
     } else if (m_gpuCullPass.isInitialized() && vkCmdDrawMeshTasksIndirectEXT != nullptr) {
-        vkCmdDrawMeshTasksIndirectEXT(cmd, m_gpuCullPass.indirectDrawBuffer(), 0, 1, 12u);
+        vkCmdDrawMeshTasksIndirectEXT(cmd, m_gpuCullPass.indirectDrawBuffer(), 0, 1, kMeshTaskIndirectCmdSize);
     } else {
         vkCmdDrawMeshTasksEXT(cmd, instCnt, 1, 1);
     }

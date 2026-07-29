@@ -4,6 +4,11 @@
 #include "demo/Application.hpp"
 #include "harmonia/core/Logger.hpp"
 
+namespace {
+constexpr float kDefaultDenoiserStrength = 0.45F;
+constexpr float kRestirPtDenoiserStrength = 0.55F;
+} // namespace
+
 int main(int argc, char* const argv[]) {
     Logger::setTag("THEIA");
     harmonia::App::Config config;
@@ -87,8 +92,8 @@ int main(int argc, char* const argv[]) {
     // attenuates the denoiser to identity regardless.
     // M-aware denoising (GI2.7) is shipped: the denoiser reads the reservoirs' effective
     // sample count M via the HDR alpha channel.
-    if (restirPtEnabled && config.denoiser.strength == 0.45F) {
-        config.denoiser.strength = 0.55F;
+    if (restirPtEnabled && config.denoiser.strength == kDefaultDenoiserStrength) {
+        config.denoiser.strength = kRestirPtDenoiserStrength;
     }
     app.setTaaEnabled(taaEnabled);
     return app.run(std::move(config));

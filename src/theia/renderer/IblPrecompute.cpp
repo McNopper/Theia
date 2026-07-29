@@ -7,7 +7,6 @@
 
 #include "harmonia/core/Logger.hpp"
 #include "harmonia/core/ShaderModule.hpp"
-#include "theia/renderer/IblPrecompute.hpp"
 #include "theia/renderer/ShaderPath.hpp"
 
 #ifdef __clang__
@@ -302,92 +301,14 @@ bool IblPrecompute::createSamplers() {
 }
 
 bool IblPrecompute::runBrdfLutPass(VkCommandBuffer cmd) {
-    const VkDescriptorSetLayoutBinding binding{
-        0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
-    const VkDescriptorSetLayoutCreateInfo layoutInfo{
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .bindingCount = 1,
-        .pBindings = &binding,
-    };
-
-    VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
-    if (vkCreateDescriptorSetLayout(m_ctx->device, &layoutInfo, nullptr, &setLayout) != VK_SUCCESS) {
-        Logger::error("IblPrecompute: failed to create BRDF LUT set layout");
-        return false;
-    }
-    m_tempSetLayouts.push_back(setLayout);
-
-    const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1};
-    const VkDescriptorPoolCreateInfo poolInfo{
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-        .maxSets = 1,
-        .poolSizeCount = 1,
-        .pPoolSizes = &poolSize,
-    };
-
-    VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
-    if (vkCreateDescriptorPool(m_ctx->device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
-        Logger::error("IblPrecompute: failed to create BRDF LUT descriptor pool");
-        return false;
-    }
-    m_tempDescriptorPools.push_back(descriptorPool);
-
-    VkPipeline pipeline = VK_NULL_HANDLE;
-    VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
-    if (!createComputePipeline("ibl_brdf_lut.comp.spv", setLayout, 0, pipeline, pipelineLayout)) {
-        return false;
-    }
-
-    const VkDescriptorSetAllocateInfo allocInfo{
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-        .descriptorPool = descriptorPool,
-        .descriptorSetCount = 1,
-        .pSetLayouts = &setLayout,
-    };
-    VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
-    if (vkAllocateDescriptorSets(m_ctx->device, &allocInfo, &descriptorSet) != VK_SUCCESS) {
-        Logger::error("IblPrecompute: failed to allocate BRDF LUT descriptor set");
-        return false;
-    }
-
-    m_res.brdfLut.transition(cmd,
-                             VK_IMAGE_LAYOUT_UNDEFINED,
-                             VK_IMAGE_LAYOUT_GENERAL,
-                             VK_PIPELINE_STAGE_2_NONE,
-                             0,
-                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                             VK_ACCESS_2_SHADER_WRITE_BIT);
-
-    const VkDescriptorImageInfo outputInfo{
-        .sampler = VK_NULL_HANDLE,
-        .imageView = m_res.brdfLut.view(),
-        .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
-    };
-    const VkWriteDescriptorSet write{
-        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-        .dstSet = descriptorSet,
-        .dstBinding = 0,
-        .descriptorCount = 1,
-        .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-        .pImageInfo = &outputInfo,
-    };
-    vkUpdateDescriptorSets(m_ctx->device, 1, &write, 0, nullptr);
-
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
-    vkCmdDispatch(cmd, dispatchCount(kSheenExtent.width), dispatchCount(kSheenExtent.height), 1);
-
-    m_res.brdfLut.transition(cmd,
-                             VK_IMAGE_LAYOUT_GENERAL,
-                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                             VK_ACCESS_2_SHADER_WRITE_BIT,
-                             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                             VK_ACCESS_2_SHADER_READ_BIT);
-    return true;
+    return runLutPass(cmd, m_res.brdfLut, "ibl_brdf_lut.comp.spv", "BRDF LUT");
 }
 
 bool IblPrecompute::runSheenLutPass(VkCommandBuffer cmd) {
+    return runLutPass(cmd, m_res.sheenLut, "ibl_sheen_lut.comp.spv", "sheen");
+}
+
+bool IblPrecompute::runLutPass(VkCommandBuffer cmd, Image& targetImage, const char* shaderName, const char* logLabel) {
     const VkDescriptorSetLayoutBinding binding{
         0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     const VkDescriptorSetLayoutCreateInfo layoutInfo{
@@ -398,7 +319,7 @@ bool IblPrecompute::runSheenLutPass(VkCommandBuffer cmd) {
 
     VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
     if (vkCreateDescriptorSetLayout(m_ctx->device, &layoutInfo, nullptr, &setLayout) != VK_SUCCESS) {
-        Logger::error("IblPrecompute: failed to create sheen set layout");
+        Logger::error("IblPrecompute: failed to create {} set layout", logLabel);
         return false;
     }
     m_tempSetLayouts.push_back(setLayout);
@@ -413,14 +334,14 @@ bool IblPrecompute::runSheenLutPass(VkCommandBuffer cmd) {
 
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
     if (vkCreateDescriptorPool(m_ctx->device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
-        Logger::error("IblPrecompute: failed to create sheen descriptor pool");
+        Logger::error("IblPrecompute: failed to create {} descriptor pool", logLabel);
         return false;
     }
     m_tempDescriptorPools.push_back(descriptorPool);
 
     VkPipeline pipeline = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
-    if (!createComputePipeline("ibl_sheen_lut.comp.spv", setLayout, 0, pipeline, pipelineLayout)) {
+    if (!createComputePipeline(shaderName, setLayout, 0, pipeline, pipelineLayout)) {
         return false;
     }
 
@@ -432,21 +353,21 @@ bool IblPrecompute::runSheenLutPass(VkCommandBuffer cmd) {
     };
     VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
     if (vkAllocateDescriptorSets(m_ctx->device, &allocInfo, &descriptorSet) != VK_SUCCESS) {
-        Logger::error("IblPrecompute: failed to allocate sheen descriptor set");
+        Logger::error("IblPrecompute: failed to allocate {} descriptor set", logLabel);
         return false;
     }
 
-    m_res.sheenLut.transition(cmd,
-                              VK_IMAGE_LAYOUT_UNDEFINED,
-                              VK_IMAGE_LAYOUT_GENERAL,
-                              VK_PIPELINE_STAGE_2_NONE,
-                              0,
-                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                              VK_ACCESS_2_SHADER_WRITE_BIT);
+    targetImage.transition(cmd,
+                           VK_IMAGE_LAYOUT_UNDEFINED,
+                           VK_IMAGE_LAYOUT_GENERAL,
+                           VK_PIPELINE_STAGE_2_NONE,
+                           0,
+                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_2_SHADER_WRITE_BIT);
 
     const VkDescriptorImageInfo outputInfo{
         .sampler = VK_NULL_HANDLE,
-        .imageView = m_res.sheenLut.view(),
+        .imageView = targetImage.view(),
         .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
     };
     const VkWriteDescriptorSet write{
@@ -463,13 +384,13 @@ bool IblPrecompute::runSheenLutPass(VkCommandBuffer cmd) {
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
     vkCmdDispatch(cmd, dispatchCount(kSheenExtent.width), dispatchCount(kSheenExtent.height), 1);
 
-    m_res.sheenLut.transition(cmd,
-                              VK_IMAGE_LAYOUT_GENERAL,
-                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                              VK_ACCESS_2_SHADER_WRITE_BIT,
-                              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                              VK_ACCESS_2_SHADER_READ_BIT);
+    targetImage.transition(cmd,
+                           VK_IMAGE_LAYOUT_GENERAL,
+                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                           VK_ACCESS_2_SHADER_WRITE_BIT,
+                           VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                           VK_ACCESS_2_SHADER_READ_BIT);
     return true;
 }
 
