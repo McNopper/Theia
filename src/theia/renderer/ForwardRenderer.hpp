@@ -4,6 +4,7 @@
 #include <volk/volk.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <slang-math/slang-math.hpp>
 
@@ -161,6 +162,12 @@ class ForwardRenderer {
     static_assert(sizeof(MeshPushConstants) == 256);
     bool createDepthTarget();
     bool createPipeline();
+    bool createDescriptorSetLayouts();
+    bool createPipelineLayouts();
+    bool createOpaquePipeline();
+    bool createTransparentPipeline();
+    bool createSkyPipeline();
+    VkShaderModule loadShaderModule(const char* filename);
     /// (Re)create the ping-pong per-meshlet visibility buffers for the current scene and
     /// clear both to 0 on the first frame. Called when the bound scene changes.
     bool ensureVisibilityBuffers();
@@ -169,6 +176,28 @@ class ForwardRenderer {
                     const MeshPushConstants& pcBase,
                     std::uint32_t cullPhase,
                     std::uint32_t hiZMipCount);
+    void prepareAttachments(VkCommandBuffer cmd);
+    void updateSceneDescriptors(VkCommandBuffer cmd);
+    void dispatchGpuCull(VkCommandBuffer cmd, std::uint32_t instanceCount, const sm::float4x4& viewProj);
+    void beginSceneRendering(VkCommandBuffer cmd, VkAttachmentLoadOp loadOp);
+    void bindMeshSets(VkCommandBuffer cmd);
+    void recordSky(VkCommandBuffer cmd);
+    void recordTransparent(VkCommandBuffer cmd, const MeshPushConstants& pcBase);
+    void recordOpaquePass(VkCommandBuffer cmd, const MeshPushConstants& pcBase);
+
+    struct PipelineBuildState {
+        VkShaderModule taskModule = VK_NULL_HANDLE;
+        VkShaderModule meshModule = VK_NULL_HANDLE;
+        VkShaderModule fragModule = VK_NULL_HANDLE;
+        VkPipelineViewportStateCreateInfo viewport{};
+        VkPipelineRasterizationStateCreateInfo rasterization{};
+        VkPipelineMultisampleStateCreateInfo multisample{};
+        VkPipelineVertexInputStateCreateInfo vertexInput{};
+        std::array<VkDynamicState, 2> dynamicStates{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo dynamicState{};
+        std::array<VkFormat, 3> colorFormats{};
+        VkPipelineRenderingCreateInfo rendering{};
+    } m_pipelineBuild{};
 
     Config m_config{};
     CameraParams m_camera{};

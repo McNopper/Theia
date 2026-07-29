@@ -571,48 +571,81 @@ void ForwardRenderer::drawOpaque(VkCommandBuffer cmd,
     }
 }
 
-bool ForwardRenderer::createPipeline() {
-    auto loadShaderModule = [this](const char* filename) -> VkShaderModule {
-        auto module = harmonia::createShaderModule(m_ctx->device, shaderPath(filename));
-        if (!module) {
-            Logger::error("Failed to load shader: {}", filename);
-            return VK_NULL_HANDLE;
-        }
-        return *module;
-    };
+VkShaderModule ForwardRenderer::loadShaderModule(const char* filename) {
+    auto module = harmonia::createShaderModule(m_ctx->device, shaderPath(filename));
+    if (!module) {
+        Logger::error("Failed to load shader: {}", filename);
+        return VK_NULL_HANDLE;
+    }
+    return *module;
+}
 
-    VkShaderModule taskModule = loadShaderModule("forward_render.task.spv");
-    VkShaderModule meshModule = loadShaderModule("forward_render.mesh.spv");
-    VkShaderModule fragModule = loadShaderModule("forward_render.frag.spv");
-    if (!taskModule || !meshModule || !fragModule) {
-        if (taskModule != VK_NULL_HANDLE) {
-            vkDestroyShaderModule(m_ctx->device, taskModule, nullptr);
-        }
-        if (meshModule != VK_NULL_HANDLE) {
-            vkDestroyShaderModule(m_ctx->device, meshModule, nullptr);
-        }
-        if (fragModule != VK_NULL_HANDLE) {
-            vkDestroyShaderModule(m_ctx->device, fragModule, nullptr);
-        }
+bool ForwardRenderer::createPipeline() {
+    m_pipelineBuild.taskModule = loadShaderModule("forward_render.task.spv");
+    m_pipelineBuild.meshModule = loadShaderModule("forward_render.mesh.spv");
+    m_pipelineBuild.fragModule = loadShaderModule("forward_render.frag.spv");
+    if (!m_pipelineBuild.taskModule || !m_pipelineBuild.meshModule || !m_pipelineBuild.fragModule) {
+        vkDestroyShaderModule(m_ctx->device, m_pipelineBuild.taskModule, nullptr);
+        vkDestroyShaderModule(m_ctx->device, m_pipelineBuild.meshModule, nullptr);
+        vkDestroyShaderModule(m_ctx->device, m_pipelineBuild.fragModule, nullptr);
+        m_pipelineBuild = {};
         return false;
     }
 
+    auto& b = m_pipelineBuild;
+    b.viewport = VkPipelineViewportStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        .viewportCount = 1,
+        .scissorCount = 1,
+    };
+    b.rasterization = VkPipelineRasterizationStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .cullMode = VK_CULL_MODE_NONE,
+        .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+        .lineWidth = 1.0f,
+    };
+    b.multisample = VkPipelineMultisampleStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+    };
+    b.vertexInput = VkPipelineVertexInputStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+    };
+    b.dynamicState = VkPipelineDynamicStateCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+        .dynamicStateCount = static_cast<std::uint32_t>(b.dynamicStates.size()),
+        .pDynamicStates = b.dynamicStates.data(),
+    };
+    constexpr VkFormat kGbufferFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+    constexpr VkFormat kGiBufferFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
+    b.colorFormats[0] = m_config.outputFormat;
+    b.colorFormats[1] = kGbufferFormat;
+    b.colorFormats[2] = kGiBufferFormat;
+    b.rendering = VkPipelineRenderingCreateInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
+        .colorAttachmentCount = static_cast<std::uint32_t>(b.colorFormats.size()),
+        .pColorAttachmentFormats = b.colorFormats.data(),
+        .depthAttachmentFormat = VK_FORMAT_D32_SFLOAT,
+    };
+
+    const bool ok = createDescriptorSetLayouts() && createPipelineLayouts() && createOpaquePipeline() &&
+                    createTransparentPipeline() && createSkyPipeline();
+
+    vkDestroyShaderModule(m_ctx->device, m_pipelineBuild.taskModule, nullptr);
+    vkDestroyShaderModule(m_ctx->device, m_pipelineBuild.meshModule, nullptr);
+    vkDestroyShaderModule(m_ctx->device, m_pipelineBuild.fragModule, nullptr);
+    m_pipelineBuild = {};
+    return ok;
+}
+
+bool ForwardRenderer::createDescriptorSetLayouts() {
     constexpr VkShaderStageFlags kTaskAndMeshStages = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT;
     constexpr VkShaderStageFlags kTaskMeshFragStages =
         VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    const VkPushConstantRange pushConstantRange{
-        .stageFlags = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
-        .offset = 0,
-        .size = sizeof(ForwardRenderer::MeshPushConstants),
-    };
-
-    // Set 0: geometry buffers + material table for task-shader bucketing.
-    // Bindings 7-9 drive two-pass Hi-Z occlusion culling in the mesh shader:
-    //   7 = previous-frame per-meshlet visibility (read), 8 = current-frame visibility
-    //   (written), 9 = current-frame Hi-Z max-depth pyramid (sampled).
-    // Binding 10: compactInstanceList from GpuCullPass — written by the cull compute
-    //   shader each frame; task shader reads it via SV_DrawID to get the instance index.
     constexpr VkShaderStageFlags kTaskStage = VK_SHADER_STAGE_TASK_BIT_EXT;
+    constexpr VkDescriptorBindingFlags kUAB = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+
     const std::array<VkDescriptorSetLayoutBinding, 12> meshBindings{
         VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTaskMeshFragStages, nullptr},
         VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTaskMeshFragStages, nullptr},
@@ -633,9 +666,8 @@ bool ForwardRenderer::createPipeline() {
                                      VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                      1,
                                      VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                                     nullptr}, // instance transforms
+                                     nullptr},
     };
-    constexpr VkDescriptorBindingFlags kUAB = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
     const std::array<VkDescriptorBindingFlags, 12> meshBindingFlags{
         kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo meshBindingFlagsInfo{
@@ -652,24 +684,17 @@ bool ForwardRenderer::createPipeline() {
     };
     if (vkCreateDescriptorSetLayout(m_ctx->device, &meshSetLayoutInfo, nullptr, &m_meshSetLayout) != VK_SUCCESS) {
         Logger::error("Failed to create mesh descriptor set layout");
-        vkDestroyShaderModule(m_ctx->device, taskModule, nullptr);
-        vkDestroyShaderModule(m_ctx->device, meshModule, nullptr);
-        vkDestroyShaderModule(m_ctx->device, fragModule, nullptr);
         return false;
     }
 
-    // Set 1: material/lighting buffers (materials, lights, emissive triangles, tile lists — fragment stage)
-    // Binding 5 = scene TLAS for ray-traced shadows (ray query in the fragment shader).
     const std::array<VkDescriptorSetLayoutBinding, 6> matBindings{
         VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{
-            3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}, // tileLightCounts
-        VkDescriptorSetLayoutBinding{
-            4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}, // tileLightIndices
-        VkDescriptorSetLayoutBinding{
-            5, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}, // scene TLAS
+            5, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
     };
     const std::array<VkDescriptorBindingFlags, 6> matBindingFlags{kUAB, kUAB, kUAB, kUAB, kUAB, kUAB};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo matBindingFlagsInfo{
@@ -688,15 +713,9 @@ bool ForwardRenderer::createPipeline() {
         Logger::error("Failed to create material descriptor set layout");
         vkDestroyDescriptorSetLayout(m_ctx->device, m_meshSetLayout, nullptr);
         m_meshSetLayout = VK_NULL_HANDLE;
-        vkDestroyShaderModule(m_ctx->device, taskModule, nullptr);
-        vkDestroyShaderModule(m_ctx->device, meshModule, nullptr);
-        vkDestroyShaderModule(m_ctx->device, fragModule, nullptr);
         return false;
     }
 
-    // Set 2: IBL textures + sampler + env importance CDFs (fragment stage)
-    // binding 0: t_iblDiffuse, 1: t_iblSpecular, 2: t_sheenLut, 3: s_iblLinear, 4: t_envRaw, 5: t_brdfLut
-    // binding 6: envMarginalCdf, 7: envConditionalCdf
     const std::array<VkDescriptorSetLayoutBinding, 8> iblBindings{
         VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
@@ -726,14 +745,9 @@ bool ForwardRenderer::createPipeline() {
         m_matSetLayout = VK_NULL_HANDLE;
         vkDestroyDescriptorSetLayout(m_ctx->device, m_meshSetLayout, nullptr);
         m_meshSetLayout = VK_NULL_HANDLE;
-        vkDestroyShaderModule(m_ctx->device, taskModule, nullptr);
-        vkDestroyShaderModule(m_ctx->device, meshModule, nullptr);
-        vkDestroyShaderModule(m_ctx->device, fragModule, nullptr);
         return false;
     }
 
-    // Set 3: bindless material textures (variable array of combined image samplers, fragment stage).
-    // Uses partially-bound descriptors so only the slots actually populated per scene must be valid.
     const VkDescriptorSetLayoutBinding textureBinding{
         0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
     const VkDescriptorBindingFlags textureBindingFlags =
@@ -758,15 +772,9 @@ bool ForwardRenderer::createPipeline() {
         m_matSetLayout = VK_NULL_HANDLE;
         vkDestroyDescriptorSetLayout(m_ctx->device, m_meshSetLayout, nullptr);
         m_meshSetLayout = VK_NULL_HANDLE;
-        vkDestroyShaderModule(m_ctx->device, taskModule, nullptr);
-        vkDestroyShaderModule(m_ctx->device, meshModule, nullptr);
-        vkDestroyShaderModule(m_ctx->device, fragModule, nullptr);
         return false;
     }
 
-    // Single pool for all four sets. Storage-buffer count: set 0 (mesh) 11 +
-    // set 1 (mat) 5 + set 2 (ibl env CDFs 6/7) 2 = 18 total. Set 3 (bindless
-    // textures) uses COMBINED_IMAGE_SAMPLER, no storage-buffer slot.
     const std::array<VkDescriptorPoolSize, 5> poolSizes{
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 18},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 6},
@@ -791,9 +799,6 @@ bool ForwardRenderer::createPipeline() {
         m_matSetLayout = VK_NULL_HANDLE;
         vkDestroyDescriptorSetLayout(m_ctx->device, m_meshSetLayout, nullptr);
         m_meshSetLayout = VK_NULL_HANDLE;
-        vkDestroyShaderModule(m_ctx->device, taskModule, nullptr);
-        vkDestroyShaderModule(m_ctx->device, meshModule, nullptr);
-        vkDestroyShaderModule(m_ctx->device, fragModule, nullptr);
         return false;
     }
 
@@ -818,16 +823,21 @@ bool ForwardRenderer::createPipeline() {
         m_matSetLayout = VK_NULL_HANDLE;
         vkDestroyDescriptorSetLayout(m_ctx->device, m_meshSetLayout, nullptr);
         m_meshSetLayout = VK_NULL_HANDLE;
-        vkDestroyShaderModule(m_ctx->device, taskModule, nullptr);
-        vkDestroyShaderModule(m_ctx->device, meshModule, nullptr);
-        vkDestroyShaderModule(m_ctx->device, fragModule, nullptr);
         return false;
     }
     m_meshSet = sets[0];
     m_matSet = sets[1];
     m_iblSet = sets[2];
     m_textureSet = sets[3];
+    return true;
+}
 
+bool ForwardRenderer::createPipelineLayouts() {
+    const VkPushConstantRange pushConstantRange{
+        .stageFlags = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        .offset = 0,
+        .size = sizeof(ForwardRenderer::MeshPushConstants),
+    };
     const std::array<VkDescriptorSetLayout, 4> pipelineSetLayouts{
         m_meshSetLayout, m_matSetLayout, m_iblSetLayout, m_textureSetLayout};
     const VkPipelineLayoutCreateInfo layoutInfo{
@@ -849,48 +859,32 @@ bool ForwardRenderer::createPipeline() {
         m_matSetLayout = VK_NULL_HANDLE;
         vkDestroyDescriptorSetLayout(m_ctx->device, m_meshSetLayout, nullptr);
         m_meshSetLayout = VK_NULL_HANDLE;
-        vkDestroyShaderModule(m_ctx->device, taskModule, nullptr);
-        vkDestroyShaderModule(m_ctx->device, meshModule, nullptr);
-        vkDestroyShaderModule(m_ctx->device, fragModule, nullptr);
         return false;
     }
+    return true;
+}
 
+bool ForwardRenderer::createOpaquePipeline() {
+    const auto& b = m_pipelineBuild;
     const std::array<VkPipelineShaderStageCreateInfo, 3> graphicsStages{
         VkPipelineShaderStageCreateInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
             .stage = VK_SHADER_STAGE_TASK_BIT_EXT,
-            .module = taskModule,
+            .module = b.taskModule,
             .pName = "main",
         },
         VkPipelineShaderStageCreateInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
             .stage = VK_SHADER_STAGE_MESH_BIT_EXT,
-            .module = meshModule,
+            .module = b.meshModule,
             .pName = "main",
         },
         VkPipelineShaderStageCreateInfo{
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
             .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-            .module = fragModule,
+            .module = b.fragModule,
             .pName = "main",
         },
-    };
-
-    const VkPipelineViewportStateCreateInfo viewport{
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-        .viewportCount = 1,
-        .scissorCount = 1,
-    };
-    const VkPipelineRasterizationStateCreateInfo rasterization{
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-        .polygonMode = VK_POLYGON_MODE_FILL,
-        .cullMode = VK_CULL_MODE_NONE,
-        .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
-        .lineWidth = 1.0f,
-    };
-    const VkPipelineMultisampleStateCreateInfo multisample{
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
     };
     const VkPipelineDepthStencilStateCreateInfo depthStencil{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
@@ -898,20 +892,12 @@ bool ForwardRenderer::createPipeline() {
         .depthWriteEnable = VK_TRUE,
         .depthCompareOp = VK_COMPARE_OP_LESS,
     };
-    const VkPipelineDepthStencilStateCreateInfo depthStencilTransparent{
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-        .depthTestEnable = VK_TRUE,
-        .depthWriteEnable = VK_FALSE,
-        .depthCompareOp = VK_COMPARE_OP_LESS,
-    };
     const VkPipelineColorBlendAttachmentState colorAttachment{
         .blendEnable = VK_FALSE,
         .colorWriteMask =
             VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
     };
-    // GBuffer (target 1) blend state — write all, no blend
     const VkPipelineColorBlendAttachmentState gbufferAttachment = colorAttachment;
-    // GI GBuffer (target 2) blend state — write all, no blend (opaque pass only)
     const VkPipelineColorBlendAttachmentState giBufferAttachment = colorAttachment;
     const std::array<VkPipelineColorBlendAttachmentState, 3> colorAttachments{
         colorAttachment, gbufferAttachment, giBufferAttachment};
@@ -920,53 +906,19 @@ bool ForwardRenderer::createPipeline() {
         .attachmentCount = static_cast<std::uint32_t>(colorAttachments.size()),
         .pAttachments = colorAttachments.data(),
     };
-    const VkPipelineColorBlendAttachmentState transparentGbufferAttachment{
-        .blendEnable = VK_FALSE,
-        .colorWriteMask = 0,
-    };
-    // Transparent pass keeps the opaque-written view-normal GBuffer (target 1) intact
-    // (mask it out) but DOES write the GI GBuffer (target 2: world position + material
-    // index) so the shared GI compute path integrator processes transparent surfaces
-    // (refraction/reflection/env) exactly like opaque ones — one unified quality pipeline.
-    const std::array<VkPipelineColorBlendAttachmentState, 3> transparentColorAttachments{
-        colorAttachment, transparentGbufferAttachment, giBufferAttachment};
-    const VkPipelineColorBlendStateCreateInfo transparentColorBlend{
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-        .attachmentCount = static_cast<std::uint32_t>(transparentColorAttachments.size()),
-        .pAttachments = transparentColorAttachments.data(),
-    };
-    const VkPipelineVertexInputStateCreateInfo vertexInput{
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-    };
-    const std::array<VkDynamicState, 2> dynamicStates{VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-    const VkPipelineDynamicStateCreateInfo dynamicState{
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-        .dynamicStateCount = static_cast<std::uint32_t>(dynamicStates.size()),
-        .pDynamicStates = dynamicStates.data(),
-    };
-    constexpr VkFormat kGbufferFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
-    constexpr VkFormat kGiBufferFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
-    const std::array<VkFormat, 3> colorFormats{m_config.outputFormat, kGbufferFormat, kGiBufferFormat};
-    const VkPipelineRenderingCreateInfo rendering{
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
-        .colorAttachmentCount = static_cast<std::uint32_t>(colorFormats.size()),
-        .pColorAttachmentFormats = colorFormats.data(),
-        .depthAttachmentFormat = VK_FORMAT_D32_SFLOAT,
-    };
-
     const VkGraphicsPipelineCreateInfo pipelineInfo{
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-        .pNext = &rendering,
+        .pNext = &b.rendering,
         .stageCount = static_cast<std::uint32_t>(graphicsStages.size()),
         .pStages = graphicsStages.data(),
-        .pVertexInputState = &vertexInput,
+        .pVertexInputState = &b.vertexInput,
         .pInputAssemblyState = nullptr,
-        .pViewportState = &viewport,
-        .pRasterizationState = &rasterization,
-        .pMultisampleState = &multisample,
+        .pViewportState = &b.viewport,
+        .pRasterizationState = &b.rasterization,
+        .pMultisampleState = &b.multisample,
         .pDepthStencilState = &depthStencil,
         .pColorBlendState = &colorBlend,
-        .pDynamicState = &dynamicState,
+        .pDynamicState = &b.dynamicState,
         .layout = m_pipelineLayout,
     };
     if (vkCreateGraphicsPipelines(m_ctx->device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_graphicsPipeline) !=
@@ -982,25 +934,69 @@ bool ForwardRenderer::createPipeline() {
         m_matSetLayout = VK_NULL_HANDLE;
         vkDestroyDescriptorSetLayout(m_ctx->device, m_meshSetLayout, nullptr);
         m_meshSetLayout = VK_NULL_HANDLE;
-        vkDestroyShaderModule(m_ctx->device, taskModule, nullptr);
-        vkDestroyShaderModule(m_ctx->device, meshModule, nullptr);
-        vkDestroyShaderModule(m_ctx->device, fragModule, nullptr);
         return false;
     }
+    return true;
+}
 
+bool ForwardRenderer::createTransparentPipeline() {
+    const auto& b = m_pipelineBuild;
+    const std::array<VkPipelineShaderStageCreateInfo, 3> graphicsStages{
+        VkPipelineShaderStageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = VK_SHADER_STAGE_TASK_BIT_EXT,
+            .module = b.taskModule,
+            .pName = "main",
+        },
+        VkPipelineShaderStageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = VK_SHADER_STAGE_MESH_BIT_EXT,
+            .module = b.meshModule,
+            .pName = "main",
+        },
+        VkPipelineShaderStageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+            .module = b.fragModule,
+            .pName = "main",
+        },
+    };
+    const VkPipelineDepthStencilStateCreateInfo depthStencilTransparent{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .depthTestEnable = VK_TRUE,
+        .depthWriteEnable = VK_FALSE,
+        .depthCompareOp = VK_COMPARE_OP_LESS,
+    };
+    const VkPipelineColorBlendAttachmentState colorAttachment{
+        .blendEnable = VK_FALSE,
+        .colorWriteMask =
+            VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+    };
+    const VkPipelineColorBlendAttachmentState giBufferAttachment = colorAttachment;
+    const VkPipelineColorBlendAttachmentState transparentGbufferAttachment{
+        .blendEnable = VK_FALSE,
+        .colorWriteMask = 0,
+    };
+    const std::array<VkPipelineColorBlendAttachmentState, 3> transparentColorAttachments{
+        colorAttachment, transparentGbufferAttachment, giBufferAttachment};
+    const VkPipelineColorBlendStateCreateInfo transparentColorBlend{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .attachmentCount = static_cast<std::uint32_t>(transparentColorAttachments.size()),
+        .pAttachments = transparentColorAttachments.data(),
+    };
     const VkGraphicsPipelineCreateInfo transparentPipelineInfo{
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-        .pNext = &rendering,
+        .pNext = &b.rendering,
         .stageCount = static_cast<std::uint32_t>(graphicsStages.size()),
         .pStages = graphicsStages.data(),
-        .pVertexInputState = &vertexInput,
+        .pVertexInputState = &b.vertexInput,
         .pInputAssemblyState = nullptr,
-        .pViewportState = &viewport,
-        .pRasterizationState = &rasterization,
-        .pMultisampleState = &multisample,
+        .pViewportState = &b.viewport,
+        .pRasterizationState = &b.rasterization,
+        .pMultisampleState = &b.multisample,
         .pDepthStencilState = &depthStencilTransparent,
         .pColorBlendState = &transparentColorBlend,
-        .pDynamicState = &dynamicState,
+        .pDynamicState = &b.dynamicState,
         .layout = m_pipelineLayout,
     };
     if (vkCreateGraphicsPipelines(
@@ -1021,122 +1017,103 @@ bool ForwardRenderer::createPipeline() {
         m_matSetLayout = VK_NULL_HANDLE;
         vkDestroyDescriptorSetLayout(m_ctx->device, m_meshSetLayout, nullptr);
         m_meshSetLayout = VK_NULL_HANDLE;
-        vkDestroyShaderModule(m_ctx->device, taskModule, nullptr);
-        vkDestroyShaderModule(m_ctx->device, meshModule, nullptr);
-        vkDestroyShaderModule(m_ctx->device, fragModule, nullptr);
+        return false;
+    }
+    return true;
+}
+
+bool ForwardRenderer::createSkyPipeline() {
+    const auto& b = m_pipelineBuild;
+    VkShaderModule skyVert = loadShaderModule("sky.vert.spv");
+    VkShaderModule skyFrag = loadShaderModule("sky.frag.spv");
+    if (skyVert == VK_NULL_HANDLE || skyFrag == VK_NULL_HANDLE) {
+        Logger::error("Failed to load sky shader modules");
+        if (skyVert)
+            vkDestroyShaderModule(m_ctx->device, skyVert, nullptr);
+        if (skyFrag)
+            vkDestroyShaderModule(m_ctx->device, skyFrag, nullptr);
         return false;
     }
 
-    // ── Sky/background pipeline ───────────────────────────────────────────────
-    // Fullscreen triangle that samples the environment panorama (or outputs black).
-    // Reuses the IBL descriptor set layout (set 0 == specular prefilter + sampler).
-    {
-        VkShaderModule skyVert = loadShaderModule("sky.vert.spv");
-        VkShaderModule skyFrag = loadShaderModule("sky.frag.spv");
-        if (skyVert == VK_NULL_HANDLE || skyFrag == VK_NULL_HANDLE) {
-            Logger::error("Failed to load sky shader modules");
-            if (skyVert)
-                vkDestroyShaderModule(m_ctx->device, skyVert, nullptr);
-            if (skyFrag)
-                vkDestroyShaderModule(m_ctx->device, skyFrag, nullptr);
-            vkDestroyShaderModule(m_ctx->device, taskModule, nullptr);
-            vkDestroyShaderModule(m_ctx->device, meshModule, nullptr);
-            vkDestroyShaderModule(m_ctx->device, fragModule, nullptr);
-            return false;
-        }
-
-        const VkPushConstantRange skyPcRange{
-            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            .offset = 0,
-            .size = sizeof(SkyPushConstants),
-        };
-        const VkPipelineLayoutCreateInfo skyLayoutInfo{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-            .setLayoutCount = 1,
-            .pSetLayouts = &m_iblSetLayout,
-            .pushConstantRangeCount = 1,
-            .pPushConstantRanges = &skyPcRange,
-        };
-        if (vkCreatePipelineLayout(m_ctx->device, &skyLayoutInfo, nullptr, &m_skyPipelineLayout) != VK_SUCCESS) {
-            Logger::error("Failed to create sky pipeline layout");
-            vkDestroyShaderModule(m_ctx->device, skyVert, nullptr);
-            vkDestroyShaderModule(m_ctx->device, skyFrag, nullptr);
-            vkDestroyShaderModule(m_ctx->device, taskModule, nullptr);
-            vkDestroyShaderModule(m_ctx->device, meshModule, nullptr);
-            vkDestroyShaderModule(m_ctx->device, fragModule, nullptr);
-            return false;
-        }
-
-        const std::array<VkPipelineShaderStageCreateInfo, 2> skyStages{
-            VkPipelineShaderStageCreateInfo{
-                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                .stage = VK_SHADER_STAGE_VERTEX_BIT,
-                .module = skyVert,
-                .pName = "main",
-            },
-            VkPipelineShaderStageCreateInfo{
-                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-                .module = skyFrag,
-                .pName = "main",
-            },
-        };
-        const VkPipelineInputAssemblyStateCreateInfo skyInputAsm{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-            .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-        };
-        // No depth test/write — drawn first; geometry overwrites where present.
-        const VkPipelineDepthStencilStateCreateInfo skyDepth{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-            .depthTestEnable = VK_FALSE,
-            .depthWriteEnable = VK_FALSE,
-            .depthCompareOp = VK_COMPARE_OP_ALWAYS,
-        };
-        // Color 0 (HDR) writes RGBA; color 1 (GBuffer) is left untouched (keeps clear).
-        const VkPipelineColorBlendAttachmentState skyHdrBlend{
-            .blendEnable = VK_FALSE,
-            .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
-                              VK_COLOR_COMPONENT_A_BIT,
-        };
-        const VkPipelineColorBlendAttachmentState skyGbufBlend{.blendEnable = VK_FALSE, .colorWriteMask = 0};
-        const std::array<VkPipelineColorBlendAttachmentState, 3> skyBlends{skyHdrBlend, skyGbufBlend, skyGbufBlend};
-        const VkPipelineColorBlendStateCreateInfo skyColorBlend{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-            .attachmentCount = static_cast<std::uint32_t>(skyBlends.size()),
-            .pAttachments = skyBlends.data(),
-        };
-
-        const VkGraphicsPipelineCreateInfo skyPipelineInfo{
-            .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-            .pNext = &rendering,
-            .stageCount = static_cast<std::uint32_t>(skyStages.size()),
-            .pStages = skyStages.data(),
-            .pVertexInputState = &vertexInput,
-            .pInputAssemblyState = &skyInputAsm,
-            .pViewportState = &viewport,
-            .pRasterizationState = &rasterization,
-            .pMultisampleState = &multisample,
-            .pDepthStencilState = &skyDepth,
-            .pColorBlendState = &skyColorBlend,
-            .pDynamicState = &dynamicState,
-            .layout = m_skyPipelineLayout,
-        };
-        const VkResult skyRes =
-            vkCreateGraphicsPipelines(m_ctx->device, VK_NULL_HANDLE, 1, &skyPipelineInfo, nullptr, &m_skyPipeline);
+    const VkPushConstantRange skyPcRange{
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        .offset = 0,
+        .size = sizeof(SkyPushConstants),
+    };
+    const VkPipelineLayoutCreateInfo skyLayoutInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = &m_iblSetLayout,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &skyPcRange,
+    };
+    if (vkCreatePipelineLayout(m_ctx->device, &skyLayoutInfo, nullptr, &m_skyPipelineLayout) != VK_SUCCESS) {
+        Logger::error("Failed to create sky pipeline layout");
         vkDestroyShaderModule(m_ctx->device, skyVert, nullptr);
         vkDestroyShaderModule(m_ctx->device, skyFrag, nullptr);
-        if (skyRes != VK_SUCCESS) {
-            Logger::error("Failed to create sky pipeline");
-            vkDestroyShaderModule(m_ctx->device, taskModule, nullptr);
-            vkDestroyShaderModule(m_ctx->device, meshModule, nullptr);
-            vkDestroyShaderModule(m_ctx->device, fragModule, nullptr);
-            return false;
-        }
+        return false;
     }
 
-    vkDestroyShaderModule(m_ctx->device, taskModule, nullptr);
-    vkDestroyShaderModule(m_ctx->device, meshModule, nullptr);
-    vkDestroyShaderModule(m_ctx->device, fragModule, nullptr);
+    const std::array<VkPipelineShaderStageCreateInfo, 2> skyStages{
+        VkPipelineShaderStageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = VK_SHADER_STAGE_VERTEX_BIT,
+            .module = skyVert,
+            .pName = "main",
+        },
+        VkPipelineShaderStageCreateInfo{
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+            .module = skyFrag,
+            .pName = "main",
+        },
+    };
+    const VkPipelineInputAssemblyStateCreateInfo skyInputAsm{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+    };
+    const VkPipelineDepthStencilStateCreateInfo skyDepth{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .depthTestEnable = VK_FALSE,
+        .depthWriteEnable = VK_FALSE,
+        .depthCompareOp = VK_COMPARE_OP_ALWAYS,
+    };
+    const VkPipelineColorBlendAttachmentState skyHdrBlend{
+        .blendEnable = VK_FALSE,
+        .colorWriteMask =
+            VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+    };
+    const VkPipelineColorBlendAttachmentState skyGbufBlend{.blendEnable = VK_FALSE, .colorWriteMask = 0};
+    const std::array<VkPipelineColorBlendAttachmentState, 3> skyBlends{skyHdrBlend, skyGbufBlend, skyGbufBlend};
+    const VkPipelineColorBlendStateCreateInfo skyColorBlend{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .attachmentCount = static_cast<std::uint32_t>(skyBlends.size()),
+        .pAttachments = skyBlends.data(),
+    };
+
+    const VkGraphicsPipelineCreateInfo skyPipelineInfo{
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .pNext = &b.rendering,
+        .stageCount = static_cast<std::uint32_t>(skyStages.size()),
+        .pStages = skyStages.data(),
+        .pVertexInputState = &b.vertexInput,
+        .pInputAssemblyState = &skyInputAsm,
+        .pViewportState = &b.viewport,
+        .pRasterizationState = &b.rasterization,
+        .pMultisampleState = &b.multisample,
+        .pDepthStencilState = &skyDepth,
+        .pColorBlendState = &skyColorBlend,
+        .pDynamicState = &b.dynamicState,
+        .layout = m_skyPipelineLayout,
+    };
+    const VkResult skyRes =
+        vkCreateGraphicsPipelines(m_ctx->device, VK_NULL_HANDLE, 1, &skyPipelineInfo, nullptr, &m_skyPipeline);
+    vkDestroyShaderModule(m_ctx->device, skyVert, nullptr);
+    vkDestroyShaderModule(m_ctx->device, skyFrag, nullptr);
+    if (skyRes != VK_SUCCESS) {
+        Logger::error("Failed to create sky pipeline");
+        return false;
+    }
     return true;
 }
 
@@ -1148,405 +1125,9 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
     // Ensure the two-pass Hi-Z visibility buffers exist for the current scene.
     const bool visReady = ensureVisibilityBuffers();
 
-    const std::array imageBarriers{
-        VkImageMemoryBarrier2{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-            .srcStageMask = m_hdrFirstUse ? VK_PIPELINE_STAGE_2_NONE : VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-            .srcAccessMask = 0,
-            .dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-            .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-            .oldLayout = m_hdrFirstUse ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL,
-            .newLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = m_config.hdrImage,
-            .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
-        },
-        // Depth: always discard (UNDEFINED) — depth is fully cleared each frame.
-        // SAMPLED_BIT added so SSR can read it after the pass.
-        VkImageMemoryBarrier2{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-            .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
-            .srcAccessMask = 0,
-            .dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-            .dstAccessMask =
-                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .newLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = m_depthTarget.handle(),
-            .subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1},
-        },
-        // GBuffer: always discard (UNDEFINED) — fully written each frame.
-        VkImageMemoryBarrier2{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-            .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
-            .srcAccessMask = 0,
-            .dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-            .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .newLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = m_gbufferTarget.handle(),
-            .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
-        },
-        // GI GBuffer: always discard (UNDEFINED) — fully written each frame by the opaque pass.
-        VkImageMemoryBarrier2{
-            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-            .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
-            .srcAccessMask = 0,
-            .dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-            .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-            .newLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = m_giBufferTarget.handle(),
-            .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
-        },
-    };
-    const VkDependencyInfo hdrDep{
-        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-        .imageMemoryBarrierCount = static_cast<std::uint32_t>(imageBarriers.size()),
-        .pImageMemoryBarriers = imageBarriers.data(),
-    };
-    vkCmdPipelineBarrier2(cmd, &hdrDep);
-    m_hdrFirstUse = false;
+    prepareAttachments(cmd);
 
-    // Create buffer info structures for descriptor updates
-    VkDescriptorBufferInfo vertexBufferInfo{
-        .buffer = m_scene->vertexBuffer().handle(),
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    VkDescriptorBufferInfo instanceBufferInfo{
-        .buffer = m_scene->instanceBuffer().handle(),
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    VkDescriptorBufferInfo instanceTransformInfo{
-        .buffer = m_scene->instanceTransformBuffer().handle(),
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    VkDescriptorBufferInfo indexBufferInfo{
-        .buffer = m_scene->indexBuffer().handle(),
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    VkDescriptorBufferInfo meshletBufferInfo{
-        .buffer = m_scene->meshletBuffer().handle(),
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    VkDescriptorBufferInfo meshletVertexBufferInfo{
-        .buffer = m_scene->meshletVertexBuffer().handle(),
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    VkDescriptorBufferInfo meshletTriangleBufferInfo{
-        .buffer = m_scene->meshletTriangleBuffer().handle(),
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-
-    VkDescriptorBufferInfo materialBufferInfo{
-        .buffer = m_scene->materialBuffer().handle(),
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    VkDescriptorBufferInfo lightBufferInfo{
-        .buffer = m_scene->lightBuffer().handle(),
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    VkDescriptorBufferInfo emissiveTriangleBufferInfo{
-        .buffer = m_scene->emissiveTriangleBuffer().handle(),
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    const VkBuffer cdfFallbackBuffer = (m_dummyTileCounts.handle() != VK_NULL_HANDLE)
-                                           ? m_dummyTileCounts.handle()
-                                           : m_scene->materialBuffer().handle();
-    VkDescriptorBufferInfo envMarginalCdfInfo{
-        .buffer = (m_envMarginalCdf != VK_NULL_HANDLE) ? m_envMarginalCdf : cdfFallbackBuffer,
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    VkDescriptorBufferInfo envConditionalCdfInfo{
-        .buffer = (m_envConditionalCdf != VK_NULL_HANDLE) ? m_envConditionalCdf : cdfFallbackBuffer,
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    // Tile light lists: use real buffers if LightCuller ran, else dummy fallback.
-    const VkBuffer tileCntBuf = (m_tileLightCountsBuf != VK_NULL_HANDLE && m_dummyTileCounts.handle() != VK_NULL_HANDLE)
-                                    ? m_tileLightCountsBuf
-                                    : m_dummyTileCounts.handle();
-    const VkBuffer tileIdxBuf =
-        (m_tileLightIndicesBuf != VK_NULL_HANDLE && m_dummyTileIndices.handle() != VK_NULL_HANDLE)
-            ? m_tileLightIndicesBuf
-            : m_dummyTileIndices.handle();
-    const bool hasTileData = (tileCntBuf != VK_NULL_HANDLE && tileIdxBuf != VK_NULL_HANDLE);
-    VkDescriptorBufferInfo tileLightCountsInfo{
-        .buffer = hasTileData ? tileCntBuf : m_dummyTileCounts.handle(),
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    VkDescriptorBufferInfo tileLightIndicesInfo{
-        .buffer = hasTileData ? tileIdxBuf : m_dummyTileIndices.handle(),
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-
-    const VkAccelerationStructureKHR sceneTlas = m_scene->tlas();
-    const VkWriteDescriptorSetAccelerationStructureKHR tlasWriteInfo{
-        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR,
-        .accelerationStructureCount = 1,
-        .pAccelerationStructures = &sceneTlas,
-    };
-
-    // Two-pass Hi-Z bindings (set 0, bindings 7-9). prev = last frame's visibility,
-    // curr = this frame's (written by the mesh shader). Buffers ping-pong per frame. If the
-    // visibility buffers are unavailable (allocation failed), fall back to a valid scene
-    // buffer so descriptors stay valid; the mesh shader runs cullPhase 0 (draw-all) and never
-    // reads/writes them in that path.
-    const VkBuffer visFallbackBuf = m_scene->meshletBuffer().handle();
-    const VkBuffer prevVisBuf = m_meshletVisibility[m_visFrame].handle();
-    const VkBuffer currVisBuf = m_meshletVisibility[m_visFrame ^ 1u].handle();
-    VkDescriptorBufferInfo prevVisInfo{
-        .buffer = (prevVisBuf != VK_NULL_HANDLE) ? prevVisBuf : visFallbackBuf,
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    VkDescriptorBufferInfo currVisInfo{
-        .buffer = (currVisBuf != VK_NULL_HANDLE) ? currVisBuf : visFallbackBuf,
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    VkDescriptorImageInfo hiZInfo{
-        .sampler = VK_NULL_HANDLE,
-        .imageView = m_hiZPass.sampledView(),
-        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-    };
-
-    // Compact instance list from GpuCullPass. When GpuCullPass is not initialized the
-    // identity list [0,1,...,N-1] is bound so the task shader's compactInstanceList[gid.x]
-    // returns gid.x — equivalent to the CPU-count direct draw path.
-    const VkBuffer identFallback =
-        m_identityInstanceList.isValid() ? m_identityInstanceList.handle() : m_scene->instanceBuffer().handle();
-    const VkBuffer compactInstBuf =
-        m_gpuCullPass.isInitialized() ? m_gpuCullPass.compactInstanceListBuffer() : identFallback;
-    VkDescriptorBufferInfo compactInstInfo{compactInstBuf, 0, VK_WHOLE_SIZE};
-
-    std::array<VkWriteDescriptorSet, 20> writes{
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_meshSet,
-            .dstBinding = 0,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &vertexBufferInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_meshSet,
-            .dstBinding = 1,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &instanceBufferInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_meshSet,
-            .dstBinding = 2,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &indexBufferInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_meshSet,
-            .dstBinding = 3,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &meshletBufferInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_meshSet,
-            .dstBinding = 4,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &meshletVertexBufferInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_meshSet,
-            .dstBinding = 5,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &meshletTriangleBufferInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_meshSet,
-            .dstBinding = 6,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &materialBufferInfo,
-        },
-        // Set 1: materials / lights / emissive triangles
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_matSet,
-            .dstBinding = 0,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &materialBufferInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_matSet,
-            .dstBinding = 1,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &lightBufferInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_matSet,
-            .dstBinding = 2,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &emissiveTriangleBufferInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_matSet,
-            .dstBinding = 3,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &tileLightCountsInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_matSet,
-            .dstBinding = 4,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &tileLightIndicesInfo,
-        },
-        // Set 1, binding 5: scene TLAS for ray-traced shadows.
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .pNext = &tlasWriteInfo,
-            .dstSet = m_matSet,
-            .dstBinding = 5,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
-        },
-        // Set 2: env importance CDF buffers for transparent-path stochastic env sampling.
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_iblSet,
-            .dstBinding = 6,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &envMarginalCdfInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_iblSet,
-            .dstBinding = 7,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &envConditionalCdfInfo,
-        },
-        // Set 0, bindings 7-9: two-pass Hi-Z occlusion culling resources.
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_meshSet,
-            .dstBinding = 7,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &prevVisInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_meshSet,
-            .dstBinding = 8,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &currVisInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_meshSet,
-            .dstBinding = 9,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-            .pImageInfo = &hiZInfo,
-        },
-        // Set 0, binding 10: compact visible instance list (GpuCullPass output).
-        // Task shader reads compactInstanceList[gid.x] to get the instance index.
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_meshSet,
-            .dstBinding = 10,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &compactInstInfo,
-        },
-        // Set 0, binding 11: per-instance object→world transforms (mesh shader).
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_meshSet,
-            .dstBinding = 11,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &instanceTransformInfo,
-        },
-    };
-    vkUpdateDescriptorSets(m_ctx->device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
-
-    // Set 3: bindless material textures. Written only when the scene changes (textures are
-    // immutable per scene). Each scene texture carries its own view + sampler.
-    if (m_scene != m_texturesBoundFor) {
-        const auto& sceneTextures = m_scene->textures();
-        const std::uint32_t texCount = std::min(static_cast<std::uint32_t>(sceneTextures.size()), kMaxBindlessTextures);
-        if (texCount > 0) {
-            std::vector<VkDescriptorImageInfo> imageInfos(texCount);
-            for (std::uint32_t i = 0; i < texCount; ++i) {
-                imageInfos[i] = VkDescriptorImageInfo{
-                    .sampler = sceneTextures[i].sampler(),
-                    .imageView = sceneTextures[i].image().view(),
-                    .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                };
-            }
-            const VkWriteDescriptorSet texWrite{
-                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .dstSet = m_textureSet,
-                .dstBinding = 0,
-                .dstArrayElement = 0,
-                .descriptorCount = texCount,
-                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .pImageInfo = imageInfos.data(),
-            };
-            vkUpdateDescriptorSets(m_ctx->device, 1, &texWrite, 0, nullptr);
-        }
-        m_texturesBoundFor = m_scene;
-    }
-
-    // Begin dynamic rendering (Vulkan 1.4 - no render pass!)
-    VkClearColorValue clearCol{{0.0f, 0.0f, 0.0f, 1.0f}};
-    // GBuffer clear: encoded normal (0.5,0.5,0.5) = view-space (0,0,0), roughness=1 → background
-    VkClearColorValue clearGbuf{{0.5f, 0.5f, 0.5f, 1.0f}};
-    // GI GBuffer clears to all-zero: w=0 (asfloat) is the background sentinel the GI
-    // stage tests to skip pixels with no opaque primary surface.
-    VkClearColorValue clearGi{{0.0f, 0.0f, 0.0f, 0.0f}};
-    VkClearDepthStencilValue clearDepth{1.0f, 0};
+    updateSceneDescriptors(cmd);
 
     // Camera matrices + push constants (needed before rendering so the two Hi-Z passes and
     // the Hi-Z occlusion test share the same projection).
@@ -1595,129 +1176,6 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         .presentationParams = sm::float4(m_indirectAmbientStrength, 0.0f, m_debugRayHitMode, projScaleY),
     };
 
-    // Attachment builders — CLEAR for the first pass, LOAD for the second (preserving pass-1
-    // color/depth/GBuffer so the two Hi-Z passes composite into the same targets).
-    auto colorAtt = [&](VkImageView v, VkAttachmentLoadOp op, VkClearColorValue c) {
-        return VkRenderingAttachmentInfo{
-            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-            .imageView = v,
-            .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-            .loadOp = op,
-            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-            .clearValue{.color = c},
-        };
-    };
-    auto depthAtt = [&](VkAttachmentLoadOp op) {
-        return VkRenderingAttachmentInfo{
-            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-            .imageView = m_depthTarget.view(),
-            .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-            .loadOp = op,
-            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-            .clearValue{.depthStencil = clearDepth},
-        };
-    };
-    auto beginRendering = [&](VkCommandBuffer c, VkAttachmentLoadOp op) {
-        const std::array<VkRenderingAttachmentInfo, 3> atts{
-            colorAtt(m_config.hdrImageView, op, clearCol),
-            colorAtt(m_gbufferTarget.view(), op, clearGbuf),
-            colorAtt(m_giBufferTarget.view(), op, clearGi),
-        };
-        const VkRenderingAttachmentInfo depth = depthAtt(op);
-        const VkRenderingInfo info{
-            .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-            .renderArea{{0, 0}, {m_config.width, m_config.height}},
-            .layerCount = 1,
-            .colorAttachmentCount = static_cast<std::uint32_t>(atts.size()),
-            .pColorAttachments = atts.data(),
-            .pDepthAttachment = &depth,
-        };
-        vkCmdBeginRendering(c, &info);
-    };
-
-    // Draw the environment sky background (only when the scene has an env map). Fills every
-    // pixel at the far plane with no depth write; opaque geometry then overwrites it.
-    auto drawSky = [&](VkCommandBuffer c) {
-        if (!m_hasEnv || m_skyPipeline == VK_NULL_HANDLE) {
-            return;
-        }
-        sm::float4x4 skyProj = sm::perspective(sm::radians(m_camera.vfovDeg),
-                                               static_cast<float>(m_config.width) / static_cast<float>(m_config.height),
-                                               m_camera.nearPlane,
-                                               m_camera.farPlane);
-        skyProj[1][1] *= -1.0f;
-        if (m_cameraJitterEnabled) {
-            skyProj =
-                applyProjectionJitter(skyProj, cameraJitterNdc(m_frameSampleIndex, m_config.width, m_config.height));
-        }
-        const sm::float4x4 skyView = sm::lookAt(m_camera.position, m_camera.target, m_camera.up);
-        const sm::float4x4 skyViewProj = skyProj * skyView;
-        const SkyPushConstants skyPc{
-            .invViewProj = sm::inverse(skyViewProj),
-            .cameraPos = sm::float4(m_camera.position, 1.0f),
-            .exposure = m_camera.physical.exposure(),
-            .hasEnv = 1u,
-            .envScale = m_envUnitNits,
-            ._pad1 = 0u,
-        };
-        vkCmdBindPipeline(c, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skyPipeline);
-        vkCmdBindDescriptorSets(c, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skyPipelineLayout, 0, 1, &m_iblSet, 0, nullptr);
-        vkCmdPushConstants(c,
-                           m_skyPipelineLayout,
-                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0,
-                           sizeof(skyPc),
-                           &skyPc);
-        vkCmdDraw(c, 3, 1, 0, 0);
-    };
-
-    const std::array<VkDescriptorSet, 4> descSets{m_meshSet, m_matSet, m_iblSet, m_textureSet};
-    auto bindMeshSets = [&](VkCommandBuffer c) {
-        vkCmdBindDescriptorSets(
-            c, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 4, descSets.data(), 0, nullptr);
-    };
-    auto drawTransparent = [&](VkCommandBuffer c) {
-        vkCmdBindPipeline(c, VK_PIPELINE_BIND_POINT_GRAPHICS, m_graphicsPipelineTransparent);
-        bindMeshSets(c);
-        auto pc = pcBase;
-        pc.presentationParams.y = 1.0f; // transparent routing in the task shader
-        pc.cullPhase = 0u;              // transparent geometry is not occlusion-culled
-        pc.hiZMipCount = 0u;
-        vkCmdPushConstants(c,
-                           m_pipelineLayout,
-                           VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0,
-                           sizeof(MeshPushConstants),
-                           &pc);
-        const std::uint32_t instCnt = m_scene->instanceCount();
-        if (m_gpuCullPass.isInitialized() && m_dgcLayout != VK_NULL_HANDLE) {
-            const VkGeneratedCommandsPipelineInfoEXT dgcPipelineInfo{
-                .sType = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_PIPELINE_INFO_EXT,
-                .pipeline = m_graphicsPipelineTransparent,
-            };
-            const VkGeneratedCommandsInfoEXT dgcInfo{
-                .sType = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_INFO_EXT,
-                .pNext = &dgcPipelineInfo,
-                .shaderStages =
-                    VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                .indirectExecutionSet = VK_NULL_HANDLE,
-                .indirectCommandsLayout = m_dgcLayout,
-                .indirectAddress = m_gpuCullPass.indirectDrawAddress(),
-                .indirectAddressSize = 12u, // one VkDrawMeshTasksIndirectCommandEXT
-                .preprocessAddress = m_dgcPreprocessAddr,
-                .preprocessSize = m_dgcPreprocessSize,
-                .maxSequenceCount = 1u,    // single GPU-generated draw
-                .sequenceCountAddress = 0, // fixed count of 1
-                .maxDrawCount = 1,
-            };
-            vkCmdExecuteGeneratedCommandsEXT(c, VK_FALSE, &dgcInfo);
-        } else if (m_gpuCullPass.isInitialized() && vkCmdDrawMeshTasksIndirectEXT != nullptr) {
-            vkCmdDrawMeshTasksIndirectEXT(c, m_gpuCullPass.indirectDrawBuffer(), 0, 1, 12u);
-        } else {
-            vkCmdDrawMeshTasksEXT(c, instCnt, 1, 1);
-        }
-    };
-
     // Set dynamic state (shared by both passes).
     VkViewport vp{
         .x = 0.0f,
@@ -1736,72 +1194,23 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
 
     // GPU-driven frustum cull (must run outside dynamic rendering — compute cannot run
     // inside a render pass). Dispatch before the Hi-Z passes and barrier results.
-    if (canDraw && m_gpuCullPass.isInitialized()) {
-        m_gpuCullPass.dispatch(
-            cmd, m_scene->instanceBuffer().handle(), m_scene->instanceBoundsBuffer().handle(), instanceCount, viewProj);
-        // Barrier: compute writes → task shader reads (compactInstanceList) +
-        //          indirect command reads (indirectDrawBuf).
-        // The indirectDrawBuf doubles as the DGC sequenceCountAddress, which is consumed at
-        // the COMMAND_PREPROCESS stage by vkCmdExecuteGeneratedCommandsEXT (implicit
-        // preprocessing) — not at DRAW_INDIRECT. Cover both stages so the count is fully
-        // written by the cull compute before DGC preprocessing reads it; omitting
-        // COMMAND_PREPROCESS lets the driver read a partial sequence count, dropping the
-        // instances near the tail of the compact list (far geometry) non-obviously.
-        const std::array cullBarriers{
-            VkBufferMemoryBarrier2{
-                .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-                .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                .dstStageMask = VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT,
-                .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
-                .buffer = m_gpuCullPass.compactInstanceListBuffer(),
-                .offset = 0,
-                .size = VK_WHOLE_SIZE,
-            },
-            VkBufferMemoryBarrier2{
-                .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-                .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                .dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_COMMAND_PREPROCESS_BIT_EXT,
-                .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_COMMAND_PREPROCESS_READ_BIT_EXT,
-                .buffer = m_gpuCullPass.indirectDrawBuffer(),
-                .offset = 0,
-                .size = VK_WHOLE_SIZE,
-            },
-        };
-        const VkDependencyInfo cullDep{
-            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-            .bufferMemoryBarrierCount = static_cast<std::uint32_t>(cullBarriers.size()),
-            .pBufferMemoryBarriers = cullBarriers.data(),
-        };
-        vkCmdPipelineBarrier2(cmd, &cullDep);
-    }
+    dispatchGpuCull(cmd, instanceCount, viewProj);
 
     const bool twoPass = canDraw && visReady && !m_forceSinglePass;
     const std::uint32_t hiZMip =
         (twoPass && m_hiZPass.isInitialized() && m_hiZTestEnabled && !m_hiZDebugDisabled) ? m_hiZPass.mipLevels() : 0u;
 
     if (!twoPass) {
-        // Fallback: single pass drawing all meshlets (original behavior). Also covers the
-        // vkCmdDrawMeshTasksEXT-missing case (draws nothing but keeps attachments cleared).
-        if (instanceCount > 0 && vkCmdDrawMeshTasksEXT == nullptr) {
-            Logger::error("vkCmdDrawMeshTasksEXT is NULL - mesh shader extension not loaded!");
-        }
-        m_hiZPass.prepareForSampling(cmd);
-        beginRendering(cmd, VK_ATTACHMENT_LOAD_OP_CLEAR);
-        drawSky(cmd);
-        if (canDraw) {
-            drawOpaque(cmd, pcBase, /*cullPhase*/ 0u, /*hiZMipCount*/ 0u);
-            drawTransparent(cmd);
-        }
-        vkCmdEndRendering(cmd);
-        m_hdrFirstUse = false;
+        recordOpaquePass(cmd, pcBase);
         return;
     }
 
     // ---- Two-pass Hi-Z occlusion culling ----
     // Ensure the Hi-Z image is sampleable in both passes (first-use layout transition).
     m_hiZPass.prepareForSampling(cmd);
+
+    const VkBuffer prevVisBuf = m_meshletVisibility[m_visFrame].handle();
+    const VkBuffer currVisBuf = m_meshletVisibility[m_visFrame ^ 1u].handle();
 
     // Reset the current-frame visibility (and previous on the first frame for a scene).
     vkCmdFillBuffer(cmd, currVisBuf, 0, VK_WHOLE_SIZE, 0u);
@@ -1839,8 +1248,8 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
     vkCmdPipelineBarrier2(cmd, &visFillDep);
 
     // Pass 1: redraw only meshlets visible last frame → current-frame initial depth.
-    beginRendering(cmd, VK_ATTACHMENT_LOAD_OP_CLEAR);
-    drawSky(cmd);
+    beginSceneRendering(cmd, VK_ATTACHMENT_LOAD_OP_CLEAR);
+    recordSky(cmd);
     drawOpaque(cmd, pcBase, /*cullPhase*/ 1u, /*hiZMipCount*/ 0u);
     vkCmdEndRendering(cmd);
 
@@ -1911,13 +1320,557 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
 
     // Pass 2: remaining meshlets, occlusion-tested against the current-frame Hi-Z, then the
     // transparent pass — composited over pass-1 targets (LOAD, no clear).
-    beginRendering(cmd, VK_ATTACHMENT_LOAD_OP_LOAD);
+    beginSceneRendering(cmd, VK_ATTACHMENT_LOAD_OP_LOAD);
     drawOpaque(cmd, pcBase, /*cullPhase*/ 2u, hiZMip);
-    drawTransparent(cmd);
+    recordTransparent(cmd, pcBase);
     vkCmdEndRendering(cmd);
 
     // Swap ping-pong: this frame's visibility becomes next frame's "previous".
     m_visFrame ^= 1u;
+    m_hdrFirstUse = false;
+}
+
+void ForwardRenderer::prepareAttachments(VkCommandBuffer cmd) {
+    const std::array imageBarriers{
+        VkImageMemoryBarrier2{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .srcStageMask = m_hdrFirstUse ? VK_PIPELINE_STAGE_2_NONE : VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+            .srcAccessMask = 0,
+            .dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+            .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+            .oldLayout = m_hdrFirstUse ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL,
+            .newLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = m_config.hdrImage,
+            .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+        },
+        VkImageMemoryBarrier2{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
+            .srcAccessMask = 0,
+            .dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+            .dstAccessMask =
+                VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = m_depthTarget.handle(),
+            .subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1},
+        },
+        VkImageMemoryBarrier2{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
+            .srcAccessMask = 0,
+            .dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+            .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = m_gbufferTarget.handle(),
+            .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+        },
+        VkImageMemoryBarrier2{
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
+            .srcAccessMask = 0,
+            .dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+            .dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = m_giBufferTarget.handle(),
+            .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+        },
+    };
+    const VkDependencyInfo hdrDep{
+        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+        .imageMemoryBarrierCount = static_cast<std::uint32_t>(imageBarriers.size()),
+        .pImageMemoryBarriers = imageBarriers.data(),
+    };
+    vkCmdPipelineBarrier2(cmd, &hdrDep);
+    m_hdrFirstUse = false;
+}
+
+void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
+    VkDescriptorBufferInfo vertexBufferInfo{
+        .buffer = m_scene->vertexBuffer().handle(),
+        .offset = 0,
+        .range = VK_WHOLE_SIZE,
+    };
+    VkDescriptorBufferInfo instanceBufferInfo{
+        .buffer = m_scene->instanceBuffer().handle(),
+        .offset = 0,
+        .range = VK_WHOLE_SIZE,
+    };
+    VkDescriptorBufferInfo instanceTransformInfo{
+        .buffer = m_scene->instanceTransformBuffer().handle(),
+        .offset = 0,
+        .range = VK_WHOLE_SIZE,
+    };
+    VkDescriptorBufferInfo indexBufferInfo{
+        .buffer = m_scene->indexBuffer().handle(),
+        .offset = 0,
+        .range = VK_WHOLE_SIZE,
+    };
+    VkDescriptorBufferInfo meshletBufferInfo{
+        .buffer = m_scene->meshletBuffer().handle(),
+        .offset = 0,
+        .range = VK_WHOLE_SIZE,
+    };
+    VkDescriptorBufferInfo meshletVertexBufferInfo{
+        .buffer = m_scene->meshletVertexBuffer().handle(),
+        .offset = 0,
+        .range = VK_WHOLE_SIZE,
+    };
+    VkDescriptorBufferInfo meshletTriangleBufferInfo{
+        .buffer = m_scene->meshletTriangleBuffer().handle(),
+        .offset = 0,
+        .range = VK_WHOLE_SIZE,
+    };
+
+    VkDescriptorBufferInfo materialBufferInfo{
+        .buffer = m_scene->materialBuffer().handle(),
+        .offset = 0,
+        .range = VK_WHOLE_SIZE,
+    };
+    VkDescriptorBufferInfo lightBufferInfo{
+        .buffer = m_scene->lightBuffer().handle(),
+        .offset = 0,
+        .range = VK_WHOLE_SIZE,
+    };
+    VkDescriptorBufferInfo emissiveTriangleBufferInfo{
+        .buffer = m_scene->emissiveTriangleBuffer().handle(),
+        .offset = 0,
+        .range = VK_WHOLE_SIZE,
+    };
+    const VkBuffer cdfFallbackBuffer = (m_dummyTileCounts.handle() != VK_NULL_HANDLE)
+                                           ? m_dummyTileCounts.handle()
+                                           : m_scene->materialBuffer().handle();
+    VkDescriptorBufferInfo envMarginalCdfInfo{
+        .buffer = (m_envMarginalCdf != VK_NULL_HANDLE) ? m_envMarginalCdf : cdfFallbackBuffer,
+        .offset = 0,
+        .range = VK_WHOLE_SIZE,
+    };
+    VkDescriptorBufferInfo envConditionalCdfInfo{
+        .buffer = (m_envConditionalCdf != VK_NULL_HANDLE) ? m_envConditionalCdf : cdfFallbackBuffer,
+        .offset = 0,
+        .range = VK_WHOLE_SIZE,
+    };
+    const VkBuffer tileCntBuf = (m_tileLightCountsBuf != VK_NULL_HANDLE && m_dummyTileCounts.handle() != VK_NULL_HANDLE)
+                                    ? m_tileLightCountsBuf
+                                    : m_dummyTileCounts.handle();
+    const VkBuffer tileIdxBuf =
+        (m_tileLightIndicesBuf != VK_NULL_HANDLE && m_dummyTileIndices.handle() != VK_NULL_HANDLE)
+            ? m_tileLightIndicesBuf
+            : m_dummyTileIndices.handle();
+    const bool hasTileData = (tileCntBuf != VK_NULL_HANDLE && tileIdxBuf != VK_NULL_HANDLE);
+    VkDescriptorBufferInfo tileLightCountsInfo{
+        .buffer = hasTileData ? tileCntBuf : m_dummyTileCounts.handle(),
+        .offset = 0,
+        .range = VK_WHOLE_SIZE,
+    };
+    VkDescriptorBufferInfo tileLightIndicesInfo{
+        .buffer = hasTileData ? tileIdxBuf : m_dummyTileIndices.handle(),
+        .offset = 0,
+        .range = VK_WHOLE_SIZE,
+    };
+
+    const VkAccelerationStructureKHR sceneTlas = m_scene->tlas();
+    const VkWriteDescriptorSetAccelerationStructureKHR tlasWriteInfo{
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR,
+        .accelerationStructureCount = 1,
+        .pAccelerationStructures = &sceneTlas,
+    };
+
+    const VkBuffer visFallbackBuf = m_scene->meshletBuffer().handle();
+    const VkBuffer prevVisBuf = m_meshletVisibility[m_visFrame].handle();
+    const VkBuffer currVisBuf = m_meshletVisibility[m_visFrame ^ 1u].handle();
+    VkDescriptorBufferInfo prevVisInfo{
+        .buffer = (prevVisBuf != VK_NULL_HANDLE) ? prevVisBuf : visFallbackBuf,
+        .offset = 0,
+        .range = VK_WHOLE_SIZE,
+    };
+    VkDescriptorBufferInfo currVisInfo{
+        .buffer = (currVisBuf != VK_NULL_HANDLE) ? currVisBuf : visFallbackBuf,
+        .offset = 0,
+        .range = VK_WHOLE_SIZE,
+    };
+    VkDescriptorImageInfo hiZInfo{
+        .sampler = VK_NULL_HANDLE,
+        .imageView = m_hiZPass.sampledView(),
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    };
+
+    const VkBuffer identFallback =
+        m_identityInstanceList.isValid() ? m_identityInstanceList.handle() : m_scene->instanceBuffer().handle();
+    const VkBuffer compactInstBuf =
+        m_gpuCullPass.isInitialized() ? m_gpuCullPass.compactInstanceListBuffer() : identFallback;
+    VkDescriptorBufferInfo compactInstInfo{compactInstBuf, 0, VK_WHOLE_SIZE};
+
+    std::array<VkWriteDescriptorSet, 20> writes{
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_meshSet,
+            .dstBinding = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &vertexBufferInfo,
+        },
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_meshSet,
+            .dstBinding = 1,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &instanceBufferInfo,
+        },
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_meshSet,
+            .dstBinding = 2,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &indexBufferInfo,
+        },
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_meshSet,
+            .dstBinding = 3,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &meshletBufferInfo,
+        },
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_meshSet,
+            .dstBinding = 4,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &meshletVertexBufferInfo,
+        },
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_meshSet,
+            .dstBinding = 5,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &meshletTriangleBufferInfo,
+        },
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_meshSet,
+            .dstBinding = 6,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &materialBufferInfo,
+        },
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_matSet,
+            .dstBinding = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &materialBufferInfo,
+        },
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_matSet,
+            .dstBinding = 1,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &lightBufferInfo,
+        },
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_matSet,
+            .dstBinding = 2,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &emissiveTriangleBufferInfo,
+        },
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_matSet,
+            .dstBinding = 3,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &tileLightCountsInfo,
+        },
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_matSet,
+            .dstBinding = 4,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &tileLightIndicesInfo,
+        },
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = &tlasWriteInfo,
+            .dstSet = m_matSet,
+            .dstBinding = 5,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+        },
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_iblSet,
+            .dstBinding = 6,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &envMarginalCdfInfo,
+        },
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_iblSet,
+            .dstBinding = 7,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &envConditionalCdfInfo,
+        },
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_meshSet,
+            .dstBinding = 7,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &prevVisInfo,
+        },
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_meshSet,
+            .dstBinding = 8,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &currVisInfo,
+        },
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_meshSet,
+            .dstBinding = 9,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+            .pImageInfo = &hiZInfo,
+        },
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_meshSet,
+            .dstBinding = 10,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &compactInstInfo,
+        },
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = m_meshSet,
+            .dstBinding = 11,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &instanceTransformInfo,
+        },
+    };
+    vkUpdateDescriptorSets(m_ctx->device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
+
+    if (m_scene != m_texturesBoundFor) {
+        const auto& sceneTextures = m_scene->textures();
+        const std::uint32_t texCount = std::min(static_cast<std::uint32_t>(sceneTextures.size()), kMaxBindlessTextures);
+        if (texCount > 0) {
+            std::vector<VkDescriptorImageInfo> imageInfos(texCount);
+            for (std::uint32_t i = 0; i < texCount; ++i) {
+                imageInfos[i] = VkDescriptorImageInfo{
+                    .sampler = sceneTextures[i].sampler(),
+                    .imageView = sceneTextures[i].image().view(),
+                    .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                };
+            }
+            const VkWriteDescriptorSet texWrite{
+                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                .dstSet = m_textureSet,
+                .dstBinding = 0,
+                .dstArrayElement = 0,
+                .descriptorCount = texCount,
+                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .pImageInfo = imageInfos.data(),
+            };
+            vkUpdateDescriptorSets(m_ctx->device, 1, &texWrite, 0, nullptr);
+        }
+        m_texturesBoundFor = m_scene;
+    }
+}
+
+void ForwardRenderer::dispatchGpuCull(VkCommandBuffer cmd, std::uint32_t instanceCount, const sm::float4x4& viewProj) {
+    const bool canDraw = (instanceCount > 0) && (vkCmdDrawMeshTasksEXT != nullptr);
+    if (!canDraw || !m_gpuCullPass.isInitialized()) {
+        return;
+    }
+    m_gpuCullPass.dispatch(
+        cmd, m_scene->instanceBuffer().handle(), m_scene->instanceBoundsBuffer().handle(), instanceCount, viewProj);
+    const std::array cullBarriers{
+        VkBufferMemoryBarrier2{
+            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT,
+            .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+            .buffer = m_gpuCullPass.compactInstanceListBuffer(),
+            .offset = 0,
+            .size = VK_WHOLE_SIZE,
+        },
+        VkBufferMemoryBarrier2{
+            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_COMMAND_PREPROCESS_BIT_EXT,
+            .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_COMMAND_PREPROCESS_READ_BIT_EXT,
+            .buffer = m_gpuCullPass.indirectDrawBuffer(),
+            .offset = 0,
+            .size = VK_WHOLE_SIZE,
+        },
+    };
+    const VkDependencyInfo cullDep{
+        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+        .bufferMemoryBarrierCount = static_cast<std::uint32_t>(cullBarriers.size()),
+        .pBufferMemoryBarriers = cullBarriers.data(),
+    };
+    vkCmdPipelineBarrier2(cmd, &cullDep);
+}
+
+void ForwardRenderer::beginSceneRendering(VkCommandBuffer cmd, VkAttachmentLoadOp loadOp) {
+    VkClearColorValue clearCol{{0.0f, 0.0f, 0.0f, 1.0f}};
+    VkClearColorValue clearGbuf{{0.5f, 0.5f, 0.5f, 1.0f}};
+    VkClearColorValue clearGi{{0.0f, 0.0f, 0.0f, 0.0f}};
+    VkClearDepthStencilValue clearDepth{1.0f, 0};
+
+    auto colorAtt = [&](VkImageView v, VkAttachmentLoadOp op, VkClearColorValue c) {
+        return VkRenderingAttachmentInfo{
+            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+            .imageView = v,
+            .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+            .loadOp = op,
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+            .clearValue{.color = c},
+        };
+    };
+    auto depthAtt = [&](VkAttachmentLoadOp op) {
+        return VkRenderingAttachmentInfo{
+            .sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+            .imageView = m_depthTarget.view(),
+            .imageLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+            .loadOp = op,
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+            .clearValue{.depthStencil = clearDepth},
+        };
+    };
+    const std::array<VkRenderingAttachmentInfo, 3> atts{
+        colorAtt(m_config.hdrImageView, loadOp, clearCol),
+        colorAtt(m_gbufferTarget.view(), loadOp, clearGbuf),
+        colorAtt(m_giBufferTarget.view(), loadOp, clearGi),
+    };
+    const VkRenderingAttachmentInfo depth = depthAtt(loadOp);
+    const VkRenderingInfo info{
+        .sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+        .renderArea{{0, 0}, {m_config.width, m_config.height}},
+        .layerCount = 1,
+        .colorAttachmentCount = static_cast<std::uint32_t>(atts.size()),
+        .pColorAttachments = atts.data(),
+        .pDepthAttachment = &depth,
+    };
+    vkCmdBeginRendering(cmd, &info);
+}
+
+void ForwardRenderer::bindMeshSets(VkCommandBuffer cmd) {
+    const std::array<VkDescriptorSet, 4> descSets{m_meshSet, m_matSet, m_iblSet, m_textureSet};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 4, descSets.data(), 0, nullptr);
+}
+
+void ForwardRenderer::recordSky(VkCommandBuffer cmd) {
+    if (!m_hasEnv || m_skyPipeline == VK_NULL_HANDLE) {
+        return;
+    }
+    sm::float4x4 skyProj = sm::perspective(sm::radians(m_camera.vfovDeg),
+                                           static_cast<float>(m_config.width) / static_cast<float>(m_config.height),
+                                           m_camera.nearPlane,
+                                           m_camera.farPlane);
+    skyProj[1][1] *= -1.0f;
+    if (m_cameraJitterEnabled) {
+        skyProj = applyProjectionJitter(skyProj, cameraJitterNdc(m_frameSampleIndex, m_config.width, m_config.height));
+    }
+    const sm::float4x4 skyView = sm::lookAt(m_camera.position, m_camera.target, m_camera.up);
+    const sm::float4x4 skyViewProj = skyProj * skyView;
+    const SkyPushConstants skyPc{
+        .invViewProj = sm::inverse(skyViewProj),
+        .cameraPos = sm::float4(m_camera.position, 1.0f),
+        .exposure = m_camera.physical.exposure(),
+        .hasEnv = 1u,
+        .envScale = m_envUnitNits,
+        ._pad1 = 0u,
+    };
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skyPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skyPipelineLayout, 0, 1, &m_iblSet, 0, nullptr);
+    vkCmdPushConstants(
+        cmd, m_skyPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(skyPc), &skyPc);
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+}
+
+void ForwardRenderer::recordTransparent(VkCommandBuffer cmd, const MeshPushConstants& pcBase) {
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_graphicsPipelineTransparent);
+    bindMeshSets(cmd);
+    auto pc = pcBase;
+    pc.presentationParams.y = 1.0f;
+    pc.cullPhase = 0u;
+    pc.hiZMipCount = 0u;
+    vkCmdPushConstants(cmd,
+                       m_pipelineLayout,
+                       VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0,
+                       sizeof(MeshPushConstants),
+                       &pc);
+    const std::uint32_t instCnt = m_scene->instanceCount();
+    if (m_gpuCullPass.isInitialized() && m_dgcLayout != VK_NULL_HANDLE) {
+        const VkGeneratedCommandsPipelineInfoEXT dgcPipelineInfo{
+            .sType = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_PIPELINE_INFO_EXT,
+            .pipeline = m_graphicsPipelineTransparent,
+        };
+        const VkGeneratedCommandsInfoEXT dgcInfo{
+            .sType = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_INFO_EXT,
+            .pNext = &dgcPipelineInfo,
+            .shaderStages = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            .indirectExecutionSet = VK_NULL_HANDLE,
+            .indirectCommandsLayout = m_dgcLayout,
+            .indirectAddress = m_gpuCullPass.indirectDrawAddress(),
+            .indirectAddressSize = 12u,
+            .preprocessAddress = m_dgcPreprocessAddr,
+            .preprocessSize = m_dgcPreprocessSize,
+            .maxSequenceCount = 1u,
+            .sequenceCountAddress = 0,
+            .maxDrawCount = 1,
+        };
+        vkCmdExecuteGeneratedCommandsEXT(cmd, VK_FALSE, &dgcInfo);
+    } else if (m_gpuCullPass.isInitialized() && vkCmdDrawMeshTasksIndirectEXT != nullptr) {
+        vkCmdDrawMeshTasksIndirectEXT(cmd, m_gpuCullPass.indirectDrawBuffer(), 0, 1, 12u);
+    } else {
+        vkCmdDrawMeshTasksEXT(cmd, instCnt, 1, 1);
+    }
+}
+
+void ForwardRenderer::recordOpaquePass(VkCommandBuffer cmd, const MeshPushConstants& pcBase) {
+    const std::uint32_t instanceCount = m_scene->instanceCount();
+    const bool canDraw = (instanceCount > 0) && (vkCmdDrawMeshTasksEXT != nullptr);
+    if (instanceCount > 0 && vkCmdDrawMeshTasksEXT == nullptr) {
+        Logger::error("vkCmdDrawMeshTasksEXT is NULL - mesh shader extension not loaded!");
+    }
+    m_hiZPass.prepareForSampling(cmd);
+    beginSceneRendering(cmd, VK_ATTACHMENT_LOAD_OP_CLEAR);
+    recordSky(cmd);
+    if (canDraw) {
+        drawOpaque(cmd, pcBase, /*cullPhase*/ 0u, /*hiZMipCount*/ 0u);
+        recordTransparent(cmd, pcBase);
+    }
+    vkCmdEndRendering(cmd);
     m_hdrFirstUse = false;
 }
 

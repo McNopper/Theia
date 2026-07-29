@@ -119,6 +119,22 @@ class Scene : public harmonia::SceneBase {
     VkResult buildSceneBuffers(const DeviceContext& ctx, const CommandPool& pool) override;
     VkResult buildTlas(const DeviceContext& ctx, const CommandPool& pool) override;
 
+    void buildMeshlets(std::vector<GpuVertex>& vertices,
+                       std::vector<std::uint32_t>& indices,
+                       std::vector<GpuMeshlet>& gpuMeshlets,
+                       std::vector<std::uint32_t>& meshletVertices,
+                       std::vector<std::uint32_t>& meshletTriangles);
+    void buildGpuInstances();
+    VkResult uploadSceneBuffers(const DeviceContext& ctx,
+                                const CommandPool& pool,
+                                const std::vector<GpuMaterial>& gpuMaterials,
+                                const std::vector<GpuVertex>& vertices,
+                                const std::vector<std::uint32_t>& indices,
+                                const std::vector<GpuMeshlet>& gpuMeshlets,
+                                const std::vector<std::uint32_t>& meshletVertices,
+                                const std::vector<std::uint32_t>& meshletTriangles);
+    void synthesizeEmissiveLights(const std::vector<GpuMaterial>& gpuMaterials, std::vector<GpuLight>& gpuLights);
+
     std::vector<MeshGpu> m_meshGpu;          ///< per-mesh ranges (parallel to m_meshes)
     std::vector<GpuInstance> m_gpuInstances; ///< per-instance GPU rows (built at build)
     std::vector<GpuInstanceBounds> m_instanceBounds;

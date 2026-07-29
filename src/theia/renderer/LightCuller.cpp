@@ -21,6 +21,20 @@ namespace theia {
 
 namespace {
 
+// Push constant layout must match LightCullPC in light_cull.comp.slang:
+//   proj (64), view (64), tilesXY (8), screenSize (8), lightCount (4), nearZ (4), farZ (4), _pad (4) = 160 bytes
+struct LightCullPC {
+    sm::float4x4 proj;
+    sm::float4x4 view;
+    sm::uint2 tilesXY;
+    sm::uint2 screenSize;
+    std::uint32_t lightCount{};
+    float nearZ{};
+    float farZ{};
+    std::uint32_t _pad{};
+};
+static_assert(sizeof(LightCullPC) == 160);
+
 [[nodiscard]] std::vector<std::uint32_t> readSpirv(const char* filename) {
     auto code = harmonia::readSpirv(shaderPath(filename));
     if (!code)
@@ -128,7 +142,7 @@ bool LightCuller::initialize(const DeviceContext& ctx, std::uint32_t w, std::uin
     const VkPushConstantRange pcRange{
         .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
         .offset = 0,
-        .size = 160, // 2×64 (mat4) + 32 (vec4s + uints + floats) = 160 bytes
+        .size = sizeof(LightCullPC),
     };
     const VkPipelineLayoutCreateInfo layoutInfo{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -315,20 +329,6 @@ void LightCuller::dispatch(VkCommandBuffer cmd,
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout, 0, 1, &m_set, 0, nullptr);
-
-    // Push constant layout must match LightCullPC in light_cull.comp.slang:
-    //   proj (64), view (64), tilesXY (8), screenSize (8), lightCount (4), nearZ (4), farZ (4), _pad (4) = 160 bytes
-    struct LightCullPC {
-        sm::float4x4 proj;
-        sm::float4x4 view;
-        sm::uint2 tilesXY;
-        sm::uint2 screenSize;
-        std::uint32_t lightCount{};
-        float nearZ{};
-        float farZ{};
-        std::uint32_t _pad{};
-    };
-    static_assert(sizeof(LightCullPC) == 160);
 
     const LightCullPC pc{
         .proj = proj, // row-major for Slang

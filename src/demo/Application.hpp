@@ -102,6 +102,20 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     /// Compute initial yaw/pitch from a camera direction vector.
     static void directionToYawPitch(const sm::float3& dir, float& yaw, float& pitch);
 
+    struct CameraMatrices {
+        sm::float4x4 proj;
+        sm::float4x4 view;
+        sm::float4x4 viewProj;
+    };
+    [[nodiscard]] CameraMatrices computeCameraMatrices(const harmonia::RenderTarget& target) const noexcept;
+    void dispatchLightCull(VkCommandBuffer cmd, const sm::float4x4& proj, const sm::float4x4& view) noexcept;
+    void transitionGbuffersForRecord(VkCommandBuffer cmd, VkImage hdrImage, bool giEnabled) noexcept;
+    void submitAsyncCompute(VkCommandBuffer cmd,
+                            const harmonia::RenderTarget& target,
+                            const sm::float4x4& view,
+                            const sm::float4x4& curViewProj) noexcept;
+    void submitSingleQueueGI(VkCommandBuffer cmd, const sm::float4x4& view, const sm::float4x4& curViewProj) noexcept;
+
     /// True in offscreen capture mode (--output set). Offscreen rendering integrates many
     /// jittered/stochastic samples via progressive accumulation, which is incompatible with
     /// TAA's temporal-reprojection blend — so TAA is never initialized or run in this mode.
