@@ -37,19 +37,6 @@ GpuInstanceBounds worldBounds(const Scene::MeshGpu& mesh, const Xform& xform) {
     return GpuInstanceBounds{c.x, c.y, c.z, mesh.boundsRadius * maxScale};
 }
 
-VkResult uploadBuffer(const DeviceContext& ctx,
-                      const CommandPool& pool,
-                      std::span<const std::byte> data,
-                      VkBufferUsageFlags usage,
-                      const char* name,
-                      Buffer& out) {
-    auto buf = Buffer::upload(ctx, pool, data, usage, name);
-    if (!buf)
-        return buf.error();
-    out = std::move(*buf);
-    return VK_SUCCESS;
-}
-
 } // namespace
 
 std::uint32_t
@@ -298,6 +285,20 @@ void Scene::buildGpuInstances() {
     m_instanceBounds.resize(m_instances.size(), GpuInstanceBounds{});
 }
 
+VkResult Scene::uploadBuffer(const DeviceContext& ctx,
+                             const CommandPool& pool,
+                             std::span<const std::byte> data,
+                             VkBufferUsageFlags usage,
+                             const char* name,
+                             Buffer& out) {
+    auto buf = uploadStorageBuffer(ctx, pool, data, name, usage);
+    if (!buf) {
+        return buf.error();
+    }
+    out = std::move(*buf);
+    return VK_SUCCESS;
+}
+
 VkResult Scene::uploadSceneBuffers(const DeviceContext& ctx,
                                    const CommandPool& pool,
                                    const std::vector<GpuMaterial>& gpuMaterials,
@@ -535,27 +536,17 @@ void Scene::synthesizeEmissiveLights(const std::vector<GpuMaterial>& gpuMaterial
     }
 }
 
-VkResult Scene::buildTlas(const DeviceContext& ctx, const CommandPool& pool) {
-    std::vector<VkAccelerationStructureInstanceKHR> instances(m_instances.size());
-    for (std::size_t i = 0; i < m_instances.size(); ++i) {
-        const InstanceRecord& inst = m_instances[i];
-        instances[i] = m_meshes[inst.meshIndex]->makeInstance(static_cast<std::uint32_t>(i), inst.xform);
-        // Instance masks (Theia-specific visibility channels for the raster/RT-GI passes):
-        //   0x01 = emissive geometry
-        //   0x02 = transparent non-emissive geometry
-        //   0x04 = opaque non-emissive geometry
-        const std::uint32_t matIdx = inst.materialIndex;
-        const bool isEmissive = matIdx < m_materials.size() && m_materials[matIdx].emissiveAsLightSource() &&
-                                m_materials[matIdx].gpu().emissionColorLum.w > 0.0F;
-        bool isTransparent = false;
-        if (!isEmissive && matIdx < m_materials.size()) {
-            const auto gpuMat = m_materials[matIdx].gpu();
-            const float opacity = std::clamp(gpuMat.opacityFlagsPad.x, 0.0f, 1.0f);
-            const float transmissionWeight = std::max(gpuMat.transmissionColorWeight.w, 0.0f);
-            isTransparent = (opacity < 0.9999f) || (transmissionWeight > 0.0f);
-        }
-        instances[i].mask = isEmissive ? 0x01u : (isTransparent ? 0x02u : 0x04u);
+std::uint32_t Scene::instanceMask(std::size_t instanceIndex) const {
+    const InstanceRecord& inst = m_instances[instanceIndex];
+    const std::uint32_t matIdx = inst.materialIndex;
+    const bool isEmissive = matIdx < m_materials.size() && m_materials[matIdx].emissiveAsLightSource() &&
+                            m_materials[matIdx].gpu().emissionColorLum.w > 0.0F;
+    bool isTransparent = false;
+    if (!isEmissive && matIdx < m_materials.size()) {
+        const auto gpuMat = m_materials[matIdx].gpu();
+        const float opacity = std::clamp(gpuMat.opacityFlagsPad.x, 0.0f, 1.0f);
+        const float transmissionWeight = std::max(gpuMat.transmissionColorWeight.w, 0.0f);
+        isTransparent = (opacity < 0.9999f) || (transmissionWeight > 0.0f);
     }
-    // The TLAS-build mechanics are shared (harmonia::buildTlas); only the masks above diverge.
-    return harmonia::buildTlas(ctx, pool, instances, m_tlas, m_tlasAddress);
+    return isEmissive ? 0x01u : (isTransparent ? 0x02u : 0x04u);
 }

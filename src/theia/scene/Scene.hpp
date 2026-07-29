@@ -3,7 +3,9 @@
 
 #include <volk/volk.h>
 
+#include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -117,7 +119,15 @@ class Scene : public harmonia::SceneBase {
 
   private:
     VkResult buildSceneBuffers(const DeviceContext& ctx, const CommandPool& pool) override;
-    VkResult buildTlas(const DeviceContext& ctx, const CommandPool& pool) override;
+
+    std::uint32_t instanceMask(std::size_t instanceIndex) const override;
+
+    VkResult uploadBuffer(const DeviceContext& ctx,
+                          const CommandPool& pool,
+                          std::span<const std::byte> data,
+                          VkBufferUsageFlags usage,
+                          const char* name,
+                          Buffer& out);
 
     void buildMeshlets(std::vector<GpuVertex>& vertices,
                        std::vector<std::uint32_t>& indices,
@@ -155,7 +165,5 @@ class Scene : public harmonia::SceneBase {
     std::uint32_t m_emissiveTriangleCount = 0;
     std::uint32_t m_lightCount = 0;
     std::uint32_t m_meshletCount = 0; ///< total meshlets across all meshes (visibility buffer size)
-    AccelerationStructure m_tlas{};
-    VkDeviceAddress m_tlasAddress{};
 };
 #endif // THEIA_SCENE_SCENE_HPP
