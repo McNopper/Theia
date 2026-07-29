@@ -206,6 +206,6 @@ path. Both paths share one task-shader entry point (`gid.x = 0..visibleCount-1`)
 
 **Acceleration structure builds — device-side only (Khronos deprecation compliant):**
 - BLAS builds: `vkCmdBuildAccelerationStructuresKHR` (`Geometry::buildBlas`).
-- TLAS builds: `vkCmdBuildAccelerationStructuresKHR` (`Scene::buildTlas`).
+- TLAS builds: `vkCmdBuildAccelerationStructuresKHR` (`SceneBase::buildTlas`).
 - `vkBuildAccelerationStructuresKHR` (host-side) is **never used** — deprecated per the
   [Khronos RT AS deprecation blog](https://www.khronos.org/blog/vulkan-ray-tracing-deprecating-host-side-acceleration-structure-builds).
