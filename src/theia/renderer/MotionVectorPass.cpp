@@ -162,8 +162,7 @@ bool MotionVectorPass::createPipeline(const char* spvName) noexcept {
         return false;
     }
 
-    m_ctx->setDebugName(
-        VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<std::uint64_t>(m_pipeline), "theia.motionVectors.pipeline");
+    m_ctx->setDebugName(VK_OBJECT_TYPE_PIPELINE, m_pipeline, "theia.motionVectors.pipeline");
     return true;
 }
 

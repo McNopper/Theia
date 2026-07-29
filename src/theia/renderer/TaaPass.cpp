@@ -215,7 +215,7 @@ bool TaaPass::createPipeline(const char* spvName) noexcept {
         Logger::error("TaaPass: failed to create compute pipeline");
         return false;
     }
-    m_ctx->setDebugName(VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<std::uint64_t>(m_pipeline), "theia.taa.pipeline");
+    m_ctx->setDebugName(VK_OBJECT_TYPE_PIPELINE, m_pipeline, "theia.taa.pipeline");
     return true;
 }
 
