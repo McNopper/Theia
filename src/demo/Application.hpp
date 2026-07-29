@@ -30,7 +30,7 @@ namespace theia {
 /// VK_IMAGE_LAYOUT_GENERAL.
 class Application final : public harmonia::App, public harmonia::IRenderer {
   public:
-    ~Application();
+    ~Application() override;
     void setCameraJitterEnabled(bool enabled) noexcept { m_cameraJitterEnabled = enabled; }
     /// A4: toggle ReSTIR DI spatiotemporal reservoir resampling (default on). When off the
     /// forward pass keeps ownership of emissive direct lighting (bit-identical pre-A4 path).

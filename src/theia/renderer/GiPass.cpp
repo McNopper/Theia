@@ -94,7 +94,7 @@ bool GiPass::initialize(const DeviceContext& ctx, const Config& cfg, const char*
     const VkDeviceSize reservoirBytes =
         static_cast<VkDeviceSize>(cfg.width) * static_cast<VkDeviceSize>(cfg.height) * kReservoirStride;
     if (reservoirBytes > 0) {
-        for (int i = 0; i < 2; ++i) {
+        for (auto& slot : m_reservoirBuf) {
             auto buf = Buffer::create(ctx,
                                       reservoirBytes,
                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -105,12 +105,12 @@ bool GiPass::initialize(const DeviceContext& ctx, const Config& cfg, const char*
                               static_cast<int>(buf.error()));
                 return false;
             }
-            m_reservoirBuf[i] = std::move(*buf);
+            slot = std::move(*buf);
         }
         // GI2 full PT: path reservoir ping-pong buffers (same per-pixel stride policy).
         const VkDeviceSize pathReservoirBytes =
             static_cast<VkDeviceSize>(cfg.width) * static_cast<VkDeviceSize>(cfg.height) * kPathReservoirStride;
-        for (int i = 0; i < 2; ++i) {
+        for (auto& slot : m_pathReservoirBuf) {
             auto buf = Buffer::create(ctx,
                                       pathReservoirBytes,
                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -121,7 +121,7 @@ bool GiPass::initialize(const DeviceContext& ctx, const Config& cfg, const char*
                               static_cast<int>(buf.error()));
                 return false;
             }
-            m_pathReservoirBuf[i] = std::move(*buf);
+            slot = std::move(*buf);
         }
     }
     m_reservoirPingPong = 0;

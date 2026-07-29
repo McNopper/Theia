@@ -126,7 +126,7 @@ TEST(TheiaEnvSamplingContract, PdfEvaluationMatchesSampledDirections) {
     constexpr uint32_t H = 4U;
     const std::vector<float> marginal{0.0F, 0.1F, 0.35F, 0.7F, 1.0F};
     std::vector<float> conditional;
-    conditional.reserve(H * (W + 1U));
+    conditional.reserve(static_cast<size_t>(H) * (W + 1U));
     for (uint32_t row = 0U; row < H; ++row) {
         conditional.push_back(0.0F);
         for (uint32_t col = 0U; col < W; ++col) {

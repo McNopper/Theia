@@ -321,10 +321,10 @@ void LightCuller::dispatch(VkCommandBuffer cmd,
         sm::float4x4 view;
         sm::uint2 tilesXY;
         sm::uint2 screenSize;
-        uint32_t lightCount;
-        float nearZ;
-        float farZ;
-        uint32_t _pad;
+        uint32_t lightCount{};
+        float nearZ{};
+        float farZ{};
+        uint32_t _pad{};
     };
     static_assert(sizeof(LightCullPC) == 160);
 

@@ -1090,8 +1090,8 @@ void Application::onUpdate(float dtSeconds) {
         const float ms = 1000.0f / fps;
         SDL_SetWindowTitle(window(),
                            (std::string("Theia  |  ") + std::to_string(static_cast<int>(fps)) + " FPS  " +
-                            std::to_string(static_cast<int>(ms * 10) / 10.0f).substr(0, 4) + " ms" + "  |  EV100 " +
-                            std::to_string(static_cast<int>(m_camera.physical.ev100() * 10) / 10.0f).substr(0, 4) +
+                            std::to_string(std::trunc(ms * 10.0f) / 10.0f).substr(0, 4) + " ms" + "  |  EV100 " +
+                            std::to_string(std::trunc(m_camera.physical.ev100() * 10.0f) / 10.0f).substr(0, 4) +
                             "  |  RMB = look  WASD = move  [/] = EV100")
                                .c_str());
         fpsFrames = 0;

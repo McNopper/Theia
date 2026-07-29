@@ -19,7 +19,7 @@ namespace theia {
 // Push constant block matching forward_cull.comp.slang CullPC (80 bytes).
 struct alignas(4) CullPC {
     sm::float4x4 viewProj;                    // 64 bytes — row-major VP matrix
-    uint32_t instanceCount;                   // 4 bytes
+    uint32_t instanceCount{};                 // 4 bytes
     uint32_t _pad0 = 0, _pad1 = 0, _pad2 = 0; // 12 bytes pad
 };
 static_assert(sizeof(CullPC) == 80);

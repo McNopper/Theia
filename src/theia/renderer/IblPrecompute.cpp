@@ -522,9 +522,9 @@ bool IblPrecompute::runDiffusePass(VkCommandBuffer cmd) {
     m_tempDescriptorPools.push_back(descriptorPool);
 
     struct DiffusePC {
-        float envScale;
-        uint32_t cdfWidth;
-        uint32_t cdfHeight;
+        float envScale{};
+        uint32_t cdfWidth{};
+        uint32_t cdfHeight{};
         uint32_t _pad{0};
     };
     VkPipeline pipeline = VK_NULL_HANDLE;
@@ -759,7 +759,7 @@ bool IblPrecompute::runSpecularPass(VkCommandBuffer cmd) {
         const uint32_t mipWidth = std::max(1u, kSpecularExtent.width >> mip);
         const uint32_t mipHeight = std::max(1u, kSpecularExtent.height >> mip);
 
-        // cppcheck-suppress unusedStructMember — both fields are read by the GPU via vkCmdPushConstants
+        // cppcheck-suppress unusedStructMember; both fields are read by the GPU via vkCmdPushConstants
         const struct {
             float roughness;
             float envScale;
