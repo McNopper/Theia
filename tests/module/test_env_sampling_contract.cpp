@@ -1,9 +1,7 @@
-#include <gtest/gtest.h>
-
-#include <slang-math/slang-math.hpp>
-
 #include <algorithm>
 #include <cmath>
+#include <gtest/gtest.h>
+#include <slang-math/slang-math.hpp>
 #include <vector>
 
 #include "harmonia/utils/Rng.hpp"
@@ -28,11 +26,11 @@ uint32_t sampleCdf1D(const std::vector<float>& cdf, uint32_t base, uint32_t n, f
 }
 
 sm::float3 sampleEnvImportanceDir(const std::vector<float>& marginalCdf,
-                                 const std::vector<float>& conditionalCdf,
-                                 uint32_t W,
-                                 uint32_t H,
-                                 sm::float2 xi,
-                                 float& pdfOmega) {
+                                  const std::vector<float>& conditionalCdf,
+                                  uint32_t W,
+                                  uint32_t H,
+                                  sm::float2 xi,
+                                  float& pdfOmega) {
     const uint32_t row = sampleCdf1D(marginalCdf, 0U, H, xi.x);
     const uint32_t col = sampleCdf1D(conditionalCdf, row * (W + 1U), W, xi.y);
 
@@ -75,7 +73,7 @@ float evalEnvImportancePdfDir(const std::vector<float>& marginalCdf,
 
     const float pRow = marginalCdf[row + 1U] - marginalCdf[row];
     const float pCol = conditionalCdf[row * (W + 1U) + col + 1U] - conditionalCdf[row * (W + 1U) + col];
-    const float theta = kPi * v;                    // exact theta from direction, not bin centre
+    const float theta = kPi * v; // exact theta from direction, not bin centre
     const float sinTheta = std::max(std::sin(theta), 1.0e-5F);
     return (pRow * pCol * static_cast<float>(W) * static_cast<float>(H)) / (2.0F * kPi * kPi * sinTheta);
 }
@@ -94,8 +92,16 @@ TEST(TheiaEnvSamplingContract, DeterministicReplayProducesStableSequence) {
     constexpr uint32_t H = 2U;
     const std::vector<float> marginal{0.0F, 0.5F, 1.0F};
     const std::vector<float> conditional{
-        0.0F, 0.25F, 0.5F, 0.75F, 1.0F,
-        0.0F, 0.25F, 0.5F, 0.75F, 1.0F,
+        0.0F,
+        0.25F,
+        0.5F,
+        0.75F,
+        1.0F,
+        0.0F,
+        0.25F,
+        0.5F,
+        0.75F,
+        1.0F,
     };
 
     uint32_t s0 = Rng::composeSeed({19U, 7U}, 3U, 2U, 123U);
@@ -153,4 +159,3 @@ TEST(TheiaEnvSamplingContract, BalanceHeuristicIsBoundedAndSymmetric) {
     EXPECT_NEAR(a + b, 1.0F, 1.0e-6F);
     EXPECT_FLOAT_EQ(balanceHeuristic(0.0F, 0.0F), 0.0F);
 }
-

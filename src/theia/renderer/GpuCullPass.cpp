@@ -1,8 +1,7 @@
 #include "theia/renderer/GpuCullPass.hpp"
 
-#include <slang-math/slang-math.hpp>
-
 #include <array>
+#include <slang-math/slang-math.hpp>
 #include <utility>
 #include <vector>
 
@@ -19,13 +18,15 @@ namespace theia {
 
 // Push constant block matching forward_cull.comp.slang CullPC (80 bytes).
 struct alignas(4) CullPC {
-    sm::float4x4 viewProj;   // 64 bytes — row-major VP matrix
-    uint32_t     instanceCount; // 4 bytes
-    uint32_t     _pad0 = 0, _pad1 = 0, _pad2 = 0; // 12 bytes pad
+    sm::float4x4 viewProj;                    // 64 bytes — row-major VP matrix
+    uint32_t instanceCount;                   // 4 bytes
+    uint32_t _pad0 = 0, _pad1 = 0, _pad2 = 0; // 12 bytes pad
 };
 static_assert(sizeof(CullPC) == 80);
 
-GpuCullPass::~GpuCullPass() { shutdown(); }
+GpuCullPass::~GpuCullPass() {
+    shutdown();
+}
 
 GpuCullPass::GpuCullPass(GpuCullPass&& o) noexcept
     : m_ctx(o.m_ctx),
@@ -42,14 +43,14 @@ GpuCullPass::GpuCullPass(GpuCullPass&& o) noexcept
 GpuCullPass& GpuCullPass::operator=(GpuCullPass&& o) noexcept {
     if (this != &o) {
         shutdown();
-        m_ctx            = o.m_ctx;
-        m_pipeline       = std::exchange(o.m_pipeline, VK_NULL_HANDLE);
+        m_ctx = o.m_ctx;
+        m_pipeline = std::exchange(o.m_pipeline, VK_NULL_HANDLE);
         m_pipelineLayout = std::exchange(o.m_pipelineLayout, VK_NULL_HANDLE);
-        m_setLayout      = std::exchange(o.m_setLayout, VK_NULL_HANDLE);
-        m_pool           = std::exchange(o.m_pool, VK_NULL_HANDLE);
-        m_set            = std::exchange(o.m_set, VK_NULL_HANDLE);
+        m_setLayout = std::exchange(o.m_setLayout, VK_NULL_HANDLE);
+        m_pool = std::exchange(o.m_pool, VK_NULL_HANDLE);
+        m_set = std::exchange(o.m_set, VK_NULL_HANDLE);
         m_compactInstanceListBuf = std::move(o.m_compactInstanceListBuf);
-        m_indirectDrawBuf        = std::move(o.m_indirectDrawBuf);
+        m_indirectDrawBuf = std::move(o.m_indirectDrawBuf);
         o.m_ctx = nullptr;
     }
     return *this;
@@ -73,9 +74,8 @@ bool GpuCullPass::initialize(const DeviceContext& ctx, const char* spvFilename) 
                                      "theia.gpuCull.compactInstanceList");
     auto indirectBuf = Buffer::create(ctx,
                                       kIndirectBufSize,
-                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
-                                        | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT
-                                        | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                                          VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                       VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
                                       "theia.gpuCull.indirectDrawBuf");
 
@@ -84,7 +84,7 @@ bool GpuCullPass::initialize(const DeviceContext& ctx, const char* spvFilename) 
         return false;
     }
     m_compactInstanceListBuf = std::move(*compactBuf);
-    m_indirectDrawBuf        = std::move(*indirectBuf);
+    m_indirectDrawBuf = std::move(*indirectBuf);
 
     // --- Descriptor set layout ---
     // binding 0: instances          (STORAGE, read)
@@ -152,12 +152,13 @@ bool GpuCullPass::initialize(const DeviceContext& ctx, const char* spvFilename) 
     }
     const VkComputePipelineCreateInfo pipelineInfo{
         .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
-        .stage = VkPipelineShaderStageCreateInfo{
-            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-            .stage = VK_SHADER_STAGE_COMPUTE_BIT,
-            .module = shaderModule,
-            .pName = "main",
-        },
+        .stage =
+            VkPipelineShaderStageCreateInfo{
+                .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+                .module = shaderModule,
+                .pName = "main",
+            },
         .layout = m_pipelineLayout,
     };
     const VkResult pipeResult =
@@ -196,10 +197,26 @@ bool GpuCullPass::initialize(const DeviceContext& ctx, const char* spvFilename) 
     const VkDescriptorBufferInfo compactInfo{m_compactInstanceListBuf.handle(), 0, VK_WHOLE_SIZE};
     const VkDescriptorBufferInfo indirectInfo{m_indirectDrawBuf.handle(), 0, VK_WHOLE_SIZE};
     const std::array<VkWriteDescriptorSet, 2> staticWrites{
-        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 2, 0, 1,
-                             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &compactInfo, nullptr},
-        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 3, 0, 1,
-                             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &indirectInfo, nullptr},
+        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                             nullptr,
+                             m_set,
+                             2,
+                             0,
+                             1,
+                             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                             nullptr,
+                             &compactInfo,
+                             nullptr},
+        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                             nullptr,
+                             m_set,
+                             3,
+                             0,
+                             1,
+                             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                             nullptr,
+                             &indirectInfo,
+                             nullptr},
     };
     vkUpdateDescriptorSets(ctx.device, static_cast<uint32_t>(staticWrites.size()), staticWrites.data(), 0, nullptr);
 
@@ -208,15 +225,16 @@ bool GpuCullPass::initialize(const DeviceContext& ctx, const char* spvFilename) 
 }
 
 void GpuCullPass::shutdown() {
-    if (!m_ctx) return;
+    if (!m_ctx)
+        return;
 
     m_compactInstanceListBuf = {};
-    m_indirectDrawBuf        = {};
+    m_indirectDrawBuf = {};
 
     if (m_pool != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(m_ctx->device, m_pool, nullptr);
         m_pool = VK_NULL_HANDLE;
-        m_set  = VK_NULL_HANDLE;
+        m_set = VK_NULL_HANDLE;
     }
     if (m_pipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(m_ctx->device, m_pipeline, nullptr);
@@ -234,11 +252,12 @@ void GpuCullPass::shutdown() {
 }
 
 void GpuCullPass::dispatch(VkCommandBuffer cmd,
-                            VkBuffer instanceBuf,
-                            VkBuffer instanceBoundsBuf,
-                            uint32_t instanceCount,
-                            const sm::float4x4& viewProj) {
-    if (!m_ctx || m_pipeline == VK_NULL_HANDLE || instanceCount == 0) return;
+                           VkBuffer instanceBuf,
+                           VkBuffer instanceBoundsBuf,
+                           uint32_t instanceCount,
+                           const sm::float4x4& viewProj) {
+    if (!m_ctx || m_pipeline == VK_NULL_HANDLE || instanceCount == 0)
+        return;
 
     // Zero all 12 bytes so thread 0 can re-initialize groupCountY=1 and groupCountZ=1,
     // and all visible-instance threads accumulate groupCountX from 0.
@@ -246,19 +265,19 @@ void GpuCullPass::dispatch(VkCommandBuffer cmd,
 
     // Barrier: fill → compute read/write on indirectDrawBuf.
     const VkBufferMemoryBarrier2 fillBarrier{
-        .sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-        .srcStageMask  = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+        .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
         .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
-        .dstStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
         .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-        .buffer        = m_indirectDrawBuf.handle(),
-        .offset        = 0,
-        .size          = VK_WHOLE_SIZE,
+        .buffer = m_indirectDrawBuf.handle(),
+        .offset = 0,
+        .size = VK_WHOLE_SIZE,
     };
     const VkDependencyInfo fillDep{
-        .sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
         .bufferMemoryBarrierCount = 1,
-        .pBufferMemoryBarriers    = &fillBarrier,
+        .pBufferMemoryBarriers = &fillBarrier,
     };
     vkCmdPipelineBarrier2(cmd, &fillDep);
 
@@ -266,10 +285,26 @@ void GpuCullPass::dispatch(VkCommandBuffer cmd,
     const VkDescriptorBufferInfo instInfo{instanceBuf, 0, VK_WHOLE_SIZE};
     const VkDescriptorBufferInfo boundsInfo{instanceBoundsBuf, 0, VK_WHOLE_SIZE};
     const std::array<VkWriteDescriptorSet, 2> dynWrites{
-        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 0, 0, 1,
-                             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &instInfo, nullptr},
-        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 1, 0, 1,
-                             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &boundsInfo, nullptr},
+        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                             nullptr,
+                             m_set,
+                             0,
+                             0,
+                             1,
+                             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                             nullptr,
+                             &instInfo,
+                             nullptr},
+        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+                             nullptr,
+                             m_set,
+                             1,
+                             0,
+                             1,
+                             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                             nullptr,
+                             &boundsInfo,
+                             nullptr},
     };
     vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(dynWrites.size()), dynWrites.data(), 0, nullptr);
 

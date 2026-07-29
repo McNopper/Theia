@@ -274,8 +274,12 @@ void HiZPass::build(VkCommandBuffer cmd, VkImageView depthView) noexcept {
                 .pImageInfo = &dstMipInfo,
             },
         };
-        vkCmdPushDescriptorSet(
-            cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout, 0, static_cast<uint32_t>(writes.size()), writes.data());
+        vkCmdPushDescriptorSet(cmd,
+                               VK_PIPELINE_BIND_POINT_COMPUTE,
+                               m_pipelineLayout,
+                               0,
+                               static_cast<uint32_t>(writes.size()),
+                               writes.data());
 
         const HiZPC pc{
             .srcSize = {srcW, srcH},

@@ -1,4 +1,5 @@
-#pragma once
+#ifndef THEIA_RENDERER_MOTIONVECTORPASS_HPP
+#define THEIA_RENDERER_MOTIONVECTORPASS_HPP
 
 #include <volk/volk.h>
 
@@ -24,7 +25,7 @@ class MotionVectorPass {
     struct Config {
         uint32_t width = 0;
         uint32_t height = 0;
-        VkImage giBufferImage = VK_NULL_HANDLE;    ///< GI G-buffer: xyz = worldPos, w = matIdx+1
+        VkImage giBufferImage = VK_NULL_HANDLE; ///< GI G-buffer: xyz = worldPos, w = matIdx+1
         VkImageView giBufferView = VK_NULL_HANDLE;
     };
 
@@ -49,8 +50,8 @@ class MotionVectorPass {
     MotionVectorPass(const MotionVectorPass&) = delete;
     MotionVectorPass& operator=(const MotionVectorPass&) = delete;
 
-    [[nodiscard]] bool initialize(const DeviceContext& ctx, const Config& cfg,
-                                  const char* spvName = "motion_vector.comp.spv");
+    [[nodiscard]] bool
+    initialize(const DeviceContext& ctx, const Config& cfg, const char* spvName = "motion_vector.comp.spv");
     void shutdown();
 
     /// Record the motion-vector dispatch into cmd.
@@ -72,9 +73,9 @@ class MotionVectorPass {
 
   private:
     struct alignas(16) MotionVectorPC {
-        sm::float4x4 curViewProj{1.0f};     // 64 bytes — row-major view-projection matrix
-        sm::float4x4 prevViewProj{1.0f};    // 64 bytes — row-major view-projection matrix
-        sm::float4x4 invCurViewProj{1.0f};  // 64 bytes — row-major inverse (sky reprojection)
+        sm::float4x4 curViewProj{1.0f};    // 64 bytes — row-major view-projection matrix
+        sm::float4x4 prevViewProj{1.0f};   // 64 bytes — row-major view-projection matrix
+        sm::float4x4 invCurViewProj{1.0f}; // 64 bytes — row-major inverse (sky reprojection)
         // Total: 192 bytes. Theia targets hardware guaranteeing a 256-byte push-constant
         // range (LightCuller already ships a 160-byte push constant on this target).
     };
@@ -95,3 +96,4 @@ class MotionVectorPass {
 };
 
 } // namespace theia
+#endif // THEIA_RENDERER_MOTIONVECTORPASS_HPP

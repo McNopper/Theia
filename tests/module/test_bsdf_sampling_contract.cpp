@@ -1,7 +1,6 @@
-#include <gtest/gtest.h>
-
 #include <algorithm>
 #include <cmath>
+#include <gtest/gtest.h>
 
 #include "harmonia/utils/Rng.hpp"
 
@@ -74,4 +73,3 @@ TEST(TheiaBsdfSamplingContract, FresnelStaysFiniteAcrossAnglesAndIor) {
         }
     }
 }
-

@@ -1,6 +1,6 @@
-# Theia — clang-format configuration
+# Canonical clang-format configuration — shared by the pipeline repos
+# (slang-math / Aether / Harmonia / Hyperion / Theia).
 # C++23, 4-space indent, 120-column limit.
-# Identical style to Aether / Harmonia / Hyperion (shared canonical baseline).
 ---
 Language:        Cpp
 Standard:        Latest
@@ -76,7 +76,7 @@ AllowShortLoopsOnASingleLine: false
 # Constructors / initializer lists
 ConstructorInitializerIndentWidth: 4
 PackConstructorInitializers:       NextLine
-BreakConstructorInitializers:      BeforeColon
+BreakConstructorInitializers: BeforeColon
 
 # Misc
 SpaceAfterCStyleCast:        false

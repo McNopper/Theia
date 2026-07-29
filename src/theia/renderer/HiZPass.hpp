@@ -1,4 +1,5 @@
-#pragma once
+#ifndef THEIA_RENDERER_HIZPASS_HPP
+#define THEIA_RENDERER_HIZPASS_HPP
 
 #include <volk/volk.h>
 
@@ -34,10 +35,8 @@ class HiZPass {
 
     /// Create the Hi-Z image (mip chain sized to width/height) and the reduction pipeline.
     /// @param spvName SPIR-V filename resolved against THEIA_SHADER_DIR.
-    [[nodiscard]] bool initialize(const DeviceContext& ctx,
-                                  uint32_t width,
-                                  uint32_t height,
-                                  const char* spvName = "hiz_build.comp.spv");
+    [[nodiscard]] bool
+    initialize(const DeviceContext& ctx, uint32_t width, uint32_t height, const char* spvName = "hiz_build.comp.spv");
     void shutdown();
 
     /// Ensure the Hi-Z image is in SHADER_READ_ONLY_OPTIMAL so the mesh shader may sample
@@ -77,8 +76,8 @@ class HiZPass {
     uint32_t m_height = 0;
     uint32_t m_mipLevels = 1;
 
-    Image m_image{};                        ///< R32F max-depth pyramid (STORAGE + SAMPLED)
-    std::vector<VkImageView> m_mipViews;    ///< one single-level storage view per mip
+    Image m_image{};                     ///< R32F max-depth pyramid (STORAGE + SAMPLED)
+    std::vector<VkImageView> m_mipViews; ///< one single-level storage view per mip
 
     VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
     VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
@@ -88,3 +87,4 @@ class HiZPass {
 };
 
 } // namespace theia
+#endif // THEIA_RENDERER_HIZPASS_HPP

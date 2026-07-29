@@ -1,5 +1,4 @@
 #include <gtest/gtest.h>
-
 #include <slang-math/slang-math.hpp>
 
 #include "theia/renderer/CameraJitter.hpp"
@@ -55,4 +54,3 @@ TEST(TheiaCameraJitterContract, ProjectionJitterOnlyShiftsProjectionCenter) {
         }
     }
 }
-

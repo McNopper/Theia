@@ -1,11 +1,11 @@
-#pragma once
+#ifndef DEMO_APPLICATION_HPP
+#define DEMO_APPLICATION_HPP
 
-#include <algorithm>
 #include <volk/volk.h>
 
-#include <slang-math/slang-math.hpp>
-
+#include <algorithm>
 #include <memory>
+#include <slang-math/slang-math.hpp>
 
 #include "harmonia/app/App.hpp"
 #include "harmonia/app/IRenderer.hpp"
@@ -49,14 +49,17 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     [[nodiscard]] VkPipelineStageFlags2 outputStageMask() const noexcept override {
         // Must name the *actual* final producer of the HDR write this frame.
         // GI compute writes final pixels when active; otherwise the forward graphics pass.
-        return giActive() ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
-                          : VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        return giActive() ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
     }
     [[nodiscard]] VkAccessFlags2 outputAccessMask() const noexcept override {
         return giActive() ? VK_ACCESS_2_SHADER_WRITE_BIT : VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
     }
-    [[nodiscard]] VkImageView gNormalView() const noexcept override { return m_renderer ? m_renderer->gbufferView() : VK_NULL_HANDLE; }
-    [[nodiscard]] VkImageView gDepthView() const noexcept override { return m_renderer ? m_renderer->depthView() : VK_NULL_HANDLE; }
+    [[nodiscard]] VkImageView gNormalView() const noexcept override {
+        return m_renderer ? m_renderer->gbufferView() : VK_NULL_HANDLE;
+    }
+    [[nodiscard]] VkImageView gDepthView() const noexcept override {
+        return m_renderer ? m_renderer->depthView() : VK_NULL_HANDLE;
+    }
     [[nodiscard]] VkImageView motionVectorView() const noexcept override {
         return m_motionVectorPass.isInitialized() ? m_motionVectorPass.motionVectorImageView() : VK_NULL_HANDLE;
     }
@@ -104,9 +107,7 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     [[nodiscard]] bool isOffscreenCapture() const noexcept { return !config().outputFile.empty(); }
 
     /// The ray-query GI compute stage runs whenever enabled and initialized.
-    [[nodiscard]] bool giActive() const noexcept {
-        return config().rtGi && m_giPass.isInitialized();
-    }
+    [[nodiscard]] bool giActive() const noexcept { return config().rtGi && m_giPass.isInitialized(); }
 
     std::unique_ptr<ForwardRenderer> m_renderer;
     LightCuller m_lightCuller;
@@ -142,7 +143,7 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     /// GI2 full PT: multi-bounce path reservoir for the indirect term (default on).
     /// Gated by m_useRestirPt at the GiPass wiring (legacy DI mode has no path reservoir).
     bool m_useRestirPtPath = true;
-    bool m_useTaa      = true;
+    bool m_useTaa = true;
     uint32_t m_sceneMaxDepth = 3u;
 
     /// Previous frame's row-major view-projection matrix for motion vector computation.
@@ -172,16 +173,17 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     // GiPass is dispatched there while the next frame's raster work runs on
     // the graphics queue simultaneously. MotionVectorPass runs in the graphics
     // stages cmd to keep motionVectorImage on the graphics queue family.
-    VkCommandPool   m_asyncCmdPool          = VK_NULL_HANDLE;
-    std::array<VkCommandBuffer, 2> m_asyncCmdBufs    = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkCommandPool m_asyncCmdPool = VK_NULL_HANDLE;
+    std::array<VkCommandBuffer, 2> m_asyncCmdBufs = {VK_NULL_HANDLE, VK_NULL_HANDLE};
     /// Per-slot graphics-family cmd bufs for the scene stages (denoiser etc.) in async mode.
-    std::array<VkCommandBuffer, 2> m_stagesCmdBufs   = {VK_NULL_HANDLE, VK_NULL_HANDLE};
-    std::array<VkSemaphore, 2> m_gfxDoneSemaphores  = {VK_NULL_HANDLE, VK_NULL_HANDLE};
-    std::array<VkSemaphore, 2> m_asyncSemaphores    = {VK_NULL_HANDLE, VK_NULL_HANDLE};
-    std::array<VkFence, 2>     m_asyncFences        = {VK_NULL_HANDLE, VK_NULL_HANDLE};
-    bool m_asyncComputeEnabled  = false;
+    std::array<VkCommandBuffer, 2> m_stagesCmdBufs = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    std::array<VkSemaphore, 2> m_gfxDoneSemaphores = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    std::array<VkSemaphore, 2> m_asyncSemaphores = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    std::array<VkFence, 2> m_asyncFences = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    bool m_asyncComputeEnabled = false;
     /// Pending motion-vector params set in record() and consumed by onBeforeSceneStages().
     MotionVectorPass::FrameParams m_pendingMvp{};
 };
 
 } // namespace theia
+#endif // DEMO_APPLICATION_HPP

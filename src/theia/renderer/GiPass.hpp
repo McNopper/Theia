@@ -1,4 +1,5 @@
-#pragma once
+#ifndef THEIA_RENDERER_GIPASS_HPP
+#define THEIA_RENDERER_GIPASS_HPP
 
 #include <volk/volk.h>
 
@@ -30,11 +31,11 @@ class GiPass {
     struct Config {
         uint32_t width = 0;
         uint32_t height = 0;
-        VkImage hdrImage = VK_NULL_HANDLE;        ///< externally owned HDR render target (read+write)
-        VkImageView hdrView = VK_NULL_HANDLE;     ///< storage view for the HDR image
-        VkImage giBufferImage = VK_NULL_HANDLE;   ///< forward G-buffer: worldPos + materialIdx
+        VkImage hdrImage = VK_NULL_HANDLE;      ///< externally owned HDR render target (read+write)
+        VkImageView hdrView = VK_NULL_HANDLE;   ///< storage view for the HDR image
+        VkImage giBufferImage = VK_NULL_HANDLE; ///< forward G-buffer: worldPos + materialIdx
         VkImageView giBufferView = VK_NULL_HANDLE;
-        VkImage gbufferImage = VK_NULL_HANDLE;    ///< forward thin G-buffer: view-space normal + roughness
+        VkImage gbufferImage = VK_NULL_HANDLE; ///< forward thin G-buffer: view-space normal + roughness
         VkImageView gbufferView = VK_NULL_HANDLE;
     };
 
@@ -43,17 +44,18 @@ class GiPass {
     /// each frame, mirroring ForwardRenderer's descriptor update strategy.
     struct FrameParams {
         const Scene* scene = nullptr;
-        VkImageView envMapView = VK_NULL_HANDLE;  ///< env panorama (or a harmless placeholder when no env)
+        VkImageView envMapView = VK_NULL_HANDLE; ///< env panorama (or a harmless placeholder when no env)
         VkSampler envSampler = VK_NULL_HANDLE;
-        VkBuffer envMarginalCdf = VK_NULL_HANDLE;     ///< may be VK_NULL_HANDLE (no env importance)
-        VkBuffer envConditionalCdf = VK_NULL_HANDLE;  ///< may be VK_NULL_HANDLE
+        VkBuffer envMarginalCdf = VK_NULL_HANDLE;    ///< may be VK_NULL_HANDLE (no env importance)
+        VkBuffer envConditionalCdf = VK_NULL_HANDLE; ///< may be VK_NULL_HANDLE
         uint32_t envImportanceWidth = 0;
         uint32_t envImportanceHeight = 0;
         bool hasEnvMap = false;
         float envLuminanceScale = 1.0f;
 
         sm::float4x4 view{1.0f}; ///< view matrix
-        sm::float4x4 prevViewProj{1.0f}; ///< GI2: previous-frame view-projection for inline motion-vector reprojection (temporal reuse)
+        sm::float4x4 prevViewProj{
+            1.0f}; ///< GI2: previous-frame view-projection for inline motion-vector reprojection (temporal reuse)
         sm::float3 cameraPos{0.0f};
         float exposure = 1.0f;
         uint32_t frameSampleIndex = 0;
@@ -140,14 +142,16 @@ class GiPass {
         uint32_t screenWidth = 0;
         uint32_t screenHeight = 0;
         uint32_t _pad0 = 0;
-        uint32_t a3RegularizationEnabled = 1;      ///< A3(a): secondary-bounce roughness regularization
-        uint32_t hasGradientVariance = 0;          ///< A3(b): 1 when a real A-SVGF guide is bound
-        uint32_t giAdaptiveMaxSamples = 1;         ///< c1: max GI samples/pixel (1 = adaptive sampling off / behavior-preserving)
-        uint32_t restirDiEnabled = 0;              ///< A4: 1 = spatiotemporal reservoir DI; 0 = bit-identical fallback
-        uint32_t restirDiSpatial = 0;              ///< A4: 1 = enable spatial reuse (default 0 = initial+temporal only)
-        uint32_t restirHasMotion = 0;              ///< A4: 1 = real motion image bound; 0 = dummy (skip reprojection)
-        uint32_t restirPtEnabled = 0;              ///< GI2: 1 = ReSTIR PT (path integrator owns primary emissive NEE); 0 = legacy DI path
-        uint32_t restirPtPathEnabled = 0;          ///< GI2 full PT: 1 = multi-bounce path reservoir owns the indirect walk
+        uint32_t a3RegularizationEnabled = 1; ///< A3(a): secondary-bounce roughness regularization
+        uint32_t hasGradientVariance = 0;     ///< A3(b): 1 when a real A-SVGF guide is bound
+        uint32_t giAdaptiveMaxSamples =
+            1;                        ///< c1: max GI samples/pixel (1 = adaptive sampling off / behavior-preserving)
+        uint32_t restirDiEnabled = 0; ///< A4: 1 = spatiotemporal reservoir DI; 0 = bit-identical fallback
+        uint32_t restirDiSpatial = 0; ///< A4: 1 = enable spatial reuse (default 0 = initial+temporal only)
+        uint32_t restirHasMotion = 0; ///< A4: 1 = real motion image bound; 0 = dummy (skip reprojection)
+        uint32_t restirPtEnabled =
+            0; ///< GI2: 1 = ReSTIR PT (path integrator owns primary emissive NEE); 0 = legacy DI path
+        uint32_t restirPtPathEnabled = 0; ///< GI2 full PT: 1 = multi-bounce path reservoir owns the indirect walk
     };
     static_assert(sizeof(GiPushConstants) == 224);
 
@@ -187,16 +191,17 @@ class GiPass {
     // layout Slang picks — the CPU never indexes the contents.
     static constexpr VkDeviceSize kReservoirStride = 64; ///< >= Slang Reservoir stride (float3 may be 16-aligned)
     Buffer m_reservoirBuf[2]{};
-    uint32_t m_reservoirPingPong = 0;  ///< index of the buffer written THIS frame
-    bool m_reservoirsCleared = false;  ///< one-time zero-fill of both reservoir buffers
+    uint32_t m_reservoirPingPong = 0; ///< index of the buffer written THIS frame
+    bool m_reservoirsCleared = false; ///< one-time zero-fill of both reservoir buffers
     /// GI2 full PT: path reservoir ping-pong buffers (bindings 20 = cur, 21 = prev).
     static constexpr VkDeviceSize kPathReservoirStride = 64; ///< >= Slang PathReservoir stride
     Buffer m_pathReservoirBuf[2]{};
     uint32_t m_pathReservoirPingPong = 0;
     bool m_pathReservoirsCleared = false;
-    Image m_dummyMotionVectors{};      ///< 1×1 R32G32F zero placeholder for binding 18
+    Image m_dummyMotionVectors{}; ///< 1×1 R32G32F zero placeholder for binding 18
     bool m_dummyMotionReady = false;
     VkImageView m_boundMotionVectorView = VK_NULL_HANDLE;
 };
 
 } // namespace theia
+#endif // THEIA_RENDERER_GIPASS_HPP

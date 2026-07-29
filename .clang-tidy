@@ -1,0 +1,101 @@
+---
+# Canonical clang-tidy profile — shared by the pipeline repos
+# (slang-math / Aether / Harmonia / Hyperion / Theia).
+#
+# Correctness-first balance (ported from the Hephaestus cpp/ template):
+# let an agent *detect real problems fast* in otherwise well-written
+# code. It deliberately omits subjective/style checks (magic numbers,
+# identifier length, brace and function-size mandates, swappable parameters)
+# that only add friction while code is being generated.
+#
+# Disabled on purpose:
+#   * modernize-use-trailing-return-type     - stylistic, high churn
+#   * modernize-avoid-c-arrays               - subjective; C-arrays are used
+#                                              deliberately (row-major matrix
+#                                              storage mirroring Slang/HLSL)
+#   * modernize-use-default-member-init      - unsatisfiable on anonymous-union
+#                                              colour aliases (x/y/z, r/g/b);
+#                                              explicit ctors already init
+#   * modernize-use-designated-initializers  - high churn across existing
+#                                              aggregate-initialisation-heavy
+#                                              graphics/scene code; style choice
+#   * modernize-use-auto                     - subjective readability
+#   * modernize-use-ranges                   - opinionated C++20 ranges refactor
+#   * modernize-avoid-c-style-cast           - Vulkan C API is cast-heavy; high
+#                                              churn, low value here
+#   * performance-enum-size                  - changing enum underlying type can
+#                                              deserialise GPU buffers / change
+#                                              ABI; risky in this codebase
+#   * bugprone-invalid-enum-default-initialization - Vulkan structs are often
+#                                              value-initialised with {} and
+#                                              contain non-zero-enum members
+#                                              (e.g. currentTransform); the 0
+#                                              is transient / overwritten.
+#   * bugprone-easily-swappable-parameters   - noisy, subjective
+#   * bugprone-exception-escape              - pervasive false positive
+#                                              (iostreams in main() may
+#                                              "throw" from the platform STL)
+#   * clang-analyzer-security.ArrayBound     - flags slang-math's intentional
+#                                              `(&x)[i]` contiguous-member
+#                                              indexing (documented, works on
+#                                              every target toolchain) in every
+#                                              consumer; high false-positive,
+#                                              low yield in this Vulkan codebase.
+#                                              All other clang-analyzer checks
+#                                              stay on.
+#
+# Headers use traditional include guards (not #pragma once), so
+# portability-avoid-pragma-once is left ENABLED as a warning.
+#
+# NOTE: comments must stay OUTSIDE the folded "Checks:" scalar below, or they
+# become part of the value and silently break the check list.
+Checks: >
+  -*,
+  clang-diagnostic-*,
+  clang-analyzer-*,
+  -clang-analyzer-security.ArrayBound,
+  bugprone-*,
+  -bugprone-invalid-enum-default-initialization,
+  performance-*,
+  -performance-enum-size,
+  portability-*,
+  modernize-*,
+  -modernize-use-trailing-return-type,
+  -modernize-avoid-c-arrays,
+  -modernize-use-default-member-init,
+  -modernize-use-designated-initializers,
+  -modernize-use-auto,
+  -modernize-use-ranges,
+  -modernize-avoid-c-style-cast,
+  -modernize-use-nodiscard,
+  -modernize-use-std-numbers,
+  -modernize-use-std-print,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-exception-escape
+
+# Only correctness-oriented findings fail the build. Modernization stays a
+# warning so AI-generated code is guided, not blocked.
+WarningsAsErrors: >
+  clang-diagnostic-*,
+  clang-analyzer-*,
+  bugprone-*
+
+# Analyse our own headers (include/, src/, tests/) wherever they sit in the
+# compile database, which stores absolute paths. The leading "^(src|...)"
+# form never matches absolute paths, so match the directory segment instead.
+HeaderFilterRegex: '.*[\\/](include|src|tests)[\\/].*'
+
+FormatStyle: file
+
+CheckOptions:
+  - key: modernize-loop-convert.MinConfidence
+    value: reasonable
+
+  - key: modernize-use-nullptr.NullMacros
+    value: 'NULL'
+
+  - key: modernize-pass-by-value.IncludeStyle
+    value: llvm
+
+  - key: modernize-replace-auto-ptr.IncludeStyle
+    value: llvm

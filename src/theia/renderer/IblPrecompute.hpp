@@ -1,4 +1,5 @@
-#pragma once
+#ifndef THEIA_RENDERER_IBLPRECOMPUTE_HPP
+#define THEIA_RENDERER_IBLPRECOMPUTE_HPP
 
 #include <volk/volk.h>
 
@@ -84,3 +85,4 @@ class IblPrecompute {
 };
 
 } // namespace theia
+#endif // THEIA_RENDERER_IBLPRECOMPUTE_HPP

@@ -1,0 +1,46 @@
+---
+# Test-only clang-tidy overrides (canonical across the pipeline repos).
+#
+# This mirrors the root .clang-tidy profile EXCEPT that two checks are relaxed:
+#   * clang-analyzer — GoogleTest assertion macros (EXPECT_EQ / ASSERT_*) are
+#     built on switch(0) / do-while scaffolding that confuses its path-sensitive
+#     engine, producing false positives on the code paths the macros touch.
+#   * bugprone-unchecked-optional-access — GoogleTest's ASSERT_TRUE(opt.has_value())
+#     does terminate the test on failure, but the check does not model that
+#     macro, so an `opt->` access guarded by a GoogleTest ASSERT is a false
+#     positive.
+# Correctness of the code under test is established by the tests themselves,
+# not by analysing the test driver. The src/ translation units keep the FULL
+# root profile (both checks on). clang-diagnostic-* and bugprone-* stay errors
+# here. Keep this list in sync with the root .clang-tidy check subtractions.
+Checks: >
+  -*,
+  clang-diagnostic-*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-exception-escape,
+  -bugprone-unchecked-optional-access,
+  -bugprone-random-generator-seed,
+  -bugprone-invalid-enum-default-initialization,
+  performance-*,
+  -performance-enum-size,
+  portability-*,
+  modernize-*,
+  -modernize-use-trailing-return-type,
+  -modernize-avoid-c-arrays,
+  -modernize-use-default-member-init,
+  -modernize-use-designated-initializers,
+  -modernize-use-auto,
+  -modernize-use-ranges,
+  -modernize-avoid-c-style-cast,
+  -modernize-use-nodiscard,
+  -modernize-use-std-numbers,
+  -modernize-use-std-print
+
+WarningsAsErrors: >
+  clang-diagnostic-*,
+  bugprone-*
+
+HeaderFilterRegex: '.*[\\/](include|src|tests)[\\/].*'
+
+FormatStyle: file

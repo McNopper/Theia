@@ -1,4 +1,5 @@
-#pragma once
+#ifndef THEIA_RENDERER_LIGHTCULLER_HPP
+#define THEIA_RENDERER_LIGHTCULLER_HPP
 
 #include <volk/volk.h>
 
@@ -72,3 +73,4 @@ class LightCuller {
 };
 
 } // namespace theia
+#endif // THEIA_RENDERER_LIGHTCULLER_HPP

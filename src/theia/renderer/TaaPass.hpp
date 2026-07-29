@@ -1,4 +1,5 @@
-#pragma once
+#ifndef THEIA_RENDERER_TAAPASS_HPP
+#define THEIA_RENDERER_TAAPASS_HPP
 
 #include <volk/volk.h>
 
@@ -20,25 +21,24 @@ namespace theia {
 class TaaPass {
   public:
     struct Config {
-        uint32_t    width         = 0;
-        uint32_t    height        = 0;
-        VkImage     hdrImage      = VK_NULL_HANDLE;  ///< shared HDR image (R32G32B32A32_SFLOAT)
-        VkImageView hdrView       = VK_NULL_HANDLE;
-        VkImageView motionVecView = VK_NULL_HANDLE;  ///< from MotionVectorPass (R32G32_SFLOAT)
+        uint32_t width = 0;
+        uint32_t height = 0;
+        VkImage hdrImage = VK_NULL_HANDLE; ///< shared HDR image (R32G32B32A32_SFLOAT)
+        VkImageView hdrView = VK_NULL_HANDLE;
+        VkImageView motionVecView = VK_NULL_HANDLE; ///< from MotionVectorPass (R32G32_SFLOAT)
     };
 
     struct FrameParams {
-        float alpha      = 0.1f;   ///< current-frame blend weight (default 0.1)
-        bool  firstFrame = false;  ///< when true the shader writes current directly
+        float alpha = 0.1f;      ///< current-frame blend weight (default 0.1)
+        bool firstFrame = false; ///< when true the shader writes current directly
     };
 
     TaaPass() = default;
     ~TaaPass();
-    TaaPass(const TaaPass&)            = delete;
+    TaaPass(const TaaPass&) = delete;
     TaaPass& operator=(const TaaPass&) = delete;
 
-    [[nodiscard]] bool initialize(const DeviceContext& ctx, const Config& cfg,
-                                  const char* spvName = "taa.comp.spv");
+    [[nodiscard]] bool initialize(const DeviceContext& ctx, const Config& cfg, const char* spvName = "taa.comp.spv");
     void shutdown();
 
     /// Dispatch TAA.
@@ -50,10 +50,10 @@ class TaaPass {
 
   private:
     struct TaaPushConstants {
-        uint32_t screenWidth  = 0;
+        uint32_t screenWidth = 0;
         uint32_t screenHeight = 0;
-        float    alpha        = 0.1f;
-        uint32_t firstFrame   = 0;
+        float alpha = 0.1f;
+        uint32_t firstFrame = 0;
     };
     static_assert(sizeof(TaaPushConstants) == 16);
 
@@ -62,18 +62,19 @@ class TaaPass {
     [[nodiscard]] bool createPipeline(const char* spvName) noexcept;
 
     const DeviceContext* m_ctx = nullptr;
-    Config               m_cfg{};
+    Config m_cfg{};
 
-    VkSampler m_sampler   = VK_NULL_HANDLE;
-    Image     m_history{};    ///< previous TAA output  (R32G32B32A32, SAMPLED | TRANSFER_DST)
-    Image     m_taaOutput{};  ///< current TAA result   (R32G32B32A32, STORAGE | TRANSFER_SRC)
-    bool      m_firstUse  = true;
+    VkSampler m_sampler = VK_NULL_HANDLE;
+    Image m_history{};   ///< previous TAA output  (R32G32B32A32, SAMPLED | TRANSFER_DST)
+    Image m_taaOutput{}; ///< current TAA result   (R32G32B32A32, STORAGE | TRANSFER_SRC)
+    bool m_firstUse = true;
 
-    VkDescriptorSetLayout m_setLayout  = VK_NULL_HANDLE;
-    VkPipelineLayout      m_pipeLayout = VK_NULL_HANDLE;
-    VkPipeline            m_pipeline   = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
+    VkPipelineLayout m_pipeLayout = VK_NULL_HANDLE;
+    VkPipeline m_pipeline = VK_NULL_HANDLE;
 
     uint32_t m_frameCount = 0;
 };
 
 } // namespace theia
+#endif // THEIA_RENDERER_TAAPASS_HPP

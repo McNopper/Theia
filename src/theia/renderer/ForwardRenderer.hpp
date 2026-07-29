@@ -1,10 +1,10 @@
-#pragma once
+#ifndef THEIA_RENDERER_FORWARDRENDERER_HPP
+#define THEIA_RENDERER_FORWARDRENDERER_HPP
 
 #include <volk/volk.h>
 
-#include <slang-math/slang-math.hpp>
-
 #include <algorithm>
+#include <slang-math/slang-math.hpp>
 
 #include "harmonia/DeviceContext.hpp"
 #include "harmonia/core/Buffer.hpp"
@@ -69,7 +69,8 @@ class ForwardRenderer {
     /// harmless placeholder).
     void setIbl(const IblResources& res, VkImageView rawEnvView = VK_NULL_HANDLE, float envUnitNits = 1.0f);
     /// Bind env-importance CDF buffers used by transparent-path stochastic env sampling.
-    void setEnvImportanceSampling(VkBuffer marginalCdf, VkBuffer conditionalCdf, uint32_t width, uint32_t height) noexcept {
+    void
+    setEnvImportanceSampling(VkBuffer marginalCdf, VkBuffer conditionalCdf, uint32_t width, uint32_t height) noexcept {
         m_envMarginalCdf = marginalCdf;
         m_envConditionalCdf = conditionalCdf;
         m_envImportanceWidth = width;
@@ -91,15 +92,11 @@ class ForwardRenderer {
     /// When the ray-query GI compute stage (GiPass) is active it supplies indirect
     /// lighting, so the forward pass must skip its flat-IBL / ambient approximation.
     /// Encoded as bit 0 of the `giEnabled` push constant (bit 1 = ReSTIR DI active).
-    void setGiEnabled(bool enabled) noexcept {
-        m_giEnabled = (m_giEnabled & ~1U) | (enabled ? 1U : 0U);
-    }
+    void setGiEnabled(bool enabled) noexcept { m_giEnabled = (m_giEnabled & ~1U) | (enabled ? 1U : 0U); }
     /// A4: when ReSTIR DI owns emissive-triangle direct lighting (in GiPass), the forward
     /// pass must skip its emissive-derived rect/area lights to avoid double-counting.
     /// Encoded as bit 1 of the `giEnabled` push constant. Punctual lights are unaffected.
-    void setRestirDiActive(bool active) noexcept {
-        m_giEnabled = (m_giEnabled & ~2U) | (active ? 2U : 0U);
-    }
+    void setRestirDiActive(bool active) noexcept { m_giEnabled = (m_giEnabled & ~2U) | (active ? 2U : 0U); }
     /// Max transparent gather depth for coverage/transmission rays (scene max_depth).
     void setTransparentMaxDepth(uint32_t depth) noexcept { m_transparentMaxDepth = std::max(1u, depth); }
     /// Per-frame RNG state plumbed into shader push constants.
@@ -136,26 +133,26 @@ class ForwardRenderer {
     struct alignas(16) MeshPushConstants {
         sm::float4x4 viewProj; ///< row-major — mul(pos, viewProj) = VP * pos directly
         sm::float4x4 view;
-        sm::float4 cameraPos;               ///< xyz = world-space camera position
-        float     exposure             = 0.0f; ///< 1 / (1.2 * 2^EV100) — same as Hyperion
-        uint32_t  lightCount           = 0;
-        uint32_t  emissiveTriangleCount = 0;
-        uint32_t  tilesX               = 0; ///< screen width / 16
-        uint32_t  tilesY               = 0; ///< screen height / 16
-        uint32_t  screenWidth          = 0;
-        uint32_t  screenHeight         = 0;
-        uint32_t  transparentMaxDepth  = 2; ///< transparent gather depth
-        uint32_t  frameSampleIndex     = 0; ///< per-frame sample counter for stochastic stages
-        uint32_t  rngBaseSeed          = 0; ///< base seed for composeRngSeed(pixel, frame, bounce, seed)
-        uint32_t  rngFlags             = 0; ///< bit0 = deterministic replay, bit1 = RNG debug view
-        uint32_t  cullPhase            = 0; ///< Hi-Z pass: 0 = draw all, 1 = prev-visible, 2 = remaining + Hi-Z
-        uint32_t  envImportanceWidth   = 0; ///< CDF width; 0 disables env importance sampling
-        uint32_t  envImportanceHeight  = 0; ///< CDF height
-        uint32_t  hiZMipCount          = 0; ///< Hi-Z mip levels; 0 disables the occlusion test
-        uint32_t  giEnabled            = 0; ///< 1 when GiPass supplies indirect; disables forward IBL/ambient
-        sm::float4 sunDirection; ///< xyz = world dir toward sun, w = shadow strength (0 disables)
-        sm::float4 shadowParams; ///< x = ray tMin, y = sky ambient floor, z = env_unit_nits, w = |proj[0][0]|
-        sm::float4 presentationParams; ///< x = indirect ambient, y = pass flag, z = debug ray-hit, w = |proj[1][1]|
+        sm::float4 cameraPos;  ///< xyz = world-space camera position
+        float exposure = 0.0f; ///< 1 / (1.2 * 2^EV100) — same as Hyperion
+        uint32_t lightCount = 0;
+        uint32_t emissiveTriangleCount = 0;
+        uint32_t tilesX = 0; ///< screen width / 16
+        uint32_t tilesY = 0; ///< screen height / 16
+        uint32_t screenWidth = 0;
+        uint32_t screenHeight = 0;
+        uint32_t transparentMaxDepth = 2; ///< transparent gather depth
+        uint32_t frameSampleIndex = 0;    ///< per-frame sample counter for stochastic stages
+        uint32_t rngBaseSeed = 0;         ///< base seed for composeRngSeed(pixel, frame, bounce, seed)
+        uint32_t rngFlags = 0;            ///< bit0 = deterministic replay, bit1 = RNG debug view
+        uint32_t cullPhase = 0;           ///< Hi-Z pass: 0 = draw all, 1 = prev-visible, 2 = remaining + Hi-Z
+        uint32_t envImportanceWidth = 0;  ///< CDF width; 0 disables env importance sampling
+        uint32_t envImportanceHeight = 0; ///< CDF height
+        uint32_t hiZMipCount = 0;         ///< Hi-Z mip levels; 0 disables the occlusion test
+        uint32_t giEnabled = 0;           ///< 1 when GiPass supplies indirect; disables forward IBL/ambient
+        sm::float4 sunDirection;          ///< xyz = world dir toward sun, w = shadow strength (0 disables)
+        sm::float4 shadowParams;          ///< x = ray tMin, y = sky ambient floor, z = env_unit_nits, w = |proj[0][0]|
+        sm::float4 presentationParams;    ///< x = indirect ambient, y = pass flag, z = debug ray-hit, w = |proj[1][1]|
     };
     static_assert(sizeof(MeshPushConstants) == 256);
     bool createDepthTarget();
@@ -187,20 +184,20 @@ class ForwardRenderer {
     struct SkyPushConstants {
         sm::float4x4 invViewProj;
         sm::float4 cameraPos;
-        float    exposure  = 0.0f;
-        uint32_t hasEnv    = 0;
-        float    envScale  = 0.0f; ///< env_unit_nits — physical cd/m² per raw EXR unit
-        uint32_t _pad1     = 0;
+        float exposure = 0.0f;
+        uint32_t hasEnv = 0;
+        float envScale = 0.0f; ///< env_unit_nits — physical cd/m² per raw EXR unit
+        uint32_t _pad1 = 0;
     };
     static_assert(sizeof(SkyPushConstants) == 96);
     VkPipelineLayout m_skyPipelineLayout = VK_NULL_HANDLE;
     VkPipeline m_skyPipeline = VK_NULL_HANDLE;
     bool m_hasEnv = false;
     sm::float3 m_sunDir{0.0f, 1.0f, 0.0f}; ///< world dir toward dominant IBL light
-    float m_sunStrength = 0.0f;           ///< [0,1] ray-traced sun shadow strength
+    float m_sunStrength = 0.0f;            ///< [0,1] ray-traced sun shadow strength
     float m_indirectAmbientStrength = 0.0f;
-    uint32_t m_giEnabled = 0; ///< 1 when GiPass is active (forward skips IBL/ambient)
-    float m_debugRayHitMode = 0.0f;       ///< 0=off, 1=ray-hit albedo, 2=ray-hit radiance (debug only)
+    uint32_t m_giEnabled = 0;       ///< 1 when GiPass is active (forward skips IBL/ambient)
+    float m_debugRayHitMode = 0.0f; ///< 0=off, 1=ray-hit albedo, 2=ray-hit radiance (debug only)
     uint32_t m_transparentMaxDepth = 2;
     uint32_t m_frameSampleIndex = 0;
     uint32_t m_rngBaseSeed = 0x12345678U;
@@ -263,10 +260,10 @@ class ForwardRenderer {
     VkIndirectCommandsLayoutEXT m_dgcLayout = VK_NULL_HANDLE;
     /// Preprocess buffer required by vkCmdExecuteGeneratedCommandsEXT (driver scratch space).
     /// Allocated with VK_BUFFER_USAGE_2_PREPROCESS_BUFFER_BIT_EXT (64-bit usage flag).
-    VkBuffer      m_dgcPreprocessBuf     = VK_NULL_HANDLE;
-    VmaAllocation m_dgcPreprocessAlloc   = VK_NULL_HANDLE;
-    VkDeviceAddress m_dgcPreprocessAddr  = 0;
-    VkDeviceSize    m_dgcPreprocessSize  = 0;
+    VkBuffer m_dgcPreprocessBuf = VK_NULL_HANDLE;
+    VmaAllocation m_dgcPreprocessAlloc = VK_NULL_HANDLE;
+    VkDeviceAddress m_dgcPreprocessAddr = 0;
+    VkDeviceSize m_dgcPreprocessSize = 0;
 
     // Two-pass Hi-Z occlusion culling (B4).
     HiZPass m_hiZPass;                    ///< current-frame depth pyramid builder
@@ -281,3 +278,4 @@ class ForwardRenderer {
 };
 
 } // namespace theia
+#endif // THEIA_RENDERER_FORWARDRENDERER_HPP

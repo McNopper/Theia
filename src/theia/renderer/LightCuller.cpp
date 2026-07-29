@@ -1,9 +1,8 @@
 #include "theia/renderer/LightCuller.hpp"
 
-#include <slang-math/slang-math.hpp>
-
 #include <array>
 #include <cmath>
+#include <slang-math/slang-math.hpp>
 #include <utility>
 #include <vector>
 

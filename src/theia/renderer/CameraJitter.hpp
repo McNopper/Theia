@@ -1,8 +1,8 @@
-#pragma once
-
-#include <slang-math/slang-math.hpp>
+#ifndef THEIA_RENDERER_CAMERAJITTER_HPP
+#define THEIA_RENDERER_CAMERAJITTER_HPP
 
 #include <cstdint>
+#include <slang-math/slang-math.hpp>
 
 namespace theia {
 
@@ -54,3 +54,4 @@ inline sm::float4x4 applyProjectionJitter(sm::float4x4 projection, const sm::flo
 }
 
 } // namespace theia
+#endif // THEIA_RENDERER_CAMERAJITTER_HPP

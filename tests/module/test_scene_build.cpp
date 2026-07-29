@@ -2,10 +2,9 @@
 // under the mesh/instance model (unique meshes registered once; instances placed
 // with a transform).
 
-#include <slang-math/slang-math.hpp>
-
 #include <gtest/gtest.h>
 #include <limits>
+#include <slang-math/slang-math.hpp>
 
 #include "fixtures/VulkanTestFixture.hpp"
 #include "harmonia/scene/Material.hpp"

@@ -1,4 +1,5 @@
-#pragma once
+#ifndef THEIA_RENDERER_GPUCULLPASS_HPP
+#define THEIA_RENDERER_GPUCULLPASS_HPP
 
 #include <volk/volk.h>
 
@@ -50,8 +51,7 @@ class GpuCullPass {
 
     /// Initialize the cull pass pipeline and output buffers.
     /// @param spvFilename  SPIR-V filename resolved against THEIA_SHADER_DIR.
-    [[nodiscard]] bool initialize(const DeviceContext& ctx,
-                                  const char* spvFilename = "forward_cull.comp.spv");
+    [[nodiscard]] bool initialize(const DeviceContext& ctx, const char* spvFilename = "forward_cull.comp.spv");
 
     void shutdown();
 
@@ -74,9 +74,7 @@ class GpuCullPass {
 
     /// GPU buffer of visible instance indices (uint[kMaxInstances]).
     /// Bind to ForwardRenderer set 0, binding 10 for the task shader to read.
-    [[nodiscard]] VkBuffer compactInstanceListBuffer() const noexcept {
-        return m_compactInstanceListBuf.handle();
-    }
+    [[nodiscard]] VkBuffer compactInstanceListBuffer() const noexcept { return m_compactInstanceListBuf.handle(); }
 
     /// Single VkDrawMeshTasksIndirectCommandEXT entry: {visibleCount, 1, 1}.
     /// GD3: pass to vkCmdDrawMeshTasksIndirectEXT (drawCount=1, stride=12).
@@ -85,21 +83,20 @@ class GpuCullPass {
 
     /// Device address of indirectDrawBuf = {visibleCount, 1, 1}.
     /// GD6 DGC path: VkGeneratedCommandsInfoEXT::indirectAddress (single-sequence command).
-    [[nodiscard]] VkDeviceAddress indirectDrawAddress() const noexcept {
-        return m_indirectDrawBuf.deviceAddress();
-    }
+    [[nodiscard]] VkDeviceAddress indirectDrawAddress() const noexcept { return m_indirectDrawBuf.deviceAddress(); }
 
   private:
     const DeviceContext* m_ctx = nullptr;
 
-    VkPipeline            m_pipeline       = VK_NULL_HANDLE;
-    VkPipelineLayout      m_pipelineLayout = VK_NULL_HANDLE;
-    VkDescriptorSetLayout m_setLayout      = VK_NULL_HANDLE;
-    VkDescriptorPool      m_pool           = VK_NULL_HANDLE;
-    VkDescriptorSet       m_set            = VK_NULL_HANDLE;
+    VkPipeline m_pipeline = VK_NULL_HANDLE;
+    VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
+    VkDescriptorPool m_pool = VK_NULL_HANDLE;
+    VkDescriptorSet m_set = VK_NULL_HANDLE;
 
     Buffer m_compactInstanceListBuf; ///< uint[kMaxInstances]  STORAGE
     Buffer m_indirectDrawBuf;        ///< single VkDrawMeshTasksIndirectCommandEXT  STORAGE | INDIRECT | DEVICE_ADDR
 };
 
 } // namespace theia
+#endif // THEIA_RENDERER_GPUCULLPASS_HPP

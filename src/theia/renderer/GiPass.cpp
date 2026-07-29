@@ -2,12 +2,12 @@
 
 #include <algorithm>
 #include <array>
-#include <vector>
 #include <harmonia/core/Logger.hpp>
 #include <harmonia/core/ShaderModule.hpp>
+#include <slang-math/slang-math.hpp>
 #include <theia/renderer/ShaderPath.hpp>
 #include <theia/scene/Scene.hpp>
-#include <slang-math/slang-math.hpp>
+#include <vector>
 
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -199,15 +199,21 @@ bool GiPass::createDescriptors() {
         {10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},            // emissive tris
         {11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},            // marginal CDF
         {12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},            // conditional CDF
-        {13, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // textures
-        {14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},            // emissive power CDF
-        {15, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},             // A3(b) gradient/variance
-        {16, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},            // A4 reservoirs (cur, RW)
-        {17, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},            // A4 reservoirs (prev, RO)
-        {18, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},             // A4 motion vectors
-        {19, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},            // instance transforms
-        {20, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},            // GI2 PT path reservoirs (cur, RW)
-        {21, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},            // GI2 PT path reservoirs (prev, RO)
+        {13,
+         VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+         kMaxBindlessTextures,
+         VK_SHADER_STAGE_COMPUTE_BIT,
+         nullptr},                                                                        // textures
+        {14, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // emissive power CDF
+        {15, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},  // A3(b) gradient/variance
+        {16, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // A4 reservoirs (cur, RW)
+        {17, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // A4 reservoirs (prev, RO)
+        {18, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},  // A4 motion vectors
+        {19, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // instance transforms
+        {20, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI2 PT path reservoirs
+                                                                                          // (cur, RW)
+        {21, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI2 PT path reservoirs
+                                                                                          // (prev, RO)
     }};
 
     constexpr VkDescriptorBindingFlags kUpdateAfterBind = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
@@ -216,9 +222,8 @@ bool GiPass::createDescriptors() {
     const std::array<VkDescriptorBindingFlags, 22> bindingFlags{
         kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind,
         kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind,
-        kUpdateAfterBind, kTextureFlags, kUpdateAfterBind, kUpdateAfterBind,
-        kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind,
-        kUpdateAfterBind, kUpdateAfterBind};
+        kUpdateAfterBind, kTextureFlags,    kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind,
+        kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = static_cast<uint32_t>(bindingFlags.size()),
@@ -240,9 +245,10 @@ bool GiPass::createDescriptors() {
     const std::array<VkDescriptorPoolSize, 6> poolSizes{{
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
         {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1},
-        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 5},   // 2,3,4,15 + 18 (motion)
+        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 5}, // 2,3,4,15 + 18 (motion)
         {VK_DESCRIPTOR_TYPE_SAMPLER, 1},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 13}, // 6,7,8,9,10,11,12,14 + 16,17 (reservoirs) + 19 (instance transforms) + 20,21 (path reservoirs)
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+         13}, // 6,7,8,9,10,11,12,14 + 16,17 (reservoirs) + 19 (instance transforms) + 20,21 (path reservoirs)
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures},
     }};
     const VkDescriptorPoolCreateInfo poolInfo{
@@ -343,7 +349,8 @@ void GiPass::updateDescriptors(const FrameParams& params) {
     // placeholder so the descriptor stays valid — the shader gates all reads on hasEnvMap.
     const VkBuffer cdfFallback = scene->materialBuffer().handle();
     const VkBuffer marginalCdf = (params.envMarginalCdf != VK_NULL_HANDLE) ? params.envMarginalCdf : cdfFallback;
-    const VkBuffer conditionalCdf = (params.envConditionalCdf != VK_NULL_HANDLE) ? params.envConditionalCdf : cdfFallback;
+    const VkBuffer conditionalCdf =
+        (params.envConditionalCdf != VK_NULL_HANDLE) ? params.envConditionalCdf : cdfFallback;
 
     const VkDescriptorBufferInfo materialsInfo{scene->materialBuffer().handle(), 0, VK_WHOLE_SIZE};
     const VkDescriptorBufferInfo verticesInfo{scene->vertexBuffer().handle(), 0, VK_WHOLE_SIZE};
@@ -364,38 +371,166 @@ void GiPass::updateDescriptors(const FrameParams& params) {
     };
 
     const std::array<VkWriteDescriptorSet, 16> writes{{
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, &tlasWriteInfo, m_set, 0, 0, 1,
-         VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, nullptr, nullptr, nullptr},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 1, 0, 1,
-         VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, &hdrInfo, nullptr, nullptr},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 2, 0, 1,
-         VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &giBufferInfo, nullptr, nullptr},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 3, 0, 1,
-         VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &gbufferInfo, nullptr, nullptr},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 4, 0, 1,
-         VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &envInfo, nullptr, nullptr},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 5, 0, 1,
-         VK_DESCRIPTOR_TYPE_SAMPLER, &envSamplerInfo, nullptr, nullptr},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 6, 0, 1,
-         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &materialsInfo, nullptr},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 7, 0, 1,
-         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &verticesInfo, nullptr},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 8, 0, 1,
-         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &instancesInfo, nullptr},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 9, 0, 1,
-         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &indicesInfo, nullptr},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 10, 0, 1,
-         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &emissiveInfo, nullptr},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 11, 0, 1,
-         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &marginalInfo, nullptr},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 12, 0, 1,
-         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &conditionalInfo, nullptr},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 14, 0, 1,
-         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &emissiveCdfInfo, nullptr},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 15, 0, 1,
-         VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &gradientVarianceInfo, nullptr, nullptr},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 19, 0, 1,
-         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &instanceTransformsInfo, nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         &tlasWriteInfo,
+         m_set,
+         0,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+         nullptr,
+         nullptr,
+         nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         nullptr,
+         m_set,
+         1,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+         &hdrInfo,
+         nullptr,
+         nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         nullptr,
+         m_set,
+         2,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+         &giBufferInfo,
+         nullptr,
+         nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         nullptr,
+         m_set,
+         3,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+         &gbufferInfo,
+         nullptr,
+         nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         nullptr,
+         m_set,
+         4,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+         &envInfo,
+         nullptr,
+         nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         nullptr,
+         m_set,
+         5,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_SAMPLER,
+         &envSamplerInfo,
+         nullptr,
+         nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         nullptr,
+         m_set,
+         6,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+         nullptr,
+         &materialsInfo,
+         nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         nullptr,
+         m_set,
+         7,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+         nullptr,
+         &verticesInfo,
+         nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         nullptr,
+         m_set,
+         8,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+         nullptr,
+         &instancesInfo,
+         nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         nullptr,
+         m_set,
+         9,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+         nullptr,
+         &indicesInfo,
+         nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         nullptr,
+         m_set,
+         10,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+         nullptr,
+         &emissiveInfo,
+         nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         nullptr,
+         m_set,
+         11,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+         nullptr,
+         &marginalInfo,
+         nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         nullptr,
+         m_set,
+         12,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+         nullptr,
+         &conditionalInfo,
+         nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         nullptr,
+         m_set,
+         14,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+         nullptr,
+         &emissiveCdfInfo,
+         nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         nullptr,
+         m_set,
+         15,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+         &gradientVarianceInfo,
+         nullptr,
+         nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         nullptr,
+         m_set,
+         19,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+         nullptr,
+         &instanceTransformsInfo,
+         nullptr},
     }};
 
     std::vector<VkWriteDescriptorSet> allWrites(writes.begin(), writes.end());
@@ -431,8 +566,8 @@ void GiPass::updateRestirDescriptors(const FrameParams& params) {
     // temporal reuse) and 18 (motion vectors). Rewritten every frame because the reservoir
     // ping-pong flips and the motion view can change; all three are UPDATE_AFTER_BIND.
     // GI2 full PT: bindings 20/21 mirror 16/17 for the path reservoir ping-pong.
-    if (!m_reservoirBuf[0].isValid() || !m_reservoirBuf[1].isValid() ||
-        !m_pathReservoirBuf[0].isValid() || !m_pathReservoirBuf[1].isValid()) {
+    if (!m_reservoirBuf[0].isValid() || !m_reservoirBuf[1].isValid() || !m_pathReservoirBuf[0].isValid() ||
+        !m_pathReservoirBuf[1].isValid()) {
         return;
     }
     const uint32_t cur = m_reservoirPingPong;
@@ -452,24 +587,65 @@ void GiPass::updateRestirDescriptors(const FrameParams& params) {
     };
 
     const std::array<VkWriteDescriptorSet, 5> writes{{
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 16, 0, 1,
-         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &curInfo, nullptr},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 17, 0, 1,
-         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &prevInfo, nullptr},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 18, 0, 1,
-         VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &motionInfo, nullptr, nullptr},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 20, 0, 1,
-         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &pathCurInfo, nullptr},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, m_set, 21, 0, 1,
-         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, nullptr, &pathPrevInfo, nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         nullptr,
+         m_set,
+         16,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+         nullptr,
+         &curInfo,
+         nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         nullptr,
+         m_set,
+         17,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+         nullptr,
+         &prevInfo,
+         nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         nullptr,
+         m_set,
+         18,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+         &motionInfo,
+         nullptr,
+         nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         nullptr,
+         m_set,
+         20,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+         nullptr,
+         &pathCurInfo,
+         nullptr},
+        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         nullptr,
+         m_set,
+         21,
+         0,
+         1,
+         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+         nullptr,
+         &pathPrevInfo,
+         nullptr},
     }};
     vkUpdateDescriptorSets(m_ctx->device, static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     m_boundMotionVectorView = motionView;
 }
 
 bool GiPass::descriptorsDirty(const FrameParams& params) const {
-    return m_boundScene != params.scene || m_boundEnvMapView != params.envMapView || m_boundEnvSampler != params.envSampler ||
-           m_boundEnvMarginalCdf != params.envMarginalCdf || m_boundEnvConditionalCdf != params.envConditionalCdf ||
+    return m_boundScene != params.scene || m_boundEnvMapView != params.envMapView ||
+           m_boundEnvSampler != params.envSampler || m_boundEnvMarginalCdf != params.envMarginalCdf ||
+           m_boundEnvConditionalCdf != params.envConditionalCdf ||
            m_boundGradientVarianceView != params.gradientVarianceView;
 }
 
@@ -524,29 +700,45 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         vkCmdFillBuffer(cmd, m_pathReservoirBuf[1].handle(), 0, VK_WHOLE_SIZE, 0u);
         const std::array<VkBufferMemoryBarrier2, 4> fillBarriers{{
             {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-             .srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT, .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+             .srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT,
+             .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
              .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
              .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
-             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-             .buffer = m_reservoirBuf[0].handle(), .offset = 0, .size = VK_WHOLE_SIZE},
+             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+             .buffer = m_reservoirBuf[0].handle(),
+             .offset = 0,
+             .size = VK_WHOLE_SIZE},
             {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-             .srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT, .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+             .srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT,
+             .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
              .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
              .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
-             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-             .buffer = m_reservoirBuf[1].handle(), .offset = 0, .size = VK_WHOLE_SIZE},
+             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+             .buffer = m_reservoirBuf[1].handle(),
+             .offset = 0,
+             .size = VK_WHOLE_SIZE},
             {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-             .srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT, .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+             .srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT,
+             .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
              .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
              .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
-             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-             .buffer = m_pathReservoirBuf[0].handle(), .offset = 0, .size = VK_WHOLE_SIZE},
+             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+             .buffer = m_pathReservoirBuf[0].handle(),
+             .offset = 0,
+             .size = VK_WHOLE_SIZE},
             {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-             .srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT, .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+             .srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT,
+             .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
              .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
              .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
-             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-             .buffer = m_pathReservoirBuf[1].handle(), .offset = 0, .size = VK_WHOLE_SIZE},
+             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+             .buffer = m_pathReservoirBuf[1].handle(),
+             .offset = 0,
+             .size = VK_WHOLE_SIZE},
         }};
         const VkDependencyInfo fillDep{
             .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,

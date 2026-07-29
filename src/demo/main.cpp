@@ -1,5 +1,5 @@
-#include <utility>
 #include <string_view>
+#include <utility>
 
 #include "demo/Application.hpp"
 #include "harmonia/core/Logger.hpp"
@@ -67,10 +67,9 @@ int main(int argc, char* const argv[]) {
     // filters the result (blurring/ghosting). TAA and offscreen accumulation cannot both
     // be active, so an *explicit* --taa together with --output is not allowed.
     if (taaForcedOn && !config.outputFile.empty()) {
-        Logger::error(
-            "--taa is incompatible with offscreen capture (--output): offscreen rendering uses "
-            "progressive accumulation for anti-aliasing, and TAA would double-filter it. Drop "
-            "--taa for offscreen capture, or omit --output for interactive TAA.");
+        Logger::error("--taa is incompatible with offscreen capture (--output): offscreen rendering uses "
+                      "progressive accumulation for anti-aliasing, and TAA would double-filter it. Drop "
+                      "--taa for offscreen capture, or omit --output for interactive TAA.");
         return 2;
     }
 

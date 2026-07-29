@@ -1,6 +1,5 @@
 #include "theia/scene/Scene.hpp"
 
-#include <slang-math/slang-math.hpp>
 #include <volk/volk.h>
 
 #include <algorithm>
@@ -11,6 +10,7 @@
 #include <cstdint>
 #include <limits>
 #include <meshoptimizer.h>
+#include <slang-math/slang-math.hpp>
 #include <span>
 #include <utility>
 #include <vector>
@@ -19,10 +19,10 @@
 #include "harmonia/GpuTypes.hpp"
 #include "harmonia/core/Buffer.hpp"
 #include "harmonia/core/Logger.hpp"
+#include "harmonia/renderer/TlasBuilder.hpp"
 #include "harmonia/scene/EmissiveBuilder.hpp"
 #include "harmonia/scene/Geometry.hpp"
 #include "harmonia/scene/ProceduralGeometry.hpp"
-#include "harmonia/renderer/TlasBuilder.hpp"
 
 namespace {
 
@@ -31,18 +31,15 @@ namespace {
 /// largest axis scale — conservative under non-uniform scale).
 GpuInstanceBounds worldBounds(const Scene::MeshGpu& mesh, const Xform& xform) {
     const sm::float4x4 m = xform.matrix();
-    const sm::float3 c = static_cast<sm::float3>(
-        m * sm::float4(mesh.boundsCenterX, mesh.boundsCenterY, mesh.boundsCenterZ, 1.0f));
+    const sm::float3 c =
+        static_cast<sm::float3>(m * sm::float4(mesh.boundsCenterX, mesh.boundsCenterY, mesh.boundsCenterZ, 1.0f));
     const float maxScale = std::max({std::abs(xform.scale.x), std::abs(xform.scale.y), std::abs(xform.scale.z)});
     return GpuInstanceBounds{c.x, c.y, c.z, mesh.boundsRadius * maxScale};
 }
 
 } // namespace
 
-uint32_t Scene::addSphereMesh(const DeviceContext& ctx,
-                              const CommandPool& pool,
-                              float radius,
-                              std::string_view name) {
+uint32_t Scene::addSphereMesh(const DeviceContext& ctx, const CommandPool& pool, float radius, std::string_view name) {
     // Theia is a rasterizer (mesh-shader pipeline), so an analytic sphere cannot
     // be drawn directly — it is tessellated into a triangle mesh (object space,
     // centred at the origin) and placed by the instance transform.
@@ -170,7 +167,9 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
             cy += v.position.y;
             cz += v.position.z;
         }
-        cx *= invN; cy *= invN; cz *= invN;
+        cx *= invN;
+        cy *= invN;
+        cz *= invN;
         float bs = 0.0f;
         for (const auto& v : meshVerts) {
             const float dx = v.position.x - cx;
@@ -232,12 +231,12 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     if (!instanceBuf) {
         return instanceBuf.error();
     }
-    auto instanceBoundsBuf =
-        Buffer::upload(ctx,
-                       pool,
-                       std::as_bytes(std::span<const GpuInstanceBounds>(m_instanceBounds.data(), m_instanceBounds.size())),
-                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                       "scene.instanceBounds");
+    auto instanceBoundsBuf = Buffer::upload(
+        ctx,
+        pool,
+        std::as_bytes(std::span<const GpuInstanceBounds>(m_instanceBounds.data(), m_instanceBounds.size())),
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        "scene.instanceBounds");
     if (!instanceBoundsBuf) {
         return instanceBoundsBuf.error();
     }
@@ -301,10 +300,8 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     m_meshletBuffer = std::move(*meshletBuf);
     m_meshletVertexBuffer = std::move(*meshletVertexBuf);
     m_meshletTriangleBuffer = std::move(*meshletTriangleBuf);
-    Logger::info("Scene built: {} meshes, {} instances, {} meshlets",
-                 m_meshes.size(),
-                 m_instances.size(),
-                 gpuMeshlets.size());
+    Logger::info(
+        "Scene built: {} meshes, {} instances, {} meshlets", m_meshes.size(), m_instances.size(), gpuMeshlets.size());
 
     // Per-instance object→world transforms (current + previous). Static scenes upload
     // once at build; the previous buffer starts equal to the current.
@@ -313,21 +310,21 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     for (size_t i = 0; i < m_instances.size(); ++i) {
         instanceTransforms[i] = m_instances[i].xform.matrix();
     }
-    auto transformBuf =
-        Buffer::upload(ctx,
-                       pool,
-                       std::as_bytes(std::span<const sm::float4x4>(instanceTransforms.data(), instanceTransforms.size())),
-                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                       "scene.instanceTransforms");
+    auto transformBuf = Buffer::upload(
+        ctx,
+        pool,
+        std::as_bytes(std::span<const sm::float4x4>(instanceTransforms.data(), instanceTransforms.size())),
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        "scene.instanceTransforms");
     if (!transformBuf) {
         return transformBuf.error();
     }
-    auto prevTransformBuf =
-        Buffer::upload(ctx,
-                       pool,
-                       std::as_bytes(std::span<const sm::float4x4>(instanceTransforms.data(), instanceTransforms.size())),
-                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                       "scene.prevInstanceTransforms");
+    auto prevTransformBuf = Buffer::upload(
+        ctx,
+        pool,
+        std::as_bytes(std::span<const sm::float4x4>(instanceTransforms.data(), instanceTransforms.size())),
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        "scene.prevInstanceTransforms");
     if (!prevTransformBuf) {
         return prevTransformBuf.error();
     }
@@ -335,12 +332,11 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     for (uint32_t i = 0; i < static_cast<uint32_t>(m_instances.size()); ++i) {
         objectIds[i] = i;
     }
-    auto objectIdBuf =
-        Buffer::upload(ctx,
-                       pool,
-                       std::as_bytes(std::span<const uint32_t>(objectIds.data(), objectIds.size())),
-                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                       "scene.objectIds");
+    auto objectIdBuf = Buffer::upload(ctx,
+                                      pool,
+                                      std::as_bytes(std::span<const uint32_t>(objectIds.data(), objectIds.size())),
+                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                      "scene.objectIds");
     if (!objectIdBuf) {
         return objectIdBuf.error();
     }
@@ -422,12 +418,18 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
                 gl.halfHeight = radius;
                 gpuLights.push_back(gl);
                 Logger::info("Scene: emissive mesh {} → PointLight at ({:.1f},{:.1f},{:.1f}) lum={:.0f} r={:.2f}",
-                             i, centroid.x, centroid.y, centroid.z, luminance, radius);
+                             i,
+                             centroid.x,
+                             centroid.y,
+                             centroid.z,
+                             luminance,
+                             radius);
                 continue;
             }
 
             const sm::float3 avgNormal = sm::normalize(normalSum);
-            const sm::float3 up = (std::abs(avgNormal.y) < 0.99F) ? sm::float3{0.0f, 1.0f, 0.0f} : sm::float3{1.0f, 0.0f, 0.0f};
+            const sm::float3 up =
+                (std::abs(avgNormal.y) < 0.99F) ? sm::float3{0.0f, 1.0f, 0.0f} : sm::float3{1.0f, 0.0f, 0.0f};
             const sm::float3 tangX = sm::normalize(sm::cross(up, avgNormal));
             const sm::float3 tangY = sm::cross(avgNormal, tangX);
             float minX = std::numeric_limits<float>::max(), maxX = std::numeric_limits<float>::lowest();
@@ -453,7 +455,13 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
             gl.halfHeight = halfH;
             gpuLights.push_back(gl);
             Logger::info("Scene: emissive mesh {} → RectLight at ({:.1f},{:.1f},{:.1f}) lum={:.0f} hw={:.1f} hh={:.1f}",
-                         i, centroid.x, centroid.y, centroid.z, luminance, halfW, halfH);
+                         i,
+                         centroid.x,
+                         centroid.y,
+                         centroid.z,
+                         luminance,
+                         halfW,
+                         halfH);
         }
     }
 
@@ -478,12 +486,12 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     if (emissiveData.triangles.empty()) {
         emissiveData.triangles.push_back(GpuEmissiveTriangle{});
     }
-    auto emissiveBuf = Buffer::upload(
-        ctx,
-        pool,
-        std::as_bytes(std::span<const GpuEmissiveTriangle>(emissiveData.triangles.data(), emissiveData.triangles.size())),
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-        "scene.emissiveTriangles");
+    auto emissiveBuf = Buffer::upload(ctx,
+                                      pool,
+                                      std::as_bytes(std::span<const GpuEmissiveTriangle>(
+                                          emissiveData.triangles.data(), emissiveData.triangles.size())),
+                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                      "scene.emissiveTriangles");
     if (!emissiveBuf) {
         return emissiveBuf.error();
     }
@@ -492,12 +500,11 @@ VkResult Scene::buildSceneBuffers(const DeviceContext& ctx, const CommandPool& p
     // Power-proportional selection CDF for emissive-triangle NEE (shared helper —
     // identical across renderers, so the NEE sampling CDF cannot drift).
     const std::vector<float> emissiveCdf = harmonia::buildEmissiveCdf(emissiveData.power);
-    auto emissiveCdfBuf = Buffer::upload(
-        ctx,
-        pool,
-        std::as_bytes(std::span<const float>(emissiveCdf.data(), emissiveCdf.size())),
-        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-        "scene.emissiveCdf");
+    auto emissiveCdfBuf = Buffer::upload(ctx,
+                                         pool,
+                                         std::as_bytes(std::span<const float>(emissiveCdf.data(), emissiveCdf.size())),
+                                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                         "scene.emissiveCdf");
     if (!emissiveCdfBuf) {
         return emissiveCdfBuf.error();
     }

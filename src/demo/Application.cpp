@@ -1,10 +1,9 @@
 #include "demo/Application.hpp"
 
-#include <slang-math/slang-math.hpp>
-
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <slang-math/slang-math.hpp>
 #include <string>
 #include <tuple>
 
@@ -138,10 +137,10 @@ bool Application::onInitialize() {
     // in offscreen mode. See isOffscreenCapture() / onUpdate() motion gate.
     if (config().rtGi && m_motionVectorPass.isInitialized() && m_useTaa && !isOffscreenCapture()) {
         const TaaPass::Config taaCfg{
-            .width         = swapchain().extent().width,
-            .height        = swapchain().extent().height,
-            .hdrImage      = hdrImage().handle(),
-            .hdrView       = hdrImage().view(),
+            .width = swapchain().extent().width,
+            .height = swapchain().extent().height,
+            .hdrImage = hdrImage().handle(),
+            .hdrView = hdrImage().view(),
             .motionVecView = m_motionVectorPass.motionVectorImageView(),
         };
         if (!m_taaPass.initialize(deviceContext(), taaCfg)) {
@@ -275,17 +274,16 @@ bool Application::onSceneLoaded(const SceneLoader::SceneConfig& sceneConfig) {
     const uint32_t diffuseRes = std::max(1u, config().iblDiffuseResolution);
     const VkExtent2D diffuseExtent{diffuseRes, std::max(1u, diffuseRes / 2u)};
 
-    if (!m_ibl.initialize(
-            deviceContext(),
-            commandPool(),
-            envView,
-            envSampler,
-            envNits,
-            diffuseExtent,
-            marginalCdf,
-            conditionalCdf,
-            cdfW,
-            cdfH)) {
+    if (!m_ibl.initialize(deviceContext(),
+                          commandPool(),
+                          envView,
+                          envSampler,
+                          envNits,
+                          diffuseExtent,
+                          marginalCdf,
+                          conditionalCdf,
+                          cdfW,
+                          cdfH)) {
         Logger::error("IBL precomputation failed");
         return false;
     }
@@ -401,12 +399,12 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         gp.useRestirPt = m_useRestirPt;
         gp.useRestirPtPath = m_useRestirPtPath && m_useRestirPt;
         gp.motionVectorView = VK_NULL_HANDLE;
-        m_pendingMvp.curViewProj  = curViewProj;
+        m_pendingMvp.curViewProj = curViewProj;
         m_pendingMvp.prevViewProj = m_prevViewProjValid ? m_prevViewProj : curViewProj;
         m_pendingMvp.invCurViewProj = sm::inverse(curViewProj);
         m_pendingMvp.prevInstanceTransformBuffer = m_scene->prevInstanceTransformBuffer().handle();
 
-        const uint32_t gfxFamily   = deviceContext().graphicsFamily;
+        const uint32_t gfxFamily = deviceContext().graphicsFamily;
         const uint32_t asyncFamily = deviceContext().asyncComputeQueueFamily;
 
         // GRAPHICS RELEASE: transfer giBuffer, gbuffer, hdr ownership to async compute.
@@ -414,31 +412,40 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         // and acquire must specify identical oldLayout/newLayout — the transition happens once
         // during the release operation). Acquire barriers use the same layout pair.
         const std::array<VkImageMemoryBarrier2, 3> gfxRelease{{
-            {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, .pNext = nullptr,
+            {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+             .pNext = nullptr,
              .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
              .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-             .dstStageMask = VK_PIPELINE_STAGE_2_NONE, .dstAccessMask = VK_ACCESS_2_NONE,
+             .dstStageMask = VK_PIPELINE_STAGE_2_NONE,
+             .dstAccessMask = VK_ACCESS_2_NONE,
              .oldLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-             .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,  // matches asyncAcquire
-             .srcQueueFamilyIndex = gfxFamily, .dstQueueFamilyIndex = asyncFamily,
+             .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, // matches asyncAcquire
+             .srcQueueFamilyIndex = gfxFamily,
+             .dstQueueFamilyIndex = asyncFamily,
              .image = m_renderer->giBufferImage(),
              .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
-            {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, .pNext = nullptr,
+            {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+             .pNext = nullptr,
              .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
              .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-             .dstStageMask = VK_PIPELINE_STAGE_2_NONE, .dstAccessMask = VK_ACCESS_2_NONE,
+             .dstStageMask = VK_PIPELINE_STAGE_2_NONE,
+             .dstAccessMask = VK_ACCESS_2_NONE,
              .oldLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-             .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,  // matches asyncAcquire
-             .srcQueueFamilyIndex = gfxFamily, .dstQueueFamilyIndex = asyncFamily,
+             .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, // matches asyncAcquire
+             .srcQueueFamilyIndex = gfxFamily,
+             .dstQueueFamilyIndex = asyncFamily,
              .image = m_renderer->gbufferImage(),
              .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
-            {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, .pNext = nullptr,
+            {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+             .pNext = nullptr,
              .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
              .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-             .dstStageMask = VK_PIPELINE_STAGE_2_NONE, .dstAccessMask = VK_ACCESS_2_NONE,
+             .dstStageMask = VK_PIPELINE_STAGE_2_NONE,
+             .dstAccessMask = VK_ACCESS_2_NONE,
              .oldLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-             .newLayout = VK_IMAGE_LAYOUT_GENERAL,                   // matches asyncAcquire
-             .srcQueueFamilyIndex = gfxFamily, .dstQueueFamilyIndex = asyncFamily,
+             .newLayout = VK_IMAGE_LAYOUT_GENERAL, // matches asyncAcquire
+             .srcQueueFamilyIndex = gfxFamily,
+             .dstQueueFamilyIndex = asyncFamily,
              .image = target.image,
              .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
         }};
@@ -461,31 +468,40 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
 
         // ASYNC ACQUIRE: take ownership and transition layouts so GiPass can run.
         const std::array<VkImageMemoryBarrier2, 3> asyncAcquire{{
-            {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, .pNext = nullptr,
-             .srcStageMask = VK_PIPELINE_STAGE_2_NONE, .srcAccessMask = VK_ACCESS_2_NONE,
+            {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+             .pNext = nullptr,
+             .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
+             .srcAccessMask = VK_ACCESS_2_NONE,
              .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
              .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
              .oldLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
              .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-             .srcQueueFamilyIndex = gfxFamily, .dstQueueFamilyIndex = asyncFamily,
+             .srcQueueFamilyIndex = gfxFamily,
+             .dstQueueFamilyIndex = asyncFamily,
              .image = m_renderer->giBufferImage(),
              .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
-            {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, .pNext = nullptr,
-             .srcStageMask = VK_PIPELINE_STAGE_2_NONE, .srcAccessMask = VK_ACCESS_2_NONE,
+            {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+             .pNext = nullptr,
+             .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
+             .srcAccessMask = VK_ACCESS_2_NONE,
              .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
              .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
              .oldLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
              .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-             .srcQueueFamilyIndex = gfxFamily, .dstQueueFamilyIndex = asyncFamily,
+             .srcQueueFamilyIndex = gfxFamily,
+             .dstQueueFamilyIndex = asyncFamily,
              .image = m_renderer->gbufferImage(),
              .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
-            {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, .pNext = nullptr,
-             .srcStageMask = VK_PIPELINE_STAGE_2_NONE, .srcAccessMask = VK_ACCESS_2_NONE,
+            {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+             .pNext = nullptr,
+             .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
+             .srcAccessMask = VK_ACCESS_2_NONE,
              .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
              .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
              .oldLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
              .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-             .srcQueueFamilyIndex = gfxFamily, .dstQueueFamilyIndex = asyncFamily,
+             .srcQueueFamilyIndex = gfxFamily,
+             .dstQueueFamilyIndex = asyncFamily,
              .image = target.image,
              .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
         }};
@@ -501,31 +517,40 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         // ASYNC RELEASE: return ownership of the three shared images to the graphics queue.
         // Layout changes happen in the graphics ACQUIRE barriers.
         const std::array<VkImageMemoryBarrier2, 3> asyncRelease{{
-            {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, .pNext = nullptr,
+            {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+             .pNext = nullptr,
              .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
              .srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
-             .dstStageMask = VK_PIPELINE_STAGE_2_NONE, .dstAccessMask = VK_ACCESS_2_NONE,
+             .dstStageMask = VK_PIPELINE_STAGE_2_NONE,
+             .dstAccessMask = VK_ACCESS_2_NONE,
              .oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
              .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-             .srcQueueFamilyIndex = asyncFamily, .dstQueueFamilyIndex = gfxFamily,
+             .srcQueueFamilyIndex = asyncFamily,
+             .dstQueueFamilyIndex = gfxFamily,
              .image = m_renderer->giBufferImage(),
              .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
-            {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, .pNext = nullptr,
+            {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+             .pNext = nullptr,
              .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
              .srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
-             .dstStageMask = VK_PIPELINE_STAGE_2_NONE, .dstAccessMask = VK_ACCESS_2_NONE,
+             .dstStageMask = VK_PIPELINE_STAGE_2_NONE,
+             .dstAccessMask = VK_ACCESS_2_NONE,
              .oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-             .newLayout = VK_IMAGE_LAYOUT_GENERAL,                   // matches gfxAcquire
-             .srcQueueFamilyIndex = asyncFamily, .dstQueueFamilyIndex = gfxFamily,
+             .newLayout = VK_IMAGE_LAYOUT_GENERAL, // matches gfxAcquire
+             .srcQueueFamilyIndex = asyncFamily,
+             .dstQueueFamilyIndex = gfxFamily,
              .image = m_renderer->gbufferImage(),
              .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
-            {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2, .pNext = nullptr,
+            {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+             .pNext = nullptr,
              .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
              .srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT,
-             .dstStageMask = VK_PIPELINE_STAGE_2_NONE, .dstAccessMask = VK_ACCESS_2_NONE,
+             .dstStageMask = VK_PIPELINE_STAGE_2_NONE,
+             .dstAccessMask = VK_ACCESS_2_NONE,
              .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
              .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-             .srcQueueFamilyIndex = asyncFamily, .dstQueueFamilyIndex = gfxFamily,
+             .srcQueueFamilyIndex = asyncFamily,
+             .dstQueueFamilyIndex = gfxFamily,
              .image = target.image,
              .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
         }};
@@ -533,7 +558,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         vkEndCommandBuffer(asyncCmd);
 
         // Store per-frame state; onBeforeSceneStages() handles the submissions.
-        m_prevViewProj      = curViewProj;
+        m_prevViewProj = curViewProj;
         m_prevViewProjValid = true;
         return;
     }
@@ -562,7 +587,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         gp.maxDepth = m_sceneMaxDepth;
         // A3: firefly / chromatic-SSS noise reduction (Theia-only, flag-gated;
         // Hyperion stays the unbiased ground truth). Defaults ON.
-        gp.useA3Regularization = true;      // A3(a): secondary-bounce roughness regularization
+        gp.useA3Regularization = true; // A3(a): secondary-bounce roughness regularization
         // A3(b): wire the A-SVGF gradient/variance guide from the shared denoiser pass.
         gp.gradientVarianceView = denoiserGradientImageView();
         // c1: variance-guided adaptive sampling (unbiased; only active when the guide above is
@@ -584,7 +609,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         // Compute motion vectors for temporal reprojection in the denoiser.
         if (m_motionVectorPass.isInitialized()) {
             MotionVectorPass::FrameParams mvp{};
-            mvp.curViewProj  = curViewProj;
+            mvp.curViewProj = curViewProj;
             mvp.prevViewProj = m_prevViewProjValid ? m_prevViewProj : curViewProj;
             mvp.invCurViewProj = sm::inverse(curViewProj);
             mvp.prevInstanceTransformBuffer = m_scene->prevInstanceTransformBuffer().handle();
@@ -597,15 +622,16 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         // colours outside the 3×3 neighbourhood, keeping diffuse surfaces clean without
         // ghosting, so passthrough is not needed and only causes 1-frame noise spikes.
         if (m_taaPass.isInitialized() && m_useTaa && m_cameraMoving) {
-            m_taaPass.record(cmd, TaaPass::FrameParams{
-                .alpha      = 0.1f,
-                .firstFrame = false,
-            });
+            m_taaPass.record(cmd,
+                             TaaPass::FrameParams{
+                                 .alpha = 0.1f,
+                                 .firstFrame = false,
+                             });
         }
     }
 
     // Store current VP for use as prevViewProj next frame.
-    m_prevViewProj      = curViewProj;
+    m_prevViewProj = curViewProj;
     m_prevViewProjValid = true;
 
     // No compute pass wrote HDR this frame: leave HDR in GENERAL for host tonemap.
@@ -642,9 +668,13 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
         gbufferSrcAccess = VK_ACCESS_2_SHADER_READ_BIT;
     }
 
-    const VkImageMemoryBarrier2 gbufferToGeneral =
-        harmonia::imageBarrier(m_renderer->gbufferImage(), gbufferOld, VK_IMAGE_LAYOUT_GENERAL, gbufferSrcStage,
-                               gbufferSrcAccess, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+    const VkImageMemoryBarrier2 gbufferToGeneral = harmonia::imageBarrier(m_renderer->gbufferImage(),
+                                                                          gbufferOld,
+                                                                          VK_IMAGE_LAYOUT_GENERAL,
+                                                                          gbufferSrcStage,
+                                                                          gbufferSrcAccess,
+                                                                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                                                          VK_ACCESS_2_SHADER_READ_BIT);
     const VkImageMemoryBarrier2 depthToGeneral{
         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
         .pNext = nullptr,
@@ -729,10 +759,10 @@ void Application::onResize(VkExtent2D extent) noexcept {
     // Reinitialize TaaPass with new extent and views (interactive window only).
     if (config().rtGi && m_motionVectorPass.isInitialized() && m_useTaa && !isOffscreenCapture()) {
         const TaaPass::Config taaCfg{
-            .width         = extent.width,
-            .height        = extent.height,
-            .hdrImage      = hdrImage().handle(),
-            .hdrView       = hdrImage().view(),
+            .width = extent.width,
+            .height = extent.height,
+            .hdrImage = hdrImage().handle(),
+            .hdrView = hdrImage().view(),
             .motionVecView = m_motionVectorPass.motionVectorImageView(),
         };
         if (!m_taaPass.initialize(deviceContext(), taaCfg)) {
@@ -745,14 +775,13 @@ void Application::onResize(VkExtent2D extent) noexcept {
     m_prevViewProjValid = false;
 }
 
-std::pair<VkCommandBuffer, VkSemaphore>
-Application::onBeforeSceneStages(VkCommandBuffer renderCmd) noexcept {
+std::pair<VkCommandBuffer, VkSemaphore> Application::onBeforeSceneStages(VkCommandBuffer renderCmd) noexcept {
     if (!m_asyncComputeEnabled || !giActive()) {
         return {renderCmd, VK_NULL_HANDLE};
     }
 
-    const uint32_t slot        = frameIndex() % 2U;
-    const uint32_t gfxFamily   = deviceContext().graphicsFamily;
+    const uint32_t slot = frameIndex() % 2U;
+    const uint32_t gfxFamily = deviceContext().graphicsFamily;
     const uint32_t asyncFamily = deviceContext().asyncComputeQueueFamily;
 
     // ── Submit 1: graphics (raster + release barriers) ──
@@ -905,10 +934,11 @@ Application::onBeforeSceneStages(VkCommandBuffer renderCmd) noexcept {
     // progressive accumulation, which TAA would blur.
     // AABB clamp handles stale history — no passthrough needed on motion resume.
     if (m_taaPass.isInitialized() && m_useTaa && m_cameraMoving) {
-        m_taaPass.record(stagesCmd, TaaPass::FrameParams{
-            .alpha      = 0.1f,
-            .firstFrame = false,
-        });
+        m_taaPass.record(stagesCmd,
+                         TaaPass::FrameParams{
+                             .alpha = 0.1f,
+                             .firstFrame = false,
+                         });
     }
 
     return {stagesCmd, m_asyncSemaphores[slot]};
@@ -1036,8 +1066,7 @@ void Application::onUpdate(float dtSeconds) {
     // camera doesn't smear across viewpoints and a stationary one converges.
     const float ev100 = m_camera.physical.ev100();
     const bool viewChanged = !m_viewSigValid || m_camera.position != m_prevCamPos ||
-                             m_camera.target != m_prevCamTarget || m_camera.up != m_prevCamUp ||
-                             ev100 != m_prevEv100;
+                             m_camera.target != m_prevCamTarget || m_camera.up != m_prevCamUp || ev100 != m_prevEv100;
     if (viewChanged) {
         resetAccumulation();
         m_prevCamPos = m_camera.position;

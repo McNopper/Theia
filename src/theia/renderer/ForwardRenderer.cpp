@@ -1,16 +1,15 @@
 #include "theia/renderer/ForwardRenderer.hpp"
 
-#include <slang-math/slang-math.hpp>
-
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdlib>
-#include <numeric>
 #include <harmonia/core/Logger.hpp>
 #include <harmonia/core/ShaderModule.hpp>
-#include <theia/renderer/ShaderPath.hpp>
+#include <numeric>
+#include <slang-math/slang-math.hpp>
 #include <theia/renderer/CameraJitter.hpp>
+#include <theia/renderer/ShaderPath.hpp>
 #include <theia/scene/Scene.hpp>
 #include <vector>
 
@@ -70,19 +69,18 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
     // sequenceCountAddress will point to indirectDrawBuf[0..3] (visible instance count).
     if (ctx.dgcSupported && m_gpuCullPass.isInitialized() && !forceGd3) {
         const VkIndirectCommandsLayoutTokenEXT dgcToken{
-            .sType  = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_TOKEN_EXT,
-            .type   = VK_INDIRECT_COMMANDS_TOKEN_TYPE_DRAW_MESH_TASKS_EXT,
+            .sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_TOKEN_EXT,
+            .type = VK_INDIRECT_COMMANDS_TOKEN_TYPE_DRAW_MESH_TASKS_EXT,
             .offset = 0,
         };
         const VkIndirectCommandsLayoutCreateInfoEXT dgcLayoutCI{
-            .sType          = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_CREATE_INFO_EXT,
-            .flags          = 0,
-            .shaderStages   = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT
-                            | VK_SHADER_STAGE_FRAGMENT_BIT,
-            .indirectStride = 12u, // sizeof(VkDrawMeshTasksIndirectCommandEXT)
+            .sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_CREATE_INFO_EXT,
+            .flags = 0,
+            .shaderStages = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            .indirectStride = 12u,            // sizeof(VkDrawMeshTasksIndirectCommandEXT)
             .pipelineLayout = VK_NULL_HANDLE, // no push-constant token
-            .tokenCount     = 1,
-            .pTokens        = &dgcToken,
+            .tokenCount = 1,
+            .pTokens = &dgcToken,
         };
         if (vkCreateIndirectCommandsLayoutEXT(ctx.device, &dgcLayoutCI, nullptr, &m_dgcLayout) != VK_SUCCESS) {
             Logger::warn("ForwardRenderer: vkCreateIndirectCommandsLayoutEXT failed — GD3 fallback");
@@ -100,16 +98,16 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
     // is a 64-bit flag not representable in the 32-bit VkBufferUsageFlags enum.
     if (m_dgcLayout != VK_NULL_HANDLE) {
         const VkGeneratedCommandsPipelineInfoEXT memReqPipelineInfo{
-            .sType    = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_PIPELINE_INFO_EXT,
+            .sType = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_PIPELINE_INFO_EXT,
             .pipeline = m_graphicsPipeline,
         };
         const VkGeneratedCommandsMemoryRequirementsInfoEXT memReqInfo{
-            .sType                  = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_MEMORY_REQUIREMENTS_INFO_EXT,
-            .pNext                  = &memReqPipelineInfo,
-            .indirectExecutionSet   = VK_NULL_HANDLE,
+            .sType = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_MEMORY_REQUIREMENTS_INFO_EXT,
+            .pNext = &memReqPipelineInfo,
+            .indirectExecutionSet = VK_NULL_HANDLE,
             .indirectCommandsLayout = m_dgcLayout,
-            .maxSequenceCount       = 1u,   // single GPU-generated draw (see drawOpaque/drawTransparent)
-            .maxDrawCount           = 1,
+            .maxSequenceCount = 1u, // single GPU-generated draw (see drawOpaque/drawTransparent)
+            .maxDrawCount = 1,
         };
         VkMemoryRequirements2 memReq{.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2};
         vkGetGeneratedCommandsMemoryRequirementsEXT(ctx.device, &memReqInfo, &memReq);
@@ -117,8 +115,7 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
 
         if (m_dgcPreprocessSize > 0) {
             constexpr VkBufferUsageFlags2KHR kPreprocessUsage =
-                VK_BUFFER_USAGE_2_PREPROCESS_BUFFER_BIT_EXT
-                | VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT_KHR;
+                VK_BUFFER_USAGE_2_PREPROCESS_BUFFER_BIT_EXT | VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT_KHR;
             const VkBufferUsageFlags2CreateInfo usageFlags2{
                 .sType = VK_STRUCTURE_TYPE_BUFFER_USAGE_FLAGS_2_CREATE_INFO,
                 .usage = kPreprocessUsage,
@@ -126,7 +123,7 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
             const VkBufferCreateInfo ppBufCI{
                 .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
                 .pNext = &usageFlags2,
-                .size  = m_dgcPreprocessSize,
+                .size = m_dgcPreprocessSize,
                 .usage = 0, // usage provided via VkBufferUsageFlags2CreateInfo
                 .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
             };
@@ -134,17 +131,18 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
                 .flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT,
                 .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
             };
-            if (vmaCreateBuffer(ctx.allocator, &ppBufCI, &ppAllocCI,
-                                &m_dgcPreprocessBuf, &m_dgcPreprocessAlloc, nullptr) == VK_SUCCESS) {
+            if (vmaCreateBuffer(
+                    ctx.allocator, &ppBufCI, &ppAllocCI, &m_dgcPreprocessBuf, &m_dgcPreprocessAlloc, nullptr) ==
+                VK_SUCCESS) {
                 const VkBufferDeviceAddressInfo addrInfo{
-                    .sType  = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
+                    .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
                     .buffer = m_dgcPreprocessBuf,
                 };
                 m_dgcPreprocessAddr = vkGetBufferDeviceAddress(ctx.device, &addrInfo);
             } else {
                 Logger::warn("ForwardRenderer: failed to allocate DGC preprocess buffer — GD3 fallback");
                 vkDestroyIndirectCommandsLayoutEXT(ctx.device, m_dgcLayout, nullptr);
-                m_dgcLayout         = VK_NULL_HANDLE;
+                m_dgcLayout = VK_NULL_HANDLE;
                 m_dgcPreprocessSize = 0;
             }
         }
@@ -218,10 +216,10 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
 
     m_initialized = true;
     m_hdrFirstUse = true;
-    const char* drawPath = m_dgcLayout != VK_NULL_HANDLE ? "DGC" :
-                           m_gpuCullPass.isInitialized()  ? "indirect" : "CPU-count";
-    Logger::info("GPU-driven forward renderer initialized ({}x{}) [{}]",
-                 config.width, config.height, drawPath);
+    const char* drawPath = m_dgcLayout != VK_NULL_HANDLE   ? "DGC"
+                           : m_gpuCullPass.isInitialized() ? "indirect"
+                                                           : "CPU-count";
+    Logger::info("GPU-driven forward renderer initialized ({}x{}) [{}]", config.width, config.height, drawPath);
     return true;
 }
 
@@ -290,10 +288,10 @@ void ForwardRenderer::shutdown() {
 
     if (m_dgcPreprocessBuf != VK_NULL_HANDLE) {
         vmaDestroyBuffer(m_ctx->allocator, m_dgcPreprocessBuf, m_dgcPreprocessAlloc);
-        m_dgcPreprocessBuf   = VK_NULL_HANDLE;
+        m_dgcPreprocessBuf = VK_NULL_HANDLE;
         m_dgcPreprocessAlloc = VK_NULL_HANDLE;
-        m_dgcPreprocessAddr  = 0;
-        m_dgcPreprocessSize  = 0;
+        m_dgcPreprocessAddr = 0;
+        m_dgcPreprocessSize = 0;
     }
 
     if (m_dgcLayout != VK_NULL_HANDLE) {
@@ -360,8 +358,7 @@ void ForwardRenderer::setIbl(const IblResources& res, VkImageView rawEnvView, fl
         VkDescriptorImageInfo{VK_NULL_HANDLE, res.specularMipped.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     m_sheenLutInfo =
         VkDescriptorImageInfo{VK_NULL_HANDLE, res.sheenLut.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    m_brdfLutInfo =
-        VkDescriptorImageInfo{VK_NULL_HANDLE, res.brdfLut.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    m_brdfLutInfo = VkDescriptorImageInfo{VK_NULL_HANDLE, res.brdfLut.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     m_iblEnvSamplerInfo = VkDescriptorImageInfo{res.envSampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
     // Raw env panorama for the sky background. Fall back to the specular view (a valid
     // SAMPLED_IMAGE) when no raw env is supplied, so the descriptor stays valid.
@@ -538,29 +535,29 @@ void ForwardRenderer::drawOpaque(VkCommandBuffer cmd,
         // compactInstanceList[gid.x] — identical semantics to the GD3 fallback, but the command
         // itself is GPU-resident and consumed through the modern device-generated-commands path.
         const VkGeneratedCommandsPipelineInfoEXT dgcPipelineInfo{
-            .sType    = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_PIPELINE_INFO_EXT,
+            .sType = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_PIPELINE_INFO_EXT,
             .pipeline = m_graphicsPipeline,
         };
         const VkGeneratedCommandsInfoEXT dgcInfo{
-            .sType                  = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_INFO_EXT,
-            .pNext                  = &dgcPipelineInfo,
-            .shaderStages           = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT
-                                    | VK_SHADER_STAGE_FRAGMENT_BIT,
-            .indirectExecutionSet   = VK_NULL_HANDLE,
+            .sType = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_INFO_EXT,
+            .pNext = &dgcPipelineInfo,
+            .shaderStages = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            .indirectExecutionSet = VK_NULL_HANDLE,
             .indirectCommandsLayout = m_dgcLayout,
-            .indirectAddress        = m_gpuCullPass.indirectDrawAddress(),
-            .indirectAddressSize    = 12u,   // one VkDrawMeshTasksIndirectCommandEXT
-            .preprocessAddress      = m_dgcPreprocessAddr,
-            .preprocessSize         = m_dgcPreprocessSize,
-            .maxSequenceCount       = 1u,    // single GPU-generated draw
-            .sequenceCountAddress   = 0,     // fixed count of 1
-            .maxDrawCount           = 1,
+            .indirectAddress = m_gpuCullPass.indirectDrawAddress(),
+            .indirectAddressSize = 12u, // one VkDrawMeshTasksIndirectCommandEXT
+            .preprocessAddress = m_dgcPreprocessAddr,
+            .preprocessSize = m_dgcPreprocessSize,
+            .maxSequenceCount = 1u,    // single GPU-generated draw
+            .sequenceCountAddress = 0, // fixed count of 1
+            .maxDrawCount = 1,
         };
         vkCmdExecuteGeneratedCommandsEXT(cmd, VK_FALSE, &dgcInfo);
     } else if (m_gpuCullPass.isInitialized() && vkCmdDrawMeshTasksIndirectEXT != nullptr) {
         // GD3 fallback: single indirect draw; task shader gid.x = visible instance position.
         vkCmdDrawMeshTasksIndirectEXT(cmd,
-                                      m_gpuCullPass.indirectDrawBuffer(), 0,
+                                      m_gpuCullPass.indirectDrawBuffer(),
+                                      0,
                                       1,    // exactly one indirect command entry
                                       12u); // stride = sizeof(VkDrawMeshTasksIndirectCommandEXT)
     } else {
@@ -613,7 +610,11 @@ bool ForwardRenderer::createPipeline() {
     const std::array<VkDescriptorSetLayoutBinding, 12> meshBindings{
         VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTaskMeshFragStages, nullptr},
         VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTaskMeshFragStages, nullptr},
-        VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        VkDescriptorSetLayoutBinding{2,
+                                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                     1,
+                                     VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                     nullptr},
         VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTaskAndMeshStages, nullptr},
         VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
         VkDescriptorSetLayoutBinding{5, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
@@ -622,7 +623,11 @@ bool ForwardRenderer::createPipeline() {
         VkDescriptorSetLayoutBinding{8, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
         VkDescriptorSetLayoutBinding{9, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_MESH_BIT_EXT, nullptr},
         VkDescriptorSetLayoutBinding{10, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTaskStage, nullptr},
-        VkDescriptorSetLayoutBinding{11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}, // instance transforms
+        VkDescriptorSetLayoutBinding{11,
+                                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                     1,
+                                     VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                                     nullptr}, // instance transforms
     };
     constexpr VkDescriptorBindingFlags kUAB = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
     const std::array<VkDescriptorBindingFlags, 12> meshBindingFlags{
@@ -1256,8 +1261,9 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         .offset = 0,
         .range = VK_WHOLE_SIZE,
     };
-    const VkBuffer cdfFallbackBuffer =
-        (m_dummyTileCounts.handle() != VK_NULL_HANDLE) ? m_dummyTileCounts.handle() : m_scene->materialBuffer().handle();
+    const VkBuffer cdfFallbackBuffer = (m_dummyTileCounts.handle() != VK_NULL_HANDLE)
+                                           ? m_dummyTileCounts.handle()
+                                           : m_scene->materialBuffer().handle();
     VkDescriptorBufferInfo envMarginalCdfInfo{
         .buffer = (m_envMarginalCdf != VK_NULL_HANDLE) ? m_envMarginalCdf : cdfFallbackBuffer,
         .offset = 0,
@@ -1322,12 +1328,10 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
     // Compact instance list from GpuCullPass. When GpuCullPass is not initialized the
     // identity list [0,1,...,N-1] is bound so the task shader's compactInstanceList[gid.x]
     // returns gid.x — equivalent to the CPU-count direct draw path.
-    const VkBuffer identFallback = m_identityInstanceList.isValid()
-                                       ? m_identityInstanceList.handle()
-                                       : m_scene->instanceBuffer().handle();
-    const VkBuffer compactInstBuf = m_gpuCullPass.isInitialized()
-                                        ? m_gpuCullPass.compactInstanceListBuffer()
-                                        : identFallback;
+    const VkBuffer identFallback =
+        m_identityInstanceList.isValid() ? m_identityInstanceList.handle() : m_scene->instanceBuffer().handle();
+    const VkBuffer compactInstBuf =
+        m_gpuCullPass.isInitialized() ? m_gpuCullPass.compactInstanceListBuffer() : identFallback;
     VkDescriptorBufferInfo compactInstInfo{compactInstBuf, 0, VK_WHOLE_SIZE};
 
     std::array<VkWriteDescriptorSet, 20> writes{
@@ -1541,9 +1545,9 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
     // Camera matrices + push constants (needed before rendering so the two Hi-Z passes and
     // the Hi-Z occlusion test share the same projection).
     sm::float4x4 proj = sm::perspective(sm::radians(m_camera.vfovDeg),
-                                      static_cast<float>(m_config.width) / static_cast<float>(m_config.height),
-                                      m_camera.nearPlane,
-                                      m_camera.farPlane);
+                                        static_cast<float>(m_config.width) / static_cast<float>(m_config.height),
+                                        m_camera.nearPlane,
+                                        m_camera.farPlane);
     proj[1][1] *= -1.0f;
     if (m_cameraJitterEnabled) {
         proj = applyProjectionJitter(proj, cameraJitterNdc(m_frameSampleIndex, m_config.width, m_config.height));
@@ -1632,12 +1636,13 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
             return;
         }
         sm::float4x4 skyProj = sm::perspective(sm::radians(m_camera.vfovDeg),
-                                             static_cast<float>(m_config.width) / static_cast<float>(m_config.height),
-                                             m_camera.nearPlane,
-                                             m_camera.farPlane);
+                                               static_cast<float>(m_config.width) / static_cast<float>(m_config.height),
+                                               m_camera.nearPlane,
+                                               m_camera.farPlane);
         skyProj[1][1] *= -1.0f;
         if (m_cameraJitterEnabled) {
-            skyProj = applyProjectionJitter(skyProj, cameraJitterNdc(m_frameSampleIndex, m_config.width, m_config.height));
+            skyProj =
+                applyProjectionJitter(skyProj, cameraJitterNdc(m_frameSampleIndex, m_config.width, m_config.height));
         }
         const sm::float4x4 skyView = sm::lookAt(m_camera.position, m_camera.target, m_camera.up);
         const sm::float4x4 skyViewProj = skyProj * skyView;
@@ -1651,14 +1656,19 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         };
         vkCmdBindPipeline(c, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skyPipeline);
         vkCmdBindDescriptorSets(c, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skyPipelineLayout, 0, 1, &m_iblSet, 0, nullptr);
-        vkCmdPushConstants(
-            c, m_skyPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(skyPc), &skyPc);
+        vkCmdPushConstants(c,
+                           m_skyPipelineLayout,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0,
+                           sizeof(skyPc),
+                           &skyPc);
         vkCmdDraw(c, 3, 1, 0, 0);
     };
 
     const std::array<VkDescriptorSet, 4> descSets{m_meshSet, m_matSet, m_iblSet, m_textureSet};
     auto bindMeshSets = [&](VkCommandBuffer c) {
-        vkCmdBindDescriptorSets(c, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 4, descSets.data(), 0, nullptr);
+        vkCmdBindDescriptorSets(
+            c, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 4, descSets.data(), 0, nullptr);
     };
     auto drawTransparent = [&](VkCommandBuffer c) {
         vkCmdBindPipeline(c, VK_PIPELINE_BIND_POINT_GRAPHICS, m_graphicsPipelineTransparent);
@@ -1676,30 +1686,27 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         const uint32_t instCnt = m_scene->instanceCount();
         if (m_gpuCullPass.isInitialized() && m_dgcLayout != VK_NULL_HANDLE) {
             const VkGeneratedCommandsPipelineInfoEXT dgcPipelineInfo{
-                .sType    = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_PIPELINE_INFO_EXT,
+                .sType = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_PIPELINE_INFO_EXT,
                 .pipeline = m_graphicsPipelineTransparent,
             };
             const VkGeneratedCommandsInfoEXT dgcInfo{
-                .sType                  = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_INFO_EXT,
-                .pNext                  = &dgcPipelineInfo,
-                .shaderStages           = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT
-                                        | VK_SHADER_STAGE_FRAGMENT_BIT,
-                .indirectExecutionSet   = VK_NULL_HANDLE,
+                .sType = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_INFO_EXT,
+                .pNext = &dgcPipelineInfo,
+                .shaderStages =
+                    VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                .indirectExecutionSet = VK_NULL_HANDLE,
                 .indirectCommandsLayout = m_dgcLayout,
-                .indirectAddress        = m_gpuCullPass.indirectDrawAddress(),
-                .indirectAddressSize    = 12u,   // one VkDrawMeshTasksIndirectCommandEXT
-                .preprocessAddress      = m_dgcPreprocessAddr,
-                .preprocessSize         = m_dgcPreprocessSize,
-                .maxSequenceCount       = 1u,    // single GPU-generated draw
-                .sequenceCountAddress   = 0,     // fixed count of 1
-                .maxDrawCount           = 1,
+                .indirectAddress = m_gpuCullPass.indirectDrawAddress(),
+                .indirectAddressSize = 12u, // one VkDrawMeshTasksIndirectCommandEXT
+                .preprocessAddress = m_dgcPreprocessAddr,
+                .preprocessSize = m_dgcPreprocessSize,
+                .maxSequenceCount = 1u,    // single GPU-generated draw
+                .sequenceCountAddress = 0, // fixed count of 1
+                .maxDrawCount = 1,
             };
             vkCmdExecuteGeneratedCommandsEXT(c, VK_FALSE, &dgcInfo);
         } else if (m_gpuCullPass.isInitialized() && vkCmdDrawMeshTasksIndirectEXT != nullptr) {
-            vkCmdDrawMeshTasksIndirectEXT(c,
-                                          m_gpuCullPass.indirectDrawBuffer(), 0,
-                                          1,
-                                          12u);
+            vkCmdDrawMeshTasksIndirectEXT(c, m_gpuCullPass.indirectDrawBuffer(), 0, 1, 12u);
         } else {
             vkCmdDrawMeshTasksEXT(c, instCnt, 1, 1);
         }
@@ -1724,11 +1731,8 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
     // GPU-driven frustum cull (must run outside dynamic rendering — compute cannot run
     // inside a render pass). Dispatch before the Hi-Z passes and barrier results.
     if (canDraw && m_gpuCullPass.isInitialized()) {
-        m_gpuCullPass.dispatch(cmd,
-                               m_scene->instanceBuffer().handle(),
-                               m_scene->instanceBoundsBuffer().handle(),
-                               instanceCount,
-                               viewProj);
+        m_gpuCullPass.dispatch(
+            cmd, m_scene->instanceBuffer().handle(), m_scene->instanceBoundsBuffer().handle(), instanceCount, viewProj);
         // Barrier: compute writes → task shader reads (compactInstanceList) +
         //          indirect command reads (indirectDrawBuf).
         // The indirectDrawBuf doubles as the DGC sequenceCountAddress, which is consumed at
@@ -1739,41 +1743,37 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         // instances near the tail of the compact list (far geometry) non-obviously.
         const std::array cullBarriers{
             VkBufferMemoryBarrier2{
-                .sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-                .srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                .dstStageMask  = VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT,
+                .dstStageMask = VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT,
                 .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
-                .buffer        = m_gpuCullPass.compactInstanceListBuffer(),
-                .offset        = 0,
-                .size          = VK_WHOLE_SIZE,
+                .buffer = m_gpuCullPass.compactInstanceListBuffer(),
+                .offset = 0,
+                .size = VK_WHOLE_SIZE,
             },
             VkBufferMemoryBarrier2{
-                .sType         = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-                .srcStageMask  = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                 .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-                .dstStageMask  = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT
-                               | VK_PIPELINE_STAGE_2_COMMAND_PREPROCESS_BIT_EXT,
-                .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT
-                               | VK_ACCESS_2_COMMAND_PREPROCESS_READ_BIT_EXT,
-                .buffer        = m_gpuCullPass.indirectDrawBuffer(),
-                .offset        = 0,
-                .size          = VK_WHOLE_SIZE,
+                .dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_COMMAND_PREPROCESS_BIT_EXT,
+                .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_COMMAND_PREPROCESS_READ_BIT_EXT,
+                .buffer = m_gpuCullPass.indirectDrawBuffer(),
+                .offset = 0,
+                .size = VK_WHOLE_SIZE,
             },
         };
         const VkDependencyInfo cullDep{
-            .sType                    = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
             .bufferMemoryBarrierCount = static_cast<uint32_t>(cullBarriers.size()),
-            .pBufferMemoryBarriers    = cullBarriers.data(),
+            .pBufferMemoryBarriers = cullBarriers.data(),
         };
         vkCmdPipelineBarrier2(cmd, &cullDep);
     }
 
     const bool twoPass = canDraw && visReady && !m_forceSinglePass;
     const uint32_t hiZMip =
-        (twoPass && m_hiZPass.isInitialized() && m_hiZTestEnabled && !m_hiZDebugDisabled)
-            ? m_hiZPass.mipLevels()
-            : 0u;
+        (twoPass && m_hiZPass.isInitialized() && m_hiZTestEnabled && !m_hiZDebugDisabled) ? m_hiZPass.mipLevels() : 0u;
 
     if (!twoPass) {
         // Fallback: single pass drawing all meshlets (original behavior). Also covers the

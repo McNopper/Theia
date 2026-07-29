@@ -1,4 +1,5 @@
-#pragma once
+#ifndef THEIA_RENDERER_SHADERPATH_HPP
+#define THEIA_RENDERER_SHADERPATH_HPP
 
 #include <filesystem>
 
@@ -12,3 +13,4 @@ namespace theia {
 }
 
 } // namespace theia
+#endif // THEIA_RENDERER_SHADERPATH_HPP

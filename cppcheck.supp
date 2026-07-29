@@ -1,0 +1,31 @@
+# cppcheck suppressions
+#
+# Format: one suppression id per line (optionally id:file:line).
+# See: https://cppcheck.sourceforge.io/manual.pdf (section "Suppressions").
+#
+# Keep this list short and justified. Prefer inline // cppcheck-suppress
+# comments for one-off, local suppressions over global entries here.
+
+# System/standard-library headers are not analysed; silence the advisory
+# that fires when cppcheck cannot find them.
+missingIncludeSystem
+
+# Informational messages produced by --enable=all / cppcheck itself, not
+# code findings.
+checkersReport
+
+# Do not fail when a suppression in this file matches nothing (keeps the
+# profile usable before any real code exists).
+unmatchedSuppression
+
+# Library/public-API functions look "unused" to a per-project analysis even
+# though consumers call them. Only relevant to the exhaustive profile.
+unusedFunction
+
+# `(&x)[i]`-style contiguous-member indexing is used deliberately by the
+# slang-math vector/matrix types to mirror Slang/HLSL element access and feed
+# value_ptr() buffer uploads; the tightly-packed, no-padding layout is a
+# documented contract of every vector type. objectIndex flags it as pointer
+# arithmetic on a non-array object — a false positive here that recurs in every
+# consumer. (clang-tidy's analogous ArrayBound finding is disabled in .clang-tidy.)
+objectIndex
