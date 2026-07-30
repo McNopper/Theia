@@ -64,7 +64,7 @@ class ForwardRenderer {
 
     void setScene(const Scene* scene) {
         m_scene = scene;
-        m_texturesBoundFor = nullptr;
+        m_desc.texturesBoundFor = nullptr;
     }
     void setCamera(const CameraParams& cam) { m_camera = cam; }
     /// Bind IBL textures (set 2 / sky set 0). When a raw environment panorama is
@@ -244,24 +244,20 @@ class ForwardRenderer {
         std::uint32_t rngDebug = 0;
     } m_render;
 
-    // Set 0: geometry buffers (vertex/instance/index/meshlet data — task + mesh stages)
-    harmonia::UniqueDescriptorSetLayout m_meshSetLayout;
-    VkDescriptorSet m_meshSet = VK_NULL_HANDLE;
-
-    // Set 1: material/lighting buffers (materials/lights/emissive — fragment stage)
-    harmonia::UniqueDescriptorSetLayout m_matSetLayout;
-    VkDescriptorSet m_matSet = VK_NULL_HANDLE;
-
-    // Set 2: IBL textures + samplers (fragment stage)
-    harmonia::UniqueDescriptorSetLayout m_iblSetLayout;
-    VkDescriptorSet m_iblSet = VK_NULL_HANDLE;
-
-    // Set 3: bindless material textures (base_color/normal/ORM/emission — fragment stage)
-    harmonia::UniqueDescriptorSetLayout m_textureSetLayout;
-    VkDescriptorSet m_textureSet = VK_NULL_HANDLE;
-    const Scene* m_texturesBoundFor = nullptr; ///< scene the bindless set was last written for
-
-    harmonia::UniqueDescriptorPool m_descriptorPool;
+    /// Descriptor-binding cohort (extracted, R8/CH9): the four mesh-shader descriptor sets
+    /// (geometry / material+light / IBL / bindless-texture) + their layouts + the pool.
+    struct DescriptorState {
+        harmonia::UniqueDescriptorSetLayout meshSetLayout;    ///< set 0: geometry buffers
+        VkDescriptorSet meshSet = VK_NULL_HANDLE;
+        harmonia::UniqueDescriptorSetLayout matSetLayout;     ///< set 1: material/lighting buffers
+        VkDescriptorSet matSet = VK_NULL_HANDLE;
+        harmonia::UniqueDescriptorSetLayout iblSetLayout;     ///< set 2: IBL textures + samplers
+        VkDescriptorSet iblSet = VK_NULL_HANDLE;
+        harmonia::UniqueDescriptorSetLayout textureSetLayout; ///< set 3: bindless material textures
+        VkDescriptorSet textureSet = VK_NULL_HANDLE;
+        const Scene* texturesBoundFor = nullptr;              ///< scene the bindless set was last written for
+        harmonia::UniqueDescriptorPool descriptorPool;
+    } m_desc;
 
     VkDescriptorImageInfo m_iblDiffuseInfo{};
     VkDescriptorImageInfo m_iblSpecularInfo{};

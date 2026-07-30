@@ -238,11 +238,11 @@ void ForwardRenderer::shutdown() {
     m_skyPipeline.reset();
     m_skyPipelineLayout.reset();
     m_pipelineLayout.reset();
-    m_meshSetLayout.reset();
-    m_matSetLayout.reset();
-    m_iblSetLayout.reset();
-    m_textureSetLayout.reset();
-    m_descriptorPool.reset();
+    m_desc.meshSetLayout.reset();
+    m_desc.matSetLayout.reset();
+    m_desc.iblSetLayout.reset();
+    m_desc.textureSetLayout.reset();
+    m_desc.descriptorPool.reset();
 
     m_iblDiffuseInfo = {};
     m_iblSpecularInfo = {};
@@ -269,11 +269,11 @@ void ForwardRenderer::shutdown() {
 
     m_gpu.dgcLayout.reset();
 
-    m_meshSet = VK_NULL_HANDLE;
-    m_matSet = VK_NULL_HANDLE;
-    m_iblSet = VK_NULL_HANDLE;
-    m_textureSet = VK_NULL_HANDLE;
-    m_texturesBoundFor = nullptr;
+    m_desc.meshSet = VK_NULL_HANDLE;
+    m_desc.matSet = VK_NULL_HANDLE;
+    m_desc.iblSet = VK_NULL_HANDLE;
+    m_desc.textureSet = VK_NULL_HANDLE;
+    m_desc.texturesBoundFor = nullptr;
     m_gpu.hiZPass.shutdown();
     m_gpu.gpuCullPass.shutdown();
     m_gpu.meshletVisibility[0] = {};
@@ -321,7 +321,7 @@ void ForwardRenderer::setTileBuffers(VkBuffer tileLightCounts,
 }
 
 void ForwardRenderer::setIbl(const IblResources& res, VkImageView rawEnvView, float envUnitNits) {
-    if (!m_ctx || m_iblSet == VK_NULL_HANDLE) {
+    if (!m_ctx || m_desc.iblSet == VK_NULL_HANDLE) {
         return;
     }
 
@@ -342,7 +342,7 @@ void ForwardRenderer::setIbl(const IblResources& res, VkImageView rawEnvView, fl
     const std::array<VkWriteDescriptorSet, 6> writes{
         VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                              nullptr,
-                             m_iblSet,
+                             m_desc.iblSet,
                              0,
                              0,
                              1,
@@ -352,7 +352,7 @@ void ForwardRenderer::setIbl(const IblResources& res, VkImageView rawEnvView, fl
                              nullptr},
         VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                              nullptr,
-                             m_iblSet,
+                             m_desc.iblSet,
                              1,
                              0,
                              1,
@@ -362,7 +362,7 @@ void ForwardRenderer::setIbl(const IblResources& res, VkImageView rawEnvView, fl
                              nullptr},
         VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                              nullptr,
-                             m_iblSet,
+                             m_desc.iblSet,
                              2,
                              0,
                              1,
@@ -372,7 +372,7 @@ void ForwardRenderer::setIbl(const IblResources& res, VkImageView rawEnvView, fl
                              nullptr},
         VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                              nullptr,
-                             m_iblSet,
+                             m_desc.iblSet,
                              5,
                              0,
                              1,
@@ -382,7 +382,7 @@ void ForwardRenderer::setIbl(const IblResources& res, VkImageView rawEnvView, fl
                              nullptr},
         VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                              nullptr,
-                             m_iblSet,
+                             m_desc.iblSet,
                              3,
                              0,
                              1,
@@ -392,7 +392,7 @@ void ForwardRenderer::setIbl(const IblResources& res, VkImageView rawEnvView, fl
                              nullptr},
         VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                              nullptr,
-                             m_iblSet,
+                             m_desc.iblSet,
                              4,
                              0,
                              1,
@@ -460,7 +460,7 @@ void ForwardRenderer::drawOpaque(VkCommandBuffer cmd,
         return;
     }
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_graphicsPipeline);
-    const std::array<VkDescriptorSet, 4> descSets{m_meshSet, m_matSet, m_iblSet, m_textureSet};
+    const std::array<VkDescriptorSet, 4> descSets{m_desc.meshSet, m_desc.matSet, m_desc.iblSet, m_desc.textureSet};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 4, descSets.data(), 0, nullptr);
     auto pc = pcBase;
     pc.presentationParams.y = 0.0f; // opaque routing in the task shader
@@ -591,7 +591,7 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
         harmonia::Logger::error("Failed to create mesh descriptor set layout");
         return false;
     }
-    m_meshSetLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, meshSetLayout};
+    m_desc.meshSetLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, meshSetLayout};
 
     const std::array<VkDescriptorSetLayoutBinding, 6> matBindings{
         VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
@@ -618,10 +618,10 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
     VkDescriptorSetLayout matSetLayout{};
     if (vkCreateDescriptorSetLayout(m_ctx->device, &matSetLayoutInfo, nullptr, &matSetLayout) != VK_SUCCESS) {
         harmonia::Logger::error("Failed to create material descriptor set layout");
-        m_meshSetLayout.reset();
+        m_desc.meshSetLayout.reset();
         return false;
     }
-    m_matSetLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, matSetLayout};
+    m_desc.matSetLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, matSetLayout};
 
     const std::array<VkDescriptorSetLayoutBinding, 8> iblBindings{
         VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
@@ -649,11 +649,11 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
     VkDescriptorSetLayout iblSetLayout{};
     if (vkCreateDescriptorSetLayout(m_ctx->device, &iblSetLayoutInfo, nullptr, &iblSetLayout) != VK_SUCCESS) {
         harmonia::Logger::error("Failed to create IBL descriptor set layout");
-        m_matSetLayout.reset();
-        m_meshSetLayout.reset();
+        m_desc.matSetLayout.reset();
+        m_desc.meshSetLayout.reset();
         return false;
     }
-    m_iblSetLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, iblSetLayout};
+    m_desc.iblSetLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, iblSetLayout};
 
     const VkDescriptorSetLayoutBinding textureBinding{
         0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
@@ -674,12 +674,12 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
     VkDescriptorSetLayout textureSetLayout{};
     if (vkCreateDescriptorSetLayout(m_ctx->device, &textureSetLayoutInfo, nullptr, &textureSetLayout) != VK_SUCCESS) {
         harmonia::Logger::error("Failed to create bindless texture descriptor set layout");
-        m_iblSetLayout.reset();
-        m_matSetLayout.reset();
-        m_meshSetLayout.reset();
+        m_desc.iblSetLayout.reset();
+        m_desc.matSetLayout.reset();
+        m_desc.meshSetLayout.reset();
         return false;
     }
-    m_textureSetLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, textureSetLayout};
+    m_desc.textureSetLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, textureSetLayout};
 
     const std::array<VkDescriptorPoolSize, 5> poolSizes{
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 18},
@@ -698,36 +698,36 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
     VkDescriptorPool descriptorPool{};
     if (vkCreateDescriptorPool(m_ctx->device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
         harmonia::Logger::error("Failed to create descriptor pool");
-        m_textureSetLayout.reset();
-        m_iblSetLayout.reset();
-        m_matSetLayout.reset();
-        m_meshSetLayout.reset();
+        m_desc.textureSetLayout.reset();
+        m_desc.iblSetLayout.reset();
+        m_desc.matSetLayout.reset();
+        m_desc.meshSetLayout.reset();
         return false;
     }
-    m_descriptorPool = harmonia::UniqueDescriptorPool{m_ctx->device, descriptorPool};
+    m_desc.descriptorPool = harmonia::UniqueDescriptorPool{m_ctx->device, descriptorPool};
 
     const std::array<VkDescriptorSetLayout, 4> setLayouts{
-        m_meshSetLayout, m_matSetLayout, m_iblSetLayout, m_textureSetLayout};
+        m_desc.meshSetLayout, m_desc.matSetLayout, m_desc.iblSetLayout, m_desc.textureSetLayout};
     const VkDescriptorSetAllocateInfo allocInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-        .descriptorPool = m_descriptorPool,
+        .descriptorPool = m_desc.descriptorPool,
         .descriptorSetCount = static_cast<std::uint32_t>(setLayouts.size()),
         .pSetLayouts = setLayouts.data(),
     };
     std::array<VkDescriptorSet, 4> sets{};
     if (vkAllocateDescriptorSets(m_ctx->device, &allocInfo, sets.data()) != VK_SUCCESS) {
         harmonia::Logger::error("Failed to allocate descriptor sets");
-        m_descriptorPool.reset();
-        m_textureSetLayout.reset();
-        m_iblSetLayout.reset();
-        m_matSetLayout.reset();
-        m_meshSetLayout.reset();
+        m_desc.descriptorPool.reset();
+        m_desc.textureSetLayout.reset();
+        m_desc.iblSetLayout.reset();
+        m_desc.matSetLayout.reset();
+        m_desc.meshSetLayout.reset();
         return false;
     }
-    m_meshSet = sets[0];
-    m_matSet = sets[1];
-    m_iblSet = sets[2];
-    m_textureSet = sets[3];
+    m_desc.meshSet = sets[0];
+    m_desc.matSet = sets[1];
+    m_desc.iblSet = sets[2];
+    m_desc.textureSet = sets[3];
     return true;
 }
 
@@ -738,7 +738,7 @@ bool ForwardRenderer::createPipelineLayouts() {
         .size = sizeof(ForwardRenderer::MeshPushConstants),
     };
     const std::array<VkDescriptorSetLayout, 4> pipelineSetLayouts{
-        m_meshSetLayout, m_matSetLayout, m_iblSetLayout, m_textureSetLayout};
+        m_desc.meshSetLayout, m_desc.matSetLayout, m_desc.iblSetLayout, m_desc.textureSetLayout};
     const VkPipelineLayoutCreateInfo layoutInfo{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .setLayoutCount = static_cast<std::uint32_t>(pipelineSetLayouts.size()),
@@ -749,11 +749,11 @@ bool ForwardRenderer::createPipelineLayouts() {
     VkPipelineLayout pipelineLayout{};
     if (vkCreatePipelineLayout(m_ctx->device, &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
         harmonia::Logger::error("Failed to create graphics pipeline layout");
-        m_descriptorPool.reset();
-        m_textureSetLayout.reset();
-        m_iblSetLayout.reset();
-        m_matSetLayout.reset();
-        m_meshSetLayout.reset();
+        m_desc.descriptorPool.reset();
+        m_desc.textureSetLayout.reset();
+        m_desc.iblSetLayout.reset();
+        m_desc.matSetLayout.reset();
+        m_desc.meshSetLayout.reset();
         return false;
     }
     m_pipelineLayout = harmonia::UniquePipelineLayout{m_ctx->device, pipelineLayout};
@@ -822,10 +822,10 @@ bool ForwardRenderer::createOpaquePipeline() {
         VK_SUCCESS) {
         harmonia::Logger::error("Failed to create graphics pipeline");
         m_pipelineLayout.reset();
-        m_descriptorPool.reset();
-        m_iblSetLayout.reset();
-        m_matSetLayout.reset();
-        m_meshSetLayout.reset();
+        m_desc.descriptorPool.reset();
+        m_desc.iblSetLayout.reset();
+        m_desc.matSetLayout.reset();
+        m_desc.meshSetLayout.reset();
         return false;
     }
     m_graphicsPipeline = harmonia::UniquePipeline{m_ctx->device, graphicsPipeline};
@@ -899,11 +899,11 @@ bool ForwardRenderer::createTransparentPipeline() {
         harmonia::Logger::error("Failed to create transparent graphics pipeline");
         m_graphicsPipeline.reset();
         m_pipelineLayout.reset();
-        m_descriptorPool.reset();
-        m_textureSetLayout.reset();
-        m_iblSetLayout.reset();
-        m_matSetLayout.reset();
-        m_meshSetLayout.reset();
+        m_desc.descriptorPool.reset();
+        m_desc.textureSetLayout.reset();
+        m_desc.iblSetLayout.reset();
+        m_desc.matSetLayout.reset();
+        m_desc.meshSetLayout.reset();
         return false;
     }
     m_graphicsPipelineTransparent = harmonia::UniquePipeline{m_ctx->device, graphicsPipelineTransparent};
@@ -931,7 +931,7 @@ bool ForwardRenderer::createSkyPipeline() {
     const VkPipelineLayoutCreateInfo skyLayoutInfo{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .setLayoutCount = 1,
-        .pSetLayouts = m_iblSetLayout.ptr(),
+        .pSetLayouts = m_desc.iblSetLayout.ptr(),
         .pushConstantRangeCount = 1,
         .pPushConstantRanges = &skyPcRange,
     };
@@ -1388,7 +1388,7 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
     std::array<VkWriteDescriptorSet, 20> writes{
         VkWriteDescriptorSet{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_meshSet,
+            .dstSet = m_desc.meshSet,
             .dstBinding = 0,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -1396,7 +1396,7 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
         },
         VkWriteDescriptorSet{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_meshSet,
+            .dstSet = m_desc.meshSet,
             .dstBinding = 1,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -1404,7 +1404,7 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
         },
         VkWriteDescriptorSet{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_meshSet,
+            .dstSet = m_desc.meshSet,
             .dstBinding = 2,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -1412,7 +1412,7 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
         },
         VkWriteDescriptorSet{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_meshSet,
+            .dstSet = m_desc.meshSet,
             .dstBinding = 3,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -1420,7 +1420,7 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
         },
         VkWriteDescriptorSet{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_meshSet,
+            .dstSet = m_desc.meshSet,
             .dstBinding = 4,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -1428,7 +1428,7 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
         },
         VkWriteDescriptorSet{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_meshSet,
+            .dstSet = m_desc.meshSet,
             .dstBinding = 5,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -1436,7 +1436,7 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
         },
         VkWriteDescriptorSet{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_meshSet,
+            .dstSet = m_desc.meshSet,
             .dstBinding = 6,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -1444,7 +1444,7 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
         },
         VkWriteDescriptorSet{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_matSet,
+            .dstSet = m_desc.matSet,
             .dstBinding = 0,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -1452,7 +1452,7 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
         },
         VkWriteDescriptorSet{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_matSet,
+            .dstSet = m_desc.matSet,
             .dstBinding = 1,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -1460,7 +1460,7 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
         },
         VkWriteDescriptorSet{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_matSet,
+            .dstSet = m_desc.matSet,
             .dstBinding = 2,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -1468,7 +1468,7 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
         },
         VkWriteDescriptorSet{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_matSet,
+            .dstSet = m_desc.matSet,
             .dstBinding = 3,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -1476,7 +1476,7 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
         },
         VkWriteDescriptorSet{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_matSet,
+            .dstSet = m_desc.matSet,
             .dstBinding = 4,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -1485,14 +1485,14 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
         VkWriteDescriptorSet{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .pNext = &tlasWriteInfo,
-            .dstSet = m_matSet,
+            .dstSet = m_desc.matSet,
             .dstBinding = 5,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
         },
         VkWriteDescriptorSet{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_iblSet,
+            .dstSet = m_desc.iblSet,
             .dstBinding = 6,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -1500,7 +1500,7 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
         },
         VkWriteDescriptorSet{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_iblSet,
+            .dstSet = m_desc.iblSet,
             .dstBinding = 7,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -1508,7 +1508,7 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
         },
         VkWriteDescriptorSet{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_meshSet,
+            .dstSet = m_desc.meshSet,
             .dstBinding = 7,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -1516,7 +1516,7 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
         },
         VkWriteDescriptorSet{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_meshSet,
+            .dstSet = m_desc.meshSet,
             .dstBinding = 8,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -1524,7 +1524,7 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
         },
         VkWriteDescriptorSet{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_meshSet,
+            .dstSet = m_desc.meshSet,
             .dstBinding = 9,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
@@ -1532,7 +1532,7 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
         },
         VkWriteDescriptorSet{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_meshSet,
+            .dstSet = m_desc.meshSet,
             .dstBinding = 10,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -1540,7 +1540,7 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
         },
         VkWriteDescriptorSet{
             .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_meshSet,
+            .dstSet = m_desc.meshSet,
             .dstBinding = 11,
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -1549,7 +1549,7 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
     };
     vkUpdateDescriptorSets(m_ctx->device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
 
-    if (m_scene != m_texturesBoundFor) {
+    if (m_scene != m_desc.texturesBoundFor) {
         const auto& sceneTextures = m_scene->textures();
         const std::uint32_t texCount = std::min(static_cast<std::uint32_t>(sceneTextures.size()), kMaxBindlessTextures);
         if (texCount > 0) {
@@ -1563,7 +1563,7 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
             }
             const VkWriteDescriptorSet texWrite{
                 .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .dstSet = m_textureSet,
+                .dstSet = m_desc.textureSet,
                 .dstBinding = 0,
                 .dstArrayElement = 0,
                 .descriptorCount = texCount,
@@ -1572,7 +1572,7 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
             };
             vkUpdateDescriptorSets(m_ctx->device, 1, &texWrite, 0, nullptr);
         }
-        m_texturesBoundFor = m_scene;
+        m_desc.texturesBoundFor = m_scene;
     }
 }
 
@@ -1620,7 +1620,7 @@ void ForwardRenderer::beginSceneRendering(VkCommandBuffer cmd, VkAttachmentLoadO
 }
 
 void ForwardRenderer::bindMeshSets(VkCommandBuffer cmd) {
-    const std::array<VkDescriptorSet, 4> descSets{m_meshSet, m_matSet, m_iblSet, m_textureSet};
+    const std::array<VkDescriptorSet, 4> descSets{m_desc.meshSet, m_desc.matSet, m_desc.iblSet, m_desc.textureSet};
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 4, descSets.data(), 0, nullptr);
 }
 
@@ -1647,7 +1647,7 @@ void ForwardRenderer::recordSky(VkCommandBuffer cmd) {
         ._pad1 = 0u,
     };
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skyPipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skyPipelineLayout, 0, 1, &m_iblSet, 0, nullptr);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skyPipelineLayout, 0, 1, &m_desc.iblSet, 0, nullptr);
     vkCmdPushConstants(
         cmd, m_skyPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(skyPc), &skyPc);
     vkCmdDraw(cmd, 3, 1, 0, 0);
