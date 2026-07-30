@@ -16,6 +16,7 @@
 #include "harmonia/renderer/Camera.hpp"
 #include "theia/renderer/GpuCullPass.hpp"
 #include "theia/renderer/HiZPass.hpp"
+#include "theia/renderer/GpuDrivenState.hpp"
 #include "theia/renderer/IblPrecompute.hpp"
 #include "theia/renderer/RendererConstants.hpp"
 
@@ -170,9 +171,6 @@ class ForwardRenderer {
     bool createTransparentPipeline();
     bool createSkyPipeline();
     VkShaderModule loadShaderModule(const char* filename);
-    /// (Re)create the ping-pong per-meshlet visibility buffers for the current scene and
-    /// clear both to 0 on the first frame. Called when the bound scene changes.
-    bool ensureVisibilityBuffers();
     /// Record one opaque meshlet draw for the given cull phase / Hi-Z mip count.
     void drawOpaque(VkCommandBuffer cmd,
                     const MeshPushConstants& pcBase,
@@ -180,7 +178,6 @@ class ForwardRenderer {
                     std::uint32_t hiZMipCount);
     void prepareAttachments(VkCommandBuffer cmd);
     void updateSceneDescriptors(VkCommandBuffer cmd);
-    void dispatchGpuCull(VkCommandBuffer cmd, std::uint32_t instanceCount, const sm::float4x4& viewProj);
     void beginSceneRendering(VkCommandBuffer cmd, VkAttachmentLoadOp loadOp);
     void bindMeshSets(VkCommandBuffer cmd);
     void recordSky(VkCommandBuffer cmd);
@@ -286,30 +283,9 @@ class ForwardRenderer {
     bool m_initialized = false;
     bool m_hdrFirstUse = true; ///< tracks whether HDR image is still in UNDEFINED layout
 
-    /// GPU-driven rendering state: frustum cull (GD2/GD3/GD6) + DGC + two-pass Hi-Z occlusion
-    /// culling + ping-pong meshlet visibility. Extracted cohort (R8/CH9).
-    struct GpuDrivenState {
-        // GPU-driven frustum cull pass (GD2/GD3/GD6). Writes compactInstanceList + a single
-        // indirect draw command; ForwardRenderer uses vkCmdDrawMeshTasksIndirectEXT (GD3) or
-        // vkCmdExecuteGeneratedCommandsEXT (GD6 DGC path).
-        GpuCullPass gpuCullPass;
-        Buffer identityInstanceList;                   ///< [0,1,...,kMaxInstances-1] binding-10 fallback
-        harmonia::UniqueIndirectCommandsLayout dgcLayout; ///< DRAW_MESH_TASKS_EXT token, stride=12
-        VkBuffer dgcPreprocessBuf = VK_NULL_HANDLE;    ///< vkCmdExecuteGeneratedCommandsEXT scratch
-        VmaAllocation dgcPreprocessAlloc = VK_NULL_HANDLE;
-        VkDeviceAddress dgcPreprocessAddr = 0;
-        VkDeviceSize dgcPreprocessSize = 0;
-
-        HiZPass hiZPass;                               ///< current-frame depth pyramid builder (B4)
-        Buffer meshletVisibility[2];                   ///< ping-pong per-meshlet visibility (uint/meshlet)
-        std::uint32_t visFrame = 0;                    ///< index of PREVIOUS-frame visibility buffer
-        std::uint32_t visMeshletCount = 0;             ///< meshlet count the visibility buffers were sized for
-        const Scene* visBuiltFor = nullptr;            ///< scene the visibility buffers were built for
-        bool hiZTestEnabled = true;                    ///< set false for one frame on a camera cut
-        bool visClearPrev = false;                     ///< clear PREV visibility next frame (freshly (re)built)
-        bool hiZDebugDisabled = false;                 ///< THEIA_DISABLE_HIZ: draw all meshlets (A-B debug)
-        bool forceSinglePass = false;                  ///< THEIA_SINGLE_PASS: bypass two-pass Hi-Z (A-B debug)
-    } m_gpu;
+    /// GPU-driven rendering state (frustum cull + DGC + two-pass Hi-Z + meshlet visibility).
+    /// Extracted to its own class (R8/CH9).
+    GpuDrivenState m_gpu;
 };
 
 } // namespace theia

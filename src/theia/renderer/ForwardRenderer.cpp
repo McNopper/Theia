@@ -451,35 +451,6 @@ bool ForwardRenderer::createDepthTarget() {
     return true;
 }
 
-bool ForwardRenderer::ensureVisibilityBuffers() {
-    if (m_scene == nullptr) {
-        return false;
-    }
-    if (m_gpu.visBuiltFor == m_scene && m_gpu.meshletVisibility[0].handle() != VK_NULL_HANDLE) {
-        return true;
-    }
-    const std::uint32_t meshletCount = std::max(1u, m_scene->meshletCount());
-    const VkDeviceSize size = static_cast<VkDeviceSize>(meshletCount) * sizeof(std::uint32_t);
-    for (auto& buf : m_gpu.meshletVisibility) {
-        auto created = Buffer::create(*m_ctx,
-                                      size,
-                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                      VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                                      "theia.meshletVisibility");
-        if (!created) {
-            Logger::error("Failed to create meshlet visibility buffer");
-            return false;
-        }
-        buf = std::move(*created);
-    }
-    m_gpu.visMeshletCount = meshletCount;
-    m_gpu.visBuiltFor = m_scene;
-    m_gpu.visFrame = 0;
-    // Both buffers hold undefined VMA memory; the first frame clears both (see recordFrame).
-    m_gpu.visClearPrev = true;
-    return true;
-}
-
 void ForwardRenderer::drawOpaque(VkCommandBuffer cmd,
                                  const MeshPushConstants& pcBase,
                                  std::uint32_t cullPhase,
@@ -501,41 +472,7 @@ void ForwardRenderer::drawOpaque(VkCommandBuffer cmd,
                        0,
                        sizeof(MeshPushConstants),
                        &pc);
-    if (m_gpu.gpuCullPass.isInitialized() && m_gpu.dgcLayout != VK_NULL_HANDLE) {
-        // GD6 DGC path: one GPU-generated DRAW_MESH_TASKS command via VK_EXT_device_generated_commands.
-        // indirectAddress points at indirectDrawBuf = {visibleCount, 1, 1} (written by GpuCullPass),
-        // so a single sequence dispatches `visibleCount` task workgroups. The task shader indexes
-        // compactInstanceList[gid.x] — identical semantics to the GD3 fallback, but the command
-        // itself is GPU-resident and consumed through the modern device-generated-commands path.
-        const VkGeneratedCommandsPipelineInfoEXT dgcPipelineInfo{
-            .sType = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_PIPELINE_INFO_EXT,
-            .pipeline = m_graphicsPipeline,
-        };
-        const VkGeneratedCommandsInfoEXT dgcInfo{
-            .sType = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_INFO_EXT,
-            .pNext = &dgcPipelineInfo,
-            .shaderStages = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            .indirectExecutionSet = VK_NULL_HANDLE,
-            .indirectCommandsLayout = m_gpu.dgcLayout,
-            .indirectAddress = m_gpu.gpuCullPass.indirectDrawAddress(),
-            .indirectAddressSize = kMeshTaskIndirectCmdSize,
-            .preprocessAddress = m_gpu.dgcPreprocessAddr,
-            .preprocessSize = m_gpu.dgcPreprocessSize,
-            .maxSequenceCount = 1u,    // single GPU-generated draw
-            .sequenceCountAddress = 0, // fixed count of 1
-            .maxDrawCount = 1,
-        };
-        vkCmdExecuteGeneratedCommandsEXT(cmd, VK_FALSE, &dgcInfo);
-    } else if (m_gpu.gpuCullPass.isInitialized() && vkCmdDrawMeshTasksIndirectEXT != nullptr) {
-        // GD3 fallback: single indirect draw; task shader gid.x = visible instance position.
-        vkCmdDrawMeshTasksIndirectEXT(cmd,
-                                      m_gpu.gpuCullPass.indirectDrawBuffer(),
-                                      0,
-                                      1, // exactly one indirect command entry
-                                      kMeshTaskIndirectCmdSize);
-    } else {
-        vkCmdDrawMeshTasksEXT(cmd, instanceCount, 1, 1);
-    }
+    m_gpu.issueDraw(cmd, m_graphicsPipeline, instanceCount);
 }
 
 VkShaderModule ForwardRenderer::loadShaderModule(const char* filename) {
@@ -1078,7 +1015,7 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
     }
 
     // Ensure the two-pass Hi-Z visibility buffers exist for the current scene.
-    const bool visReady = ensureVisibilityBuffers();
+    const bool visReady = m_scene != nullptr && m_gpu.ensureVisibilityBuffers(*m_ctx, *m_scene);
 
     prepareAttachments(cmd);
 
@@ -1149,7 +1086,7 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
 
     // GPU-driven frustum cull (must run outside dynamic rendering — compute cannot run
     // inside a render pass). Dispatch before the Hi-Z passes and barrier results.
-    dispatchGpuCull(cmd, instanceCount, viewProj);
+    m_gpu.dispatchCull(cmd, *m_scene, instanceCount, viewProj);
 
     const bool twoPass = canDraw && visReady && !m_gpu.forceSinglePass;
     const std::uint32_t hiZMip =
@@ -1639,43 +1576,6 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
     }
 }
 
-void ForwardRenderer::dispatchGpuCull(VkCommandBuffer cmd, std::uint32_t instanceCount, const sm::float4x4& viewProj) {
-    const bool canDraw = (instanceCount > 0) && (vkCmdDrawMeshTasksEXT != nullptr);
-    if (!canDraw || !m_gpu.gpuCullPass.isInitialized()) {
-        return;
-    }
-    m_gpu.gpuCullPass.dispatch(
-        cmd, m_scene->instanceBuffer().handle(), m_scene->instanceBoundsBuffer().handle(), instanceCount, viewProj);
-    const std::array cullBarriers{
-        VkBufferMemoryBarrier2{
-            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-            .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-            .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-            .dstStageMask = VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT,
-            .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
-            .buffer = m_gpu.gpuCullPass.compactInstanceListBuffer(),
-            .offset = 0,
-            .size = VK_WHOLE_SIZE,
-        },
-        VkBufferMemoryBarrier2{
-            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-            .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-            .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
-            .dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_COMMAND_PREPROCESS_BIT_EXT,
-            .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_COMMAND_PREPROCESS_READ_BIT_EXT,
-            .buffer = m_gpu.gpuCullPass.indirectDrawBuffer(),
-            .offset = 0,
-            .size = VK_WHOLE_SIZE,
-        },
-    };
-    const VkDependencyInfo cullDep{
-        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-        .bufferMemoryBarrierCount = static_cast<std::uint32_t>(cullBarriers.size()),
-        .pBufferMemoryBarriers = cullBarriers.data(),
-    };
-    vkCmdPipelineBarrier2(cmd, &cullDep);
-}
-
 void ForwardRenderer::beginSceneRendering(VkCommandBuffer cmd, VkAttachmentLoadOp loadOp) {
     VkClearColorValue clearCol{{0.0f, 0.0f, 0.0f, 1.0f}};
     VkClearColorValue clearGbuf{{0.5f, 0.5f, 0.5f, 1.0f}};
@@ -1767,31 +1667,7 @@ void ForwardRenderer::recordTransparent(VkCommandBuffer cmd, const MeshPushConst
                        sizeof(MeshPushConstants),
                        &pc);
     const std::uint32_t instCnt = m_scene->instanceCount();
-    if (m_gpu.gpuCullPass.isInitialized() && m_gpu.dgcLayout != VK_NULL_HANDLE) {
-        const VkGeneratedCommandsPipelineInfoEXT dgcPipelineInfo{
-            .sType = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_PIPELINE_INFO_EXT,
-            .pipeline = m_graphicsPipelineTransparent,
-        };
-        const VkGeneratedCommandsInfoEXT dgcInfo{
-            .sType = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_INFO_EXT,
-            .pNext = &dgcPipelineInfo,
-            .shaderStages = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            .indirectExecutionSet = VK_NULL_HANDLE,
-            .indirectCommandsLayout = m_gpu.dgcLayout,
-            .indirectAddress = m_gpu.gpuCullPass.indirectDrawAddress(),
-            .indirectAddressSize = kMeshTaskIndirectCmdSize,
-            .preprocessAddress = m_gpu.dgcPreprocessAddr,
-            .preprocessSize = m_gpu.dgcPreprocessSize,
-            .maxSequenceCount = 1u,
-            .sequenceCountAddress = 0,
-            .maxDrawCount = 1,
-        };
-        vkCmdExecuteGeneratedCommandsEXT(cmd, VK_FALSE, &dgcInfo);
-    } else if (m_gpu.gpuCullPass.isInitialized() && vkCmdDrawMeshTasksIndirectEXT != nullptr) {
-        vkCmdDrawMeshTasksIndirectEXT(cmd, m_gpu.gpuCullPass.indirectDrawBuffer(), 0, 1, kMeshTaskIndirectCmdSize);
-    } else {
-        vkCmdDrawMeshTasksEXT(cmd, instCnt, 1, 1);
-    }
+    m_gpu.issueDraw(cmd, m_graphicsPipelineTransparent, instCnt);
 }
 
 void ForwardRenderer::recordOpaquePass(VkCommandBuffer cmd, const MeshPushConstants& pcBase) {

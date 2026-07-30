@@ -237,6 +237,7 @@ set(THEIA_LIBRARY_SOURCES
     src/theia/renderer/MotionVectorPass.cpp
     src/theia/renderer/TaaPass.cpp
     src/theia/renderer/HiZPass.cpp
+    src/theia/renderer/GpuDrivenState.cpp
     # Theia GPU scene (rasterizer/meshlet layout — renderer-specific)
     src/theia/scene/Scene.cpp
 )
