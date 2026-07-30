@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <cmath>
-
 #include <slang-math/slang-math.hpp>
 
 namespace theia {
@@ -33,8 +32,8 @@ class CameraController {
     [[nodiscard]] sm::float3 forward() const noexcept {
         const float yawRad = sm::radians(yaw);
         const float pitchRad = sm::radians(pitch);
-        return sm::float3{std::cos(yawRad) * std::cos(pitchRad), std::sin(pitchRad),
-                          std::sin(yawRad) * std::cos(pitchRad)};
+        return sm::float3{
+            std::cos(yawRad) * std::cos(pitchRad), std::sin(pitchRad), std::sin(yawRad) * std::cos(pitchRad)};
     }
 
     /// Apply relative mouse motion to yaw/pitch (clamped to avoid gimbal lock at the poles).
@@ -57,12 +56,18 @@ class CameraController {
         const sm::float3 right = sm::normalize(sm::cross(fwd, worldUp));
         const sm::float3 up = sm::normalize(sm::cross(right, fwd));
         sm::float3 p = pos;
-        if (wDown) p += fwd * speed * dt;
-        if (sDown) p -= fwd * speed * dt;
-        if (dDown) p += right * speed * dt;
-        if (aDown) p -= right * speed * dt;
-        if (eDown) p += up * speed * dt;
-        if (qDown) p -= up * speed * dt;
+        if (wDown)
+            p += fwd * speed * dt;
+        if (sDown)
+            p -= fwd * speed * dt;
+        if (dDown)
+            p += right * speed * dt;
+        if (aDown)
+            p -= right * speed * dt;
+        if (eDown)
+            p += up * speed * dt;
+        if (qDown)
+            p -= up * speed * dt;
         return p;
     }
 

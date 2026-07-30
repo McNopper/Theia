@@ -52,14 +52,14 @@ void MotionVectorPass::shutdown() {
 
 bool MotionVectorPass::createImage() noexcept {
     auto img = harmonia::Image::create(*m_ctx,
-                             {m_cfg.width, m_cfg.height},
-                             VK_FORMAT_R32G32_SFLOAT,
-                             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                             VK_IMAGE_ASPECT_COLOR_BIT,
-                             "theia.motionVectors");
+                                       {m_cfg.width, m_cfg.height},
+                                       VK_FORMAT_R32G32_SFLOAT,
+                                       VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                       VK_IMAGE_ASPECT_COLOR_BIT,
+                                       "theia.motionVectors");
     if (!img) {
         harmonia::Logger::error("MotionVectorPass: failed to create motion vector image: VkResult {}",
-                      static_cast<int>(img.error()));
+                                static_cast<int>(img.error()));
         return false;
     }
     m_motionVectorImage = std::move(*img);

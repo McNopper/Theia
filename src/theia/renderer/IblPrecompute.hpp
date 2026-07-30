@@ -14,10 +14,10 @@
 namespace theia {
 
 struct IblResources {
-    harmonia::Image sheenLut;                        // 512×512 R16F  — Charlie sheen directional albedo
-    harmonia::Image brdfLut;                         // 512×512 RG16F — GGX split-sum BRDF integration (A/B)
-    harmonia::Image diffuseIrrad;                    // configurable RGBA16F — Lambertian-convolved irradiance
-    harmonia::Image specularMipped;                  // 512×256 RGBA16F, 8 mip levels — GGX prefiltered specular
+    harmonia::Image sheenLut;           // 512×512 R16F  — Charlie sheen directional albedo
+    harmonia::Image brdfLut;            // 512×512 RG16F — GGX split-sum BRDF integration (A/B)
+    harmonia::Image diffuseIrrad;       // configurable RGBA16F — Lambertian-convolved irradiance
+    harmonia::Image specularMipped;     // 512×256 RGBA16F, 8 mip levels — GGX prefiltered specular
     harmonia::UniqueSampler lutSampler; // clamp+linear, no mip (for sheenLut)
     harmonia::UniqueSampler envSampler; // clamp+linear-mip (diffuse + specular)
 };

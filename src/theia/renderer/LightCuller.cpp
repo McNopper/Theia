@@ -47,7 +47,10 @@ LightCuller::~LightCuller() {
     shutdown();
 }
 
-bool LightCuller::initialize(const harmonia::DeviceContext& ctx, std::uint32_t w, std::uint32_t h, const char* spvFilename) {
+bool LightCuller::initialize(const harmonia::DeviceContext& ctx,
+                             std::uint32_t w,
+                             std::uint32_t h,
+                             const char* spvFilename) {
     shutdown();
     m_ctx = &ctx;
     m_screenWidth = w;
@@ -60,15 +63,15 @@ bool LightCuller::initialize(const harmonia::DeviceContext& ctx, std::uint32_t w
         static_cast<VkDeviceSize>(m_tilesX * m_tilesY) * kMaxLightsPerTile * sizeof(std::uint32_t);
 
     auto counts = harmonia::Buffer::create(ctx,
-                                 countsBufSize,
-                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                 VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                                 "theia.tileLightCounts");
+                                           countsBufSize,
+                                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                           VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                           "theia.tileLightCounts");
     auto indices = harmonia::Buffer::create(ctx,
-                                  indicesBufSize,
-                                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                  VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                                  "theia.tileLightIndices");
+                                            indicesBufSize,
+                                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                            VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                            "theia.tileLightIndices");
     if (!counts || !indices) {
         harmonia::Logger::error("LightCuller: failed to allocate tile buffers");
         return false;
@@ -215,12 +218,12 @@ bool LightCuller::initialize(const harmonia::DeviceContext& ctx, std::uint32_t w
     vkUpdateDescriptorSets(ctx.device, 2, staticWrites.data(), 0, nullptr);
 
     harmonia::Logger::info("LightCuller: initialized {}×{} tiles ({}×{} px each) for {}×{} screen",
-                 m_tilesX,
-                 m_tilesY,
-                 kTileSize,
-                 kTileSize,
-                 w,
-                 h);
+                           m_tilesX,
+                           m_tilesY,
+                           kTileSize,
+                           kTileSize,
+                           w,
+                           h);
     return true;
 }
 

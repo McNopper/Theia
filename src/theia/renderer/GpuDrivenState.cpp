@@ -23,10 +23,10 @@ bool GpuDrivenState::ensureVisibilityBuffers(const harmonia::DeviceContext& ctx,
     const VkDeviceSize size = static_cast<VkDeviceSize>(meshletCount) * sizeof(std::uint32_t);
     for (auto& buf : meshletVisibility) {
         auto created = harmonia::Buffer::create(ctx,
-                                      size,
-                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                      VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                                      "theia.meshletVisibility");
+                                                size,
+                                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                                "theia.meshletVisibility");
         if (!created) {
             harmonia::Logger::error("Failed to create meshlet visibility buffer");
             return false;

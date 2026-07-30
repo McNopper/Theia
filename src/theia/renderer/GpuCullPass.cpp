@@ -41,16 +41,17 @@ bool GpuCullPass::initialize(const harmonia::DeviceContext& ctx, const char* spv
     constexpr VkDeviceSize kIndirectBufSize = kMeshTaskIndirectCmdSize;
 
     auto compactBuf = harmonia::Buffer::create(ctx,
-                                     kCompactListSize,
-                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                     VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                                     "theia.gpuCull.compactInstanceList");
-    auto indirectBuf = harmonia::Buffer::create(ctx,
-                                      kIndirectBufSize,
-                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-                                          VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                      VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                                      "theia.gpuCull.indirectDrawBuf");
+                                               kCompactListSize,
+                                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                               VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                               "theia.gpuCull.compactInstanceList");
+    auto indirectBuf =
+        harmonia::Buffer::create(ctx,
+                                 kIndirectBufSize,
+                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                 VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                 "theia.gpuCull.indirectDrawBuf");
 
     if (!compactBuf || !indirectBuf) {
         harmonia::Logger::error("GpuCullPass: failed to allocate output buffers");

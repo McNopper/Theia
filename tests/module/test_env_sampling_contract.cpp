@@ -138,7 +138,8 @@ TEST(TheiaEnvSamplingContract, PdfEvaluationMatchesSampledDirections) {
     std::uint32_t state = harmonia::Rng::composeSeed({3U, 5U}, 2U, 1U, 77U);
     for (std::size_t i = 0; i < 64; ++i) {
         float sampledPdf = 0.0F;
-        const sm::float3 dir = sampleEnvImportanceDir(marginal, conditional, W, H, harmonia::Rng::nextFloat2(state), sampledPdf);
+        const sm::float3 dir =
+            sampleEnvImportanceDir(marginal, conditional, W, H, harmonia::Rng::nextFloat2(state), sampledPdf);
         const float evalPdf = evalEnvImportancePdfDir(marginal, conditional, W, H, dir);
         EXPECT_TRUE(std::isfinite(sampledPdf));
         EXPECT_TRUE(std::isfinite(evalPdf));

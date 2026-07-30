@@ -70,8 +70,10 @@ class Scene : public harmonia::SceneBase {
   public:
     // addMaterial / addTexture / addInstance / addMesh / build are inherited concrete from SceneBase.
 
-    [[nodiscard]] std::uint32_t
-    addSphereMesh(const harmonia::DeviceContext& ctx, const harmonia::CommandPool& pool, float radius, std::string_view name = "") override;
+    [[nodiscard]] std::uint32_t addSphereMesh(const harmonia::DeviceContext& ctx,
+                                              const harmonia::CommandPool& pool,
+                                              float radius,
+                                              std::string_view name = "") override;
 
     [[nodiscard]] VkAccelerationStructureKHR tlas() const noexcept { return m_tlas.handle(); }
     [[nodiscard]] VkDeviceAddress tlasAddress() const noexcept { return m_tlasAddress; }
@@ -91,7 +93,9 @@ class Scene : public harmonia::SceneBase {
     /// Current frame.  Static scenes upload once at build.
     [[nodiscard]] const harmonia::Buffer& instanceTransformBuffer() const noexcept { return m_instanceTransformBuffer; }
     /// Per-instance transforms from the previous frame (motion-vector pass).
-    [[nodiscard]] const harmonia::Buffer& prevInstanceTransformBuffer() const noexcept { return m_prevInstanceTransformBuffer; }
+    [[nodiscard]] const harmonia::Buffer& prevInstanceTransformBuffer() const noexcept {
+        return m_prevInstanceTransformBuffer;
+    }
 
     [[nodiscard]] const harmonia::Buffer& objectIdBuffer() const noexcept { return m_objectIdBuffer; }
 
@@ -143,7 +147,8 @@ class Scene : public harmonia::SceneBase {
                                 const std::vector<GpuMeshlet>& gpuMeshlets,
                                 const std::vector<std::uint32_t>& meshletVertices,
                                 const std::vector<std::uint32_t>& meshletTriangles);
-    void synthesizeEmissiveLights(const std::vector<harmonia::GpuMaterial>& gpuMaterials, std::vector<harmonia::GpuLight>& gpuLights);
+    void synthesizeEmissiveLights(const std::vector<harmonia::GpuMaterial>& gpuMaterials,
+                                  std::vector<harmonia::GpuLight>& gpuLights);
 
     std::vector<MeshGpu> m_meshGpu;          ///< per-mesh ranges (parallel to m_meshes)
     std::vector<GpuInstance> m_gpuInstances; ///< per-instance GPU rows (built at build)

@@ -58,11 +58,11 @@ void TaaPass::shutdown() {
 bool TaaPass::createImages() noexcept {
     // History buffer: read each frame as a sampled image; written by vkCmdCopyImage each frame.
     auto hist = harmonia::Image::create(*m_ctx,
-                              {m_cfg.width, m_cfg.height},
-                              VK_FORMAT_R32G32B32A32_SFLOAT,
-                              VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-                              VK_IMAGE_ASPECT_COLOR_BIT,
-                              "theia.taa.history");
+                                        {m_cfg.width, m_cfg.height},
+                                        VK_FORMAT_R32G32B32A32_SFLOAT,
+                                        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                        VK_IMAGE_ASPECT_COLOR_BIT,
+                                        "theia.taa.history");
     if (!hist) {
         harmonia::Logger::error("TaaPass: failed to create history image: VkResult {}", static_cast<int>(hist.error()));
         return false;
@@ -71,13 +71,14 @@ bool TaaPass::createImages() noexcept {
 
     // TAA output: written by compute dispatch, then copied to history and HDR each frame.
     auto out = harmonia::Image::create(*m_ctx,
-                             {m_cfg.width, m_cfg.height},
-                             VK_FORMAT_R32G32B32A32_SFLOAT,
-                             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-                             VK_IMAGE_ASPECT_COLOR_BIT,
-                             "theia.taa.output");
+                                       {m_cfg.width, m_cfg.height},
+                                       VK_FORMAT_R32G32B32A32_SFLOAT,
+                                       VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                                       VK_IMAGE_ASPECT_COLOR_BIT,
+                                       "theia.taa.output");
     if (!out) {
-        harmonia::Logger::error("TaaPass: failed to create TAA output image: VkResult {}", static_cast<int>(out.error()));
+        harmonia::Logger::error("TaaPass: failed to create TAA output image: VkResult {}",
+                                static_cast<int>(out.error()));
         return false;
     }
     m_taaOutput = std::move(*out);

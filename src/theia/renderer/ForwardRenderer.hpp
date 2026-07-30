@@ -15,8 +15,8 @@
 #include "harmonia/core/VulkanHandle.hpp"
 #include "harmonia/renderer/Camera.hpp"
 #include "theia/renderer/GpuCullPass.hpp"
-#include "theia/renderer/HiZPass.hpp"
 #include "theia/renderer/GpuDrivenState.hpp"
+#include "theia/renderer/HiZPass.hpp"
 #include "theia/renderer/IblPrecompute.hpp"
 #include "theia/renderer/RendererConstants.hpp"
 
@@ -103,7 +103,9 @@ class ForwardRenderer {
     /// A4: when ReSTIR DI owns emissive-triangle direct lighting (in GiPass), the forward
     /// pass must skip its emissive-derived rect/area lights to avoid double-counting.
     /// Encoded as bit 1 of the `giEnabled` push constant. Punctual lights are unaffected.
-    void setRestirDiActive(bool active) noexcept { m_render.giEnabled = (m_render.giEnabled & ~2U) | (active ? 2U : 0U); }
+    void setRestirDiActive(bool active) noexcept {
+        m_render.giEnabled = (m_render.giEnabled & ~2U) | (active ? 2U : 0U);
+    }
     /// Max transparent gather depth for coverage/transmission rays (scene max_depth).
     void setTransparentMaxDepth(std::uint32_t depth) noexcept { m_render.transparentMaxDepth = std::max(1u, depth); }
     /// Per-frame RNG state plumbed into shader push constants.
@@ -234,8 +236,8 @@ class ForwardRenderer {
     /// Render-state / RNG cohort (extracted, R8/CH9): flags + per-frame state plumbed into
     /// the mesh-shader push constants.
     struct RenderState {
-        std::uint32_t giEnabled = 0;       ///< bit0 = GiPass active, bit1 = ReSTIR DI active
-        float debugRayHitMode = 0.0f;      ///< 0=off, 1=ray-hit albedo, 2=ray-hit radiance
+        std::uint32_t giEnabled = 0;  ///< bit0 = GiPass active, bit1 = ReSTIR DI active
+        float debugRayHitMode = 0.0f; ///< 0=off, 1=ray-hit albedo, 2=ray-hit radiance
         std::uint32_t transparentMaxDepth = 2;
         std::uint32_t frameSampleIndex = 0;
         std::uint32_t rngBaseSeed = 0x12345678U;
@@ -247,15 +249,15 @@ class ForwardRenderer {
     /// Descriptor-binding cohort (extracted, R8/CH9): the four mesh-shader descriptor sets
     /// (geometry / material+light / IBL / bindless-texture) + their layouts + the pool.
     struct DescriptorState {
-        harmonia::UniqueDescriptorSetLayout meshSetLayout;    ///< set 0: geometry buffers
+        harmonia::UniqueDescriptorSetLayout meshSetLayout; ///< set 0: geometry buffers
         VkDescriptorSet meshSet = VK_NULL_HANDLE;
-        harmonia::UniqueDescriptorSetLayout matSetLayout;     ///< set 1: material/lighting buffers
+        harmonia::UniqueDescriptorSetLayout matSetLayout; ///< set 1: material/lighting buffers
         VkDescriptorSet matSet = VK_NULL_HANDLE;
-        harmonia::UniqueDescriptorSetLayout iblSetLayout;     ///< set 2: IBL textures + samplers
+        harmonia::UniqueDescriptorSetLayout iblSetLayout; ///< set 2: IBL textures + samplers
         VkDescriptorSet iblSet = VK_NULL_HANDLE;
         harmonia::UniqueDescriptorSetLayout textureSetLayout; ///< set 3: bindless material textures
         VkDescriptorSet textureSet = VK_NULL_HANDLE;
-        const Scene* texturesBoundFor = nullptr;              ///< scene the bindless set was last written for
+        const Scene* texturesBoundFor = nullptr; ///< scene the bindless set was last written for
         harmonia::UniqueDescriptorPool descriptorPool;
     } m_desc;
 

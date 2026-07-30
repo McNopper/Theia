@@ -73,8 +73,8 @@ int main(int argc, char* const argv[]) {
     // be active, so an *explicit* --taa together with --output is not allowed.
     if (taaForcedOn && !config.outputFile.empty()) {
         harmonia::Logger::error("--taa is incompatible with offscreen capture (--output): offscreen rendering uses "
-                      "progressive accumulation for anti-aliasing, and TAA would double-filter it. Drop "
-                      "--taa for offscreen capture, or omit --output for interactive TAA.");
+                                "progressive accumulation for anti-aliasing, and TAA would double-filter it. Drop "
+                                "--taa for offscreen capture, or omit --output for interactive TAA.");
         return 2;
     }
 

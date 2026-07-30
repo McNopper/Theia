@@ -79,8 +79,8 @@ class HiZPass {
     std::uint32_t m_height = 0;
     std::uint32_t m_mipLevels = 1;
 
-    harmonia::Image m_image{};                                       ///< R32F max-depth pyramid (STORAGE + SAMPLED)
-    std::vector<harmonia::UniqueImageView> m_mipViews;     ///< one single-level storage view per mip
+    harmonia::Image m_image{};                         ///< R32F max-depth pyramid (STORAGE + SAMPLED)
+    std::vector<harmonia::UniqueImageView> m_mipViews; ///< one single-level storage view per mip
 
     harmonia::UniqueDescriptorSetLayout m_setLayout;
     harmonia::UniquePipelineLayout m_pipelineLayout;

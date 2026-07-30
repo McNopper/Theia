@@ -37,7 +37,10 @@ HiZPass::~HiZPass() {
     shutdown();
 }
 
-bool HiZPass::initialize(const harmonia::DeviceContext& ctx, std::uint32_t width, std::uint32_t height, const char* spvName) {
+bool HiZPass::initialize(const harmonia::DeviceContext& ctx,
+                         std::uint32_t width,
+                         std::uint32_t height,
+                         const char* spvName) {
     shutdown();
     m_ctx = &ctx;
     m_width = width;
@@ -83,12 +86,12 @@ void HiZPass::shutdown() {
 
 bool HiZPass::createImage() noexcept {
     auto img = harmonia::Image::create(*m_ctx,
-                             {m_width, m_height},
-                             VK_FORMAT_R32_SFLOAT,
-                             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                             VK_IMAGE_ASPECT_COLOR_BIT,
-                             "theia.hiZ",
-                             m_mipLevels);
+                                       {m_width, m_height},
+                                       VK_FORMAT_R32_SFLOAT,
+                                       VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                       VK_IMAGE_ASPECT_COLOR_BIT,
+                                       "theia.hiZ",
+                                       m_mipLevels);
     if (!img) {
         harmonia::Logger::error("HiZPass: failed to create Hi-Z image: VkResult {}", static_cast<int>(img.error()));
         return false;

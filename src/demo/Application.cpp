@@ -262,9 +262,9 @@ bool Application::onSceneLoaded(const harmonia::SceneLoader::SceneConfig& sceneC
     m_renderer->setTransparentMaxDepth(sceneConfig.maxDepth.value_or(2u));
 
     harmonia::Logger::info("Loaded scene: {} instances, {} bytes vb, {} bytes ib",
-                 m_scene->instanceCount(),
-                 m_scene->vertexBuffer().size(),
-                 m_scene->indexBuffer().size());
+                           m_scene->instanceCount(),
+                           m_scene->vertexBuffer().size(),
+                           m_scene->indexBuffer().size());
 
     // IBL: the host loaded the environment probe (if any); precompute the
     // renderer-specific BRDF LUT / irradiance resources from it.

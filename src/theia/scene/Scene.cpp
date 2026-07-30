@@ -39,8 +39,10 @@ GpuInstanceBounds worldBounds(const Scene::MeshGpu& mesh, const harmonia::Xform&
 
 } // namespace
 
-std::uint32_t
-Scene::addSphereMesh(const harmonia::DeviceContext& ctx, const harmonia::CommandPool& pool, float radius, std::string_view name) {
+std::uint32_t Scene::addSphereMesh(const harmonia::DeviceContext& ctx,
+                                   const harmonia::CommandPool& pool,
+                                   float radius,
+                                   std::string_view name) {
     // Theia is a rasterizer (mesh-shader pipeline), so an analytic sphere cannot
     // be drawn directly — it is tessellated into a triangle mesh (object space,
     // centred at the origin) and placed by the instance transform.
@@ -84,12 +86,13 @@ VkResult Scene::buildSceneBuffers(const harmonia::DeviceContext& ctx, const harm
     if (gpuLights.empty()) {
         gpuLights.push_back(harmonia::GpuLight{});
     }
-    if (VkResult r = uploadBuffer(ctx,
-                                  pool,
-                                  std::as_bytes(std::span<const harmonia::GpuLight>(gpuLights.data(), gpuLights.size())),
-                                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                  "scene.lights",
-                                  m_lightBuffer)) {
+    if (VkResult r =
+            uploadBuffer(ctx,
+                         pool,
+                         std::as_bytes(std::span<const harmonia::GpuLight>(gpuLights.data(), gpuLights.size())),
+                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                         "scene.lights",
+                         m_lightBuffer)) {
         return r;
     }
 
@@ -101,8 +104,8 @@ VkResult Scene::buildSceneBuffers(const harmonia::DeviceContext& ctx, const harm
     }
     if (VkResult r = uploadBuffer(ctx,
                                   pool,
-                                  std::as_bytes(std::span<const harmonia::GpuEmissiveTriangle>(emissiveData.triangles.data(),
-                                                                                     emissiveData.triangles.size())),
+                                  std::as_bytes(std::span<const harmonia::GpuEmissiveTriangle>(
+                                      emissiveData.triangles.data(), emissiveData.triangles.size())),
                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                   "scene.emissiveTriangles",
                                   m_emissiveTriangleBuffer)) {
@@ -328,12 +331,13 @@ VkResult Scene::uploadSceneBuffers(const harmonia::DeviceContext& ctx,
             m_instanceBoundsBuffer)) {
         return r;
     }
-    if (VkResult r = uploadBuffer(ctx,
-                                  pool,
-                                  std::as_bytes(std::span<const harmonia::GpuMaterial>(gpuMaterials.data(), gpuMaterials.size())),
-                                  kStorageAddr,
-                                  "scene.materials",
-                                  m_materialBuffer)) {
+    if (VkResult r = uploadBuffer(
+            ctx,
+            pool,
+            std::as_bytes(std::span<const harmonia::GpuMaterial>(gpuMaterials.data(), gpuMaterials.size())),
+            kStorageAddr,
+            "scene.materials",
+            m_materialBuffer)) {
         return r;
     }
     if (VkResult r = uploadBuffer(ctx,
@@ -420,7 +424,8 @@ VkResult Scene::uploadSceneBuffers(const harmonia::DeviceContext& ctx,
     return VK_SUCCESS;
 }
 
-void Scene::synthesizeEmissiveLights(const std::vector<harmonia::GpuMaterial>& gpuMaterials, std::vector<harmonia::GpuLight>& gpuLights) {
+void Scene::synthesizeEmissiveLights(const std::vector<harmonia::GpuMaterial>& gpuMaterials,
+                                     std::vector<harmonia::GpuLight>& gpuLights) {
     if (!m_lights.empty()) {
         return;
     }
@@ -488,13 +493,14 @@ void Scene::synthesizeEmissiveLights(const std::vector<harmonia::GpuMaterial>& g
             gl.halfWidth = radius;
             gl.halfHeight = radius;
             gpuLights.push_back(gl);
-            harmonia::Logger::info("Scene: emissive mesh {} → harmonia::PointLight at ({:.1f},{:.1f},{:.1f}) lum={:.0f} r={:.2f}",
-                         i,
-                         centroid.x,
-                         centroid.y,
-                         centroid.z,
-                         luminance,
-                         radius);
+            harmonia::Logger::info(
+                "Scene: emissive mesh {} → harmonia::PointLight at ({:.1f},{:.1f},{:.1f}) lum={:.0f} r={:.2f}",
+                i,
+                centroid.x,
+                centroid.y,
+                centroid.z,
+                luminance,
+                radius);
             continue;
         }
 
@@ -525,14 +531,15 @@ void Scene::synthesizeEmissiveLights(const std::vector<harmonia::GpuMaterial>& g
         gl.halfWidth = halfW;
         gl.halfHeight = halfH;
         gpuLights.push_back(gl);
-        harmonia::Logger::info("Scene: emissive mesh {} → harmonia::RectLight at ({:.1f},{:.1f},{:.1f}) lum={:.0f} hw={:.1f} hh={:.1f}",
-                     i,
-                     centroid.x,
-                     centroid.y,
-                     centroid.z,
-                     luminance,
-                     halfW,
-                     halfH);
+        harmonia::Logger::info(
+            "Scene: emissive mesh {} → harmonia::RectLight at ({:.1f},{:.1f},{:.1f}) lum={:.0f} hw={:.1f} hh={:.1f}",
+            i,
+            centroid.x,
+            centroid.y,
+            centroid.z,
+            luminance,
+            halfW,
+            halfH);
     }
 }
 

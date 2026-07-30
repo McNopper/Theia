@@ -189,11 +189,11 @@ void IblPrecompute::shutdown() {
 
 bool IblPrecompute::createTextures() {
     auto sheen = harmonia::Image::create(*m_ctx,
-                               kSheenExtent,
-                               VK_FORMAT_R16_SFLOAT,
-                               VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                               VK_IMAGE_ASPECT_COLOR_BIT,
-                               "theia.ibl.sheen");
+                                         kSheenExtent,
+                                         VK_FORMAT_R16_SFLOAT,
+                                         VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                         VK_IMAGE_ASPECT_COLOR_BIT,
+                                         "theia.ibl.sheen");
     if (!sheen) {
         harmonia::Logger::error("IblPrecompute: failed to create sheen LUT image");
         return false;
@@ -201,38 +201,38 @@ bool IblPrecompute::createTextures() {
     m_res.sheenLut = std::move(*sheen);
 
     auto brdf = harmonia::Image::create(*m_ctx,
-                              kSheenExtent,
-                              VK_FORMAT_R16G16_SFLOAT,
-                              VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                              VK_IMAGE_ASPECT_COLOR_BIT,
-                              "theia.ibl.brdf");
+                                        kSheenExtent,
+                                        VK_FORMAT_R16G16_SFLOAT,
+                                        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                        VK_IMAGE_ASPECT_COLOR_BIT,
+                                        "theia.ibl.brdf");
     if (!brdf) {
         harmonia::Logger::error("IblPrecompute: failed to create BRDF LUT image");
         return false;
     }
     m_res.brdfLut = std::move(*brdf);
 
-    auto diffuse =
-        harmonia::Image::create(*m_ctx,
-                      m_diffuseExtent,
-                      VK_FORMAT_R16G16B16A16_SFLOAT,
-                      VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-                      VK_IMAGE_ASPECT_COLOR_BIT,
-                      "theia.ibl.diffuse");
+    auto diffuse = harmonia::Image::create(*m_ctx,
+                                           m_diffuseExtent,
+                                           VK_FORMAT_R16G16B16A16_SFLOAT,
+                                           VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                               VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                           VK_IMAGE_ASPECT_COLOR_BIT,
+                                           "theia.ibl.diffuse");
     if (!diffuse) {
         harmonia::Logger::error("IblPrecompute: failed to create diffuse irradiance image");
         return false;
     }
     m_res.diffuseIrrad = std::move(*diffuse);
 
-    auto specular =
-        harmonia::Image::create(*m_ctx,
-                      kSpecularExtent,
-                      VK_FORMAT_R16G16B16A16_SFLOAT,
-                      VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
-                      VK_IMAGE_ASPECT_COLOR_BIT,
-                      "theia.ibl.specular",
-                      kSpecularMipLevels);
+    auto specular = harmonia::Image::create(*m_ctx,
+                                            kSpecularExtent,
+                                            VK_FORMAT_R16G16B16A16_SFLOAT,
+                                            VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                                VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                            VK_IMAGE_ASPECT_COLOR_BIT,
+                                            "theia.ibl.specular",
+                                            kSpecularMipLevels);
     if (!specular) {
         harmonia::Logger::error("IblPrecompute: failed to create specular prefilter image");
         return false;
@@ -304,7 +304,10 @@ bool IblPrecompute::runSheenLutPass(VkCommandBuffer cmd) {
     return runLutPass(cmd, m_res.sheenLut, "ibl_sheen_lut.comp.spv", "sheen");
 }
 
-bool IblPrecompute::runLutPass(VkCommandBuffer cmd, harmonia::Image& targetImage, const char* shaderName, const char* logLabel) {
+bool IblPrecompute::runLutPass(VkCommandBuffer cmd,
+                               harmonia::Image& targetImage,
+                               const char* shaderName,
+                               const char* logLabel) {
     const VkDescriptorSetLayoutBinding binding{
         0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     const VkDescriptorSetLayoutCreateInfo layoutInfo{

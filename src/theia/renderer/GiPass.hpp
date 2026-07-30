@@ -109,7 +109,8 @@ class GiPass {
     GiPass(const GiPass&) = delete;
     GiPass& operator=(const GiPass&) = delete;
 
-    [[nodiscard]] bool initialize(const harmonia::DeviceContext& ctx, const Config& cfg, const char* giSpv = "gi.comp.spv");
+    [[nodiscard]] bool
+    initialize(const harmonia::DeviceContext& ctx, const Config& cfg, const char* giSpv = "gi.comp.spv");
     void shutdown();
 
     /// Dispatch the GI accumulation pass. Call AFTER ForwardRenderer::recordFrame()

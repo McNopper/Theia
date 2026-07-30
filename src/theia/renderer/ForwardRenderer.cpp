@@ -186,15 +186,15 @@ bool ForwardRenderer::initialize(const harmonia::DeviceContext& ctx, const Confi
     // Create 1-element dummy buffers for tile light slots (fallback when LightCuller hasn't run).
     constexpr VkDeviceSize kDummySize = sizeof(std::uint32_t) * 128; // >= kMaxLightsPerTile
     auto dummyCounts = harmonia::Buffer::create(ctx,
-                                      kDummySize,
-                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                      VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                                      "theia.dummyTileCounts");
+                                                kDummySize,
+                                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                                VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                                "theia.dummyTileCounts");
     auto dummyIndices = harmonia::Buffer::create(ctx,
-                                       kDummySize,
-                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                       VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                                       "theia.dummyTileIndices");
+                                                 kDummySize,
+                                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                                 VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                                 "theia.dummyTileIndices");
     if (dummyCounts && dummyIndices) {
         m_dummyTileCounts = std::move(*dummyCounts);
         m_dummyTileIndices = std::move(*dummyIndices);
@@ -207,10 +207,10 @@ bool ForwardRenderer::initialize(const harmonia::DeviceContext& ctx, const Confi
         std::vector<std::uint32_t> identity(kIdCount);
         std::iota(identity.begin(), identity.end(), 0u);
         auto identBuf = harmonia::Buffer::create(ctx,
-                                       static_cast<VkDeviceSize>(kIdCount) * sizeof(std::uint32_t),
-                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                       VMA_MEMORY_USAGE_CPU_TO_GPU,
-                                       "theia.identityInstanceList");
+                                                 static_cast<VkDeviceSize>(kIdCount) * sizeof(std::uint32_t),
+                                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                                 VMA_MEMORY_USAGE_CPU_TO_GPU,
+                                                 "theia.identityInstanceList");
         if (identBuf) {
             identBuf->uploadData(identity.data(), static_cast<VkDeviceSize>(kIdCount) * sizeof(std::uint32_t), 0);
             m_gpu.identityInstanceList = std::move(*identBuf);
@@ -221,8 +221,9 @@ bool ForwardRenderer::initialize(const harmonia::DeviceContext& ctx, const Confi
     m_hdrFirstUse = true;
     const char* drawPath = m_gpu.dgcLayout != VK_NULL_HANDLE   ? "DGC"
                            : m_gpu.gpuCullPass.isInitialized() ? "indirect"
-                                                           : "CPU-count";
-    harmonia::Logger::info("GPU-driven forward renderer initialized ({}x{}) [{}]", config.width, config.height, drawPath);
+                                                               : "CPU-count";
+    harmonia::Logger::info(
+        "GPU-driven forward renderer initialized ({}x{}) [{}]", config.width, config.height, drawPath);
     return true;
 }
 
@@ -408,11 +409,11 @@ bool ForwardRenderer::createDepthTarget() {
     VkExtent2D extent{m_config.width, m_config.height};
     // SAMPLED_BIT so SSR can read depth after the forward pass.
     auto depthResult = harmonia::Image::create(*m_ctx,
-                                     extent,
-                                     VK_FORMAT_D32_SFLOAT,
-                                     VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                                     VK_IMAGE_ASPECT_DEPTH_BIT,
-                                     "theia.depth");
+                                               extent,
+                                               VK_FORMAT_D32_SFLOAT,
+                                               VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                               VK_IMAGE_ASPECT_DEPTH_BIT,
+                                               "theia.depth");
     if (!depthResult) {
         harmonia::Logger::error("Failed to create depth target");
         return false;
@@ -422,11 +423,11 @@ bool ForwardRenderer::createDepthTarget() {
     // GBuffer: RGBA16F — view-space normal (xyz * 0.5 + 0.5) + roughness (w).
     // SAMPLED_BIT so SSR compute can sample it; STORAGE_BIT reserved for future post-process.
     auto gbufResult = harmonia::Image::create(*m_ctx,
-                                    extent,
-                                    VK_FORMAT_R16G16B16A16_SFLOAT,
-                                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                                    VK_IMAGE_ASPECT_COLOR_BIT,
-                                    "theia.gbuffer");
+                                              extent,
+                                              VK_FORMAT_R16G16B16A16_SFLOAT,
+                                              VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                              VK_IMAGE_ASPECT_COLOR_BIT,
+                                              "theia.gbuffer");
     if (!gbufResult) {
         harmonia::Logger::error("Failed to create GBuffer target");
         return false;
@@ -438,11 +439,11 @@ bool ForwardRenderer::createDepthTarget() {
     // material index bit-exact and the world position at full precision for ray seeding.
     // SAMPLED_BIT so the GI compute stage can fetch it via texelFetch (Texture2D.Load).
     auto giBufResult = harmonia::Image::create(*m_ctx,
-                                     extent,
-                                     VK_FORMAT_R32G32B32A32_SFLOAT,
-                                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                                     VK_IMAGE_ASPECT_COLOR_BIT,
-                                     "theia.gibuffer");
+                                               extent,
+                                               VK_FORMAT_R32G32B32A32_SFLOAT,
+                                               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                               VK_IMAGE_ASPECT_COLOR_BIT,
+                                               "theia.gibuffer");
     if (!giBufResult) {
         harmonia::Logger::error("Failed to create GI GBuffer target");
         return false;
@@ -1090,7 +1091,9 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
 
     const bool twoPass = canDraw && visReady && !m_gpu.forceSinglePass;
     const std::uint32_t hiZMip =
-        (twoPass && m_gpu.hiZPass.isInitialized() && m_gpu.hiZTestEnabled && !m_gpu.hiZDebugDisabled) ? m_gpu.hiZPass.mipLevels() : 0u;
+        (twoPass && m_gpu.hiZPass.isInitialized() && m_gpu.hiZTestEnabled && !m_gpu.hiZDebugDisabled)
+            ? m_gpu.hiZPass.mipLevels()
+            : 0u;
 
     if (!twoPass) {
         recordOpaquePass(cmd, pcBase);
@@ -1634,7 +1637,8 @@ void ForwardRenderer::recordSky(VkCommandBuffer cmd) {
                                            m_camera.farPlane);
     skyProj[1][1] *= -1.0f;
     if (m_render.cameraJitterEnabled) {
-        skyProj = applyProjectionJitter(skyProj, cameraJitterNdc(m_render.frameSampleIndex, m_config.width, m_config.height));
+        skyProj =
+            applyProjectionJitter(skyProj, cameraJitterNdc(m_render.frameSampleIndex, m_config.width, m_config.height));
     }
     const sm::float4x4 skyView = sm::lookAt(m_camera.position, m_camera.target, m_camera.up);
     const sm::float4x4 skyViewProj = skyProj * skyView;
@@ -1647,7 +1651,8 @@ void ForwardRenderer::recordSky(VkCommandBuffer cmd) {
         ._pad1 = 0u,
     };
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skyPipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skyPipelineLayout, 0, 1, &m_desc.iblSet, 0, nullptr);
+    vkCmdBindDescriptorSets(
+        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skyPipelineLayout, 0, 1, &m_desc.iblSet, 0, nullptr);
     vkCmdPushConstants(
         cmd, m_skyPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(skyPc), &skyPc);
     vkCmdDraw(cmd, 3, 1, 0, 0);

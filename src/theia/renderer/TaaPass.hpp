@@ -41,7 +41,8 @@ class TaaPass {
     TaaPass(const TaaPass&) = delete;
     TaaPass& operator=(const TaaPass&) = delete;
 
-    [[nodiscard]] bool initialize(const harmonia::DeviceContext& ctx, const Config& cfg, const char* spvName = "taa.comp.spv");
+    [[nodiscard]] bool
+    initialize(const harmonia::DeviceContext& ctx, const Config& cfg, const char* spvName = "taa.comp.spv");
     void shutdown();
 
     /// Dispatch TAA.

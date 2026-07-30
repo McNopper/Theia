@@ -38,14 +38,14 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx, const Config& cfg, c
     // A3(b): 1×1 R32G32F placeholder for binding 15 when no A-SVGF gradient/variance
     // guide is available. Keeps the descriptor valid; hasGradientVariance=0 gates reads.
     auto dummyGrad = harmonia::Image::create(ctx,
-                                   {1U, 1U},
-                                   VK_FORMAT_R32G32_SFLOAT,
-                                   VK_IMAGE_USAGE_SAMPLED_BIT,
-                                   VK_IMAGE_ASPECT_COLOR_BIT,
-                                   "theia.gi.dummyGradientVariance");
+                                             {1U, 1U},
+                                             VK_FORMAT_R32G32_SFLOAT,
+                                             VK_IMAGE_USAGE_SAMPLED_BIT,
+                                             VK_IMAGE_ASPECT_COLOR_BIT,
+                                             "theia.gi.dummyGradientVariance");
     if (!dummyGrad) {
         harmonia::Logger::error("GiPass: failed to create dummy gradient/variance image: VkResult {}",
-                      static_cast<int>(dummyGrad.error()));
+                                static_cast<int>(dummyGrad.error()));
         return false;
     }
     m_dummyGradientVariance = std::move(*dummyGrad);
@@ -53,14 +53,14 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx, const Config& cfg, c
     // A4: 1×1 R32G32F zero placeholder for the motion-vector binding (18) when no real
     // motion vectors are wired (static-history temporal reuse).
     auto dummyMotion = harmonia::Image::create(ctx,
-                                     {1U, 1U},
-                                     VK_FORMAT_R32G32_SFLOAT,
-                                     VK_IMAGE_USAGE_SAMPLED_BIT,
-                                     VK_IMAGE_ASPECT_COLOR_BIT,
-                                     "theia.gi.dummyMotionVectors");
+                                               {1U, 1U},
+                                               VK_FORMAT_R32G32_SFLOAT,
+                                               VK_IMAGE_USAGE_SAMPLED_BIT,
+                                               VK_IMAGE_ASPECT_COLOR_BIT,
+                                               "theia.gi.dummyMotionVectors");
     if (!dummyMotion) {
         harmonia::Logger::error("GiPass: failed to create dummy motion-vector image: VkResult {}",
-                      static_cast<int>(dummyMotion.error()));
+                                static_cast<int>(dummyMotion.error()));
         return false;
     }
     m_dummyMotionVectors = std::move(*dummyMotion);
@@ -72,13 +72,13 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx, const Config& cfg, c
     if (reservoirBytes > 0) {
         for (auto& slot : m_reservoirBuf) {
             auto buf = harmonia::Buffer::create(ctx,
-                                      reservoirBytes,
-                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                      VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                                      "theia.gi.restirReservoir");
+                                                reservoirBytes,
+                                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                                "theia.gi.restirReservoir");
             if (!buf) {
                 harmonia::Logger::error("GiPass: failed to create ReSTIR reservoir buffer: VkResult {}",
-                              static_cast<int>(buf.error()));
+                                        static_cast<int>(buf.error()));
                 return false;
             }
             slot = std::move(*buf);
@@ -88,13 +88,13 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx, const Config& cfg, c
             static_cast<VkDeviceSize>(cfg.width) * static_cast<VkDeviceSize>(cfg.height) * kPathReservoirStride;
         for (auto& slot : m_pathReservoirBuf) {
             auto buf = harmonia::Buffer::create(ctx,
-                                      pathReservoirBytes,
-                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                      VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                                      "theia.gi.restirPathReservoir");
+                                                pathReservoirBytes,
+                                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                                "theia.gi.restirPathReservoir");
             if (!buf) {
                 harmonia::Logger::error("GiPass: failed to create ReSTIR path reservoir buffer: VkResult {}",
-                              static_cast<int>(buf.error()));
+                                        static_cast<int>(buf.error()));
                 return false;
             }
             slot = std::move(*buf);

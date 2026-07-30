@@ -53,7 +53,8 @@ class GpuCullPass {
 
     /// Initialize the cull pass pipeline and output buffers.
     /// @param spvFilename  SPIR-V filename resolved against THEIA_SHADER_DIR.
-    [[nodiscard]] bool initialize(const harmonia::DeviceContext& ctx, const char* spvFilename = "forward_cull.comp.spv");
+    [[nodiscard]] bool initialize(const harmonia::DeviceContext& ctx,
+                                  const char* spvFilename = "forward_cull.comp.spv");
 
     void shutdown();
 
@@ -97,7 +98,7 @@ class GpuCullPass {
     VkDescriptorSet m_set = VK_NULL_HANDLE;
 
     harmonia::Buffer m_compactInstanceListBuf; ///< uint[kMaxInstances]  STORAGE
-    harmonia::Buffer m_indirectDrawBuf;        ///< single VkDrawMeshTasksIndirectCommandEXT  STORAGE | INDIRECT | DEVICE_ADDR
+    harmonia::Buffer m_indirectDrawBuf; ///< single VkDrawMeshTasksIndirectCommandEXT  STORAGE | INDIRECT | DEVICE_ADDR
 };
 
 } // namespace theia
