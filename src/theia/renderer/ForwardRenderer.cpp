@@ -154,10 +154,10 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
     char* debugModeRaw = nullptr;
     std::size_t debugModeLen = 0;
     if (_dupenv_s(&debugModeRaw, &debugModeLen, "THEIA_DEBUG_RAY_HIT_MODE") == 0 && debugModeRaw != nullptr) {
-        m_debugRayHitMode = std::clamp(std::strtof(debugModeRaw, nullptr), 0.0f, 6.0f);
+        m_render.debugRayHitMode = std::clamp(std::strtof(debugModeRaw, nullptr), 0.0f, 6.0f);
         std::free(debugModeRaw);
-        if (m_debugRayHitMode > 0.0f) {
-            Logger::info("THEIA_DEBUG_RAY_HIT_MODE = {:.1f}", m_debugRayHitMode);
+        if (m_render.debugRayHitMode > 0.0f) {
+            Logger::info("THEIA_DEBUG_RAY_HIT_MODE = {:.1f}", m_render.debugRayHitMode);
         }
     }
 
@@ -1028,8 +1028,8 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
                                         m_camera.nearPlane,
                                         m_camera.farPlane);
     proj[1][1] *= -1.0f;
-    if (m_cameraJitterEnabled) {
-        proj = applyProjectionJitter(proj, cameraJitterNdc(m_frameSampleIndex, m_config.width, m_config.height));
+    if (m_render.cameraJitterEnabled) {
+        proj = applyProjectionJitter(proj, cameraJitterNdc(m_render.frameSampleIndex, m_config.width, m_config.height));
     }
     const sm::float4x4 view = sm::lookAt(m_camera.position, m_camera.target, m_camera.up);
     const sm::float4x4 viewProj = proj * view;
@@ -1050,22 +1050,22 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         .tilesY = m_tilesY,
         .screenWidth = m_config.width,
         .screenHeight = m_config.height,
-        .transparentMaxDepth = m_transparentMaxDepth,
-        .frameSampleIndex = m_frameSampleIndex,
-        .rngBaseSeed = m_rngBaseSeed,
-        .rngFlags = (m_deterministicReplay ? 0x1u : 0u) | (m_rngDebug != 0u ? 0x2u : 0u),
+        .transparentMaxDepth = m_render.transparentMaxDepth,
+        .frameSampleIndex = m_render.frameSampleIndex,
+        .rngBaseSeed = m_render.rngBaseSeed,
+        .rngFlags = (m_render.deterministicReplay ? 0x1u : 0u) | (m_render.rngDebug != 0u ? 0x2u : 0u),
         .cullPhase = 0u,
         .envImportanceWidth = m_envImportanceWidth,
         .envImportanceHeight = m_envImportanceHeight,
         .hiZMipCount = 0u,
-        .giEnabled = m_giEnabled,
+        .giEnabled = m_render.giEnabled,
         // Ray-traced sun shadow: direction toward the dominant IBL light + strength.
         // shadowParams: x = ray tMin (scene-scale bias from camera near plane), y = sky ambient
         // floor, z = env_unit_nits, w = |proj[0][0]| (Hi-Z footprint x scale).
         .sunDirection = sm::float4(m_sunDir, m_hasEnv ? m_sunStrength : 0.0f),
         .shadowParams = sm::float4(std::max(m_camera.nearPlane, 1e-4f), 0.35f, m_envUnitNits, projScaleX),
         // presentationParams.w = |proj[1][1]| (Hi-Z footprint y scale).
-        .presentationParams = sm::float4(m_indirectAmbientStrength, 0.0f, m_debugRayHitMode, projScaleY),
+        .presentationParams = sm::float4(m_indirectAmbientStrength, 0.0f, m_render.debugRayHitMode, projScaleY),
     };
 
     // Set dynamic state (shared by both passes).
@@ -1633,8 +1633,8 @@ void ForwardRenderer::recordSky(VkCommandBuffer cmd) {
                                            m_camera.nearPlane,
                                            m_camera.farPlane);
     skyProj[1][1] *= -1.0f;
-    if (m_cameraJitterEnabled) {
-        skyProj = applyProjectionJitter(skyProj, cameraJitterNdc(m_frameSampleIndex, m_config.width, m_config.height));
+    if (m_render.cameraJitterEnabled) {
+        skyProj = applyProjectionJitter(skyProj, cameraJitterNdc(m_render.frameSampleIndex, m_config.width, m_config.height));
     }
     const sm::float4x4 skyView = sm::lookAt(m_camera.position, m_camera.target, m_camera.up);
     const sm::float4x4 skyViewProj = skyProj * skyView;

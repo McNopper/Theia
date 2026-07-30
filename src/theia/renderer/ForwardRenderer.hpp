@@ -99,21 +99,21 @@ class ForwardRenderer {
     /// When the ray-query GI compute stage (GiPass) is active it supplies indirect
     /// lighting, so the forward pass must skip its flat-IBL / ambient approximation.
     /// Encoded as bit 0 of the `giEnabled` push constant (bit 1 = ReSTIR DI active).
-    void setGiEnabled(bool enabled) noexcept { m_giEnabled = (m_giEnabled & ~1U) | (enabled ? 1U : 0U); }
+    void setGiEnabled(bool enabled) noexcept { m_render.giEnabled = (m_render.giEnabled & ~1U) | (enabled ? 1U : 0U); }
     /// A4: when ReSTIR DI owns emissive-triangle direct lighting (in GiPass), the forward
     /// pass must skip its emissive-derived rect/area lights to avoid double-counting.
     /// Encoded as bit 1 of the `giEnabled` push constant. Punctual lights are unaffected.
-    void setRestirDiActive(bool active) noexcept { m_giEnabled = (m_giEnabled & ~2U) | (active ? 2U : 0U); }
+    void setRestirDiActive(bool active) noexcept { m_render.giEnabled = (m_render.giEnabled & ~2U) | (active ? 2U : 0U); }
     /// Max transparent gather depth for coverage/transmission rays (scene max_depth).
-    void setTransparentMaxDepth(std::uint32_t depth) noexcept { m_transparentMaxDepth = std::max(1u, depth); }
+    void setTransparentMaxDepth(std::uint32_t depth) noexcept { m_render.transparentMaxDepth = std::max(1u, depth); }
     /// Per-frame RNG state plumbed into shader push constants.
     void setRngState(std::uint32_t frameSampleIndex, std::uint32_t baseSeed, bool deterministicReplay) noexcept {
-        m_frameSampleIndex = frameSampleIndex;
-        m_rngBaseSeed = baseSeed;
-        m_deterministicReplay = deterministicReplay;
+        m_render.frameSampleIndex = frameSampleIndex;
+        m_render.rngBaseSeed = baseSeed;
+        m_render.deterministicReplay = deterministicReplay;
     }
-    void setCameraJitterEnabled(bool enabled) noexcept { m_cameraJitterEnabled = enabled; }
-    void setRngDebug(bool enabled) noexcept { m_rngDebug = enabled ? 1U : 0U; }
+    void setCameraJitterEnabled(bool enabled) noexcept { m_render.cameraJitterEnabled = enabled; }
+    void setRngDebug(bool enabled) noexcept { m_render.rngDebug = enabled ? 1U : 0U; }
 
     /// Enable/disable the Hi-Z occlusion test for the NEXT frame. Disabled on a camera cut
     /// (large motion) so newly disoccluded geometry is drawn conservatively.
@@ -231,14 +231,18 @@ class ForwardRenderer {
     sm::float3 m_sunDir{0.0f, 1.0f, 0.0f}; ///< world dir toward dominant IBL light
     float m_sunStrength = 0.0f;            ///< [0,1] ray-traced sun shadow strength
     float m_indirectAmbientStrength = 0.0f;
-    std::uint32_t m_giEnabled = 0;  ///< 1 when GiPass is active (forward skips IBL/ambient)
-    float m_debugRayHitMode = 0.0f; ///< 0=off, 1=ray-hit albedo, 2=ray-hit radiance (debug only)
-    std::uint32_t m_transparentMaxDepth = 2;
-    std::uint32_t m_frameSampleIndex = 0;
-    std::uint32_t m_rngBaseSeed = 0x12345678U;
-    bool m_deterministicReplay = false;
-    bool m_cameraJitterEnabled = true;
-    std::uint32_t m_rngDebug = 0;
+    /// Render-state / RNG cohort (extracted, R8/CH9): flags + per-frame state plumbed into
+    /// the mesh-shader push constants.
+    struct RenderState {
+        std::uint32_t giEnabled = 0;       ///< bit0 = GiPass active, bit1 = ReSTIR DI active
+        float debugRayHitMode = 0.0f;      ///< 0=off, 1=ray-hit albedo, 2=ray-hit radiance
+        std::uint32_t transparentMaxDepth = 2;
+        std::uint32_t frameSampleIndex = 0;
+        std::uint32_t rngBaseSeed = 0x12345678U;
+        bool deterministicReplay = false;
+        bool cameraJitterEnabled = true;
+        std::uint32_t rngDebug = 0;
+    } m_render;
 
     // Set 0: geometry buffers (vertex/instance/index/meshlet data — task + mesh stages)
     harmonia::UniqueDescriptorSetLayout m_meshSetLayout;
