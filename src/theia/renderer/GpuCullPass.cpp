@@ -30,7 +30,7 @@ GpuCullPass::~GpuCullPass() {
     shutdown();
 }
 
-bool GpuCullPass::initialize(const DeviceContext& ctx, const char* spvFilename) {
+bool GpuCullPass::initialize(const harmonia::DeviceContext& ctx, const char* spvFilename) {
     shutdown();
     m_ctx = &ctx;
 
@@ -40,12 +40,12 @@ bool GpuCullPass::initialize(const DeviceContext& ctx, const char* spvFilename) 
     // restores groupCountY=1 and groupCountZ=1, and accumulates groupCountX atomically.
     constexpr VkDeviceSize kIndirectBufSize = kMeshTaskIndirectCmdSize;
 
-    auto compactBuf = Buffer::create(ctx,
+    auto compactBuf = harmonia::Buffer::create(ctx,
                                      kCompactListSize,
                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                      VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
                                      "theia.gpuCull.compactInstanceList");
-    auto indirectBuf = Buffer::create(ctx,
+    auto indirectBuf = harmonia::Buffer::create(ctx,
                                       kIndirectBufSize,
                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
                                           VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
@@ -53,7 +53,7 @@ bool GpuCullPass::initialize(const DeviceContext& ctx, const char* spvFilename) 
                                       "theia.gpuCull.indirectDrawBuf");
 
     if (!compactBuf || !indirectBuf) {
-        Logger::error("GpuCullPass: failed to allocate output buffers");
+        harmonia::Logger::error("GpuCullPass: failed to allocate output buffers");
         return false;
     }
     m_compactInstanceListBuf = std::move(*compactBuf);
@@ -86,12 +86,12 @@ bool GpuCullPass::initialize(const DeviceContext& ctx, const char* spvFilename) 
     };
     VkDescriptorSetLayout setLayout{};
     if (vkCreateDescriptorSetLayout(ctx.device, &setLayoutInfo, nullptr, &setLayout) != VK_SUCCESS) {
-        Logger::error("GpuCullPass: failed to create descriptor set layout");
+        harmonia::Logger::error("GpuCullPass: failed to create descriptor set layout");
         return false;
     }
     m_setLayout = harmonia::UniqueDescriptorSetLayout{ctx.device, setLayout};
 
-    // --- Pipeline layout ---
+    // --- harmonia::Pipeline layout ---
     const VkPushConstantRange pcRange{
         .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
         .offset = 0,
@@ -106,7 +106,7 @@ bool GpuCullPass::initialize(const DeviceContext& ctx, const char* spvFilename) 
     };
     VkPipelineLayout pipelineLayout{};
     if (vkCreatePipelineLayout(ctx.device, &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
-        Logger::error("GpuCullPass: failed to create pipeline layout");
+        harmonia::Logger::error("GpuCullPass: failed to create pipeline layout");
         return false;
     }
     m_pipelineLayout = harmonia::UniquePipelineLayout{ctx.device, pipelineLayout};
@@ -114,7 +114,7 @@ bool GpuCullPass::initialize(const DeviceContext& ctx, const char* spvFilename) 
     // --- Compute pipeline ---
     auto spirv = harmonia::readSpirv(shaderPath(spvFilename));
     if (!spirv) {
-        Logger::error("GpuCullPass: failed to read SPIR-V from '{}'", spvFilename);
+        harmonia::Logger::error("GpuCullPass: failed to read SPIR-V from '{}'", spvFilename);
         return false;
     }
     const VkShaderModuleCreateInfo shaderInfo{
@@ -124,7 +124,7 @@ bool GpuCullPass::initialize(const DeviceContext& ctx, const char* spvFilename) 
     };
     VkShaderModule shaderModule = VK_NULL_HANDLE;
     if (vkCreateShaderModule(ctx.device, &shaderInfo, nullptr, &shaderModule) != VK_SUCCESS) {
-        Logger::error("GpuCullPass: failed to create shader module");
+        harmonia::Logger::error("GpuCullPass: failed to create shader module");
         return false;
     }
     const VkComputePipelineCreateInfo pipelineInfo{
@@ -143,7 +143,7 @@ bool GpuCullPass::initialize(const DeviceContext& ctx, const char* spvFilename) 
         vkCreateComputePipelines(ctx.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline);
     vkDestroyShaderModule(ctx.device, shaderModule, nullptr);
     if (pipeResult != VK_SUCCESS) {
-        Logger::error("GpuCullPass: failed to create compute pipeline");
+        harmonia::Logger::error("GpuCullPass: failed to create compute pipeline");
         return false;
     }
     m_pipeline = harmonia::UniquePipeline{ctx.device, pipeline};
@@ -159,7 +159,7 @@ bool GpuCullPass::initialize(const DeviceContext& ctx, const char* spvFilename) 
     };
     VkDescriptorPool pool{};
     if (vkCreateDescriptorPool(ctx.device, &poolInfo, nullptr, &pool) != VK_SUCCESS) {
-        Logger::error("GpuCullPass: failed to create descriptor pool");
+        harmonia::Logger::error("GpuCullPass: failed to create descriptor pool");
         return false;
     }
     m_pool = harmonia::UniqueDescriptorPool{ctx.device, pool};
@@ -170,7 +170,7 @@ bool GpuCullPass::initialize(const DeviceContext& ctx, const char* spvFilename) 
         .pSetLayouts = m_setLayout.ptr(),
     };
     if (vkAllocateDescriptorSets(ctx.device, &allocInfo, &m_set) != VK_SUCCESS) {
-        Logger::error("GpuCullPass: failed to allocate descriptor set");
+        harmonia::Logger::error("GpuCullPass: failed to allocate descriptor set");
         return false;
     }
 
@@ -202,7 +202,7 @@ bool GpuCullPass::initialize(const DeviceContext& ctx, const char* spvFilename) 
     vkUpdateDescriptorSets(
         ctx.device, static_cast<std::uint32_t>(staticWrites.size()), staticWrites.data(), 0, nullptr);
 
-    Logger::info("GpuCullPass: initialized (max {} instances)", kMaxInstances);
+    harmonia::Logger::info("GpuCullPass: initialized (max {} instances)", kMaxInstances);
     return true;
 }
 

@@ -53,7 +53,7 @@ class MotionVectorPass {
     MotionVectorPass& operator=(const MotionVectorPass&) = delete;
 
     [[nodiscard]] bool
-    initialize(const DeviceContext& ctx, const Config& cfg, const char* spvName = "motion_vector.comp.spv");
+    initialize(const harmonia::DeviceContext& ctx, const Config& cfg, const char* spvName = "motion_vector.comp.spv");
     void shutdown();
 
     /// Record the motion-vector dispatch into cmd.
@@ -82,14 +82,14 @@ class MotionVectorPass {
     [[nodiscard]] bool createImage() noexcept;
     [[nodiscard]] bool createPipeline(const char* spvName) noexcept;
 
-    const DeviceContext* m_ctx = nullptr;
+    const harmonia::DeviceContext* m_ctx = nullptr;
     Config m_cfg{};
 
     harmonia::UniqueDescriptorSetLayout m_setLayout;
     harmonia::UniquePipelineLayout m_pipelineLayout;
     harmonia::UniquePipeline m_pipeline;
 
-    Image m_motionVectorImage{};
+    harmonia::Image m_motionVectorImage{};
     bool m_firstUse = true;
 };
 

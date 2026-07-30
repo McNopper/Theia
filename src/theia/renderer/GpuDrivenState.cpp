@@ -15,20 +15,20 @@
 
 namespace theia {
 
-bool GpuDrivenState::ensureVisibilityBuffers(const DeviceContext& ctx, const Scene& scene) {
+bool GpuDrivenState::ensureVisibilityBuffers(const harmonia::DeviceContext& ctx, const Scene& scene) {
     if (visBuiltFor == &scene && meshletVisibility[0].handle() != VK_NULL_HANDLE) {
         return true;
     }
     const std::uint32_t meshletCount = std::max(1u, scene.meshletCount());
     const VkDeviceSize size = static_cast<VkDeviceSize>(meshletCount) * sizeof(std::uint32_t);
     for (auto& buf : meshletVisibility) {
-        auto created = Buffer::create(ctx,
+        auto created = harmonia::Buffer::create(ctx,
                                       size,
                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                       VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
                                       "theia.meshletVisibility");
         if (!created) {
-            Logger::error("Failed to create meshlet visibility buffer");
+            harmonia::Logger::error("Failed to create meshlet visibility buffer");
             return false;
         }
         buf = std::move(*created);

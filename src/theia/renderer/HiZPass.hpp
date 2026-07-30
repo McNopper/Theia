@@ -36,7 +36,7 @@ class HiZPass {
 
     /// Create the Hi-Z image (mip chain sized to width/height) and the reduction pipeline.
     /// @param spvName SPIR-V filename resolved against THEIA_SHADER_DIR.
-    [[nodiscard]] bool initialize(const DeviceContext& ctx,
+    [[nodiscard]] bool initialize(const harmonia::DeviceContext& ctx,
                                   std::uint32_t width,
                                   std::uint32_t height,
                                   const char* spvName = "hiz_build.comp.spv");
@@ -74,12 +74,12 @@ class HiZPass {
     [[nodiscard]] bool createImage() noexcept;
     [[nodiscard]] bool createPipeline(const char* spvName) noexcept;
 
-    const DeviceContext* m_ctx = nullptr;
+    const harmonia::DeviceContext* m_ctx = nullptr;
     std::uint32_t m_width = 0;
     std::uint32_t m_height = 0;
     std::uint32_t m_mipLevels = 1;
 
-    Image m_image{};                                       ///< R32F max-depth pyramid (STORAGE + SAMPLED)
+    harmonia::Image m_image{};                                       ///< R32F max-depth pyramid (STORAGE + SAMPLED)
     std::vector<harmonia::UniqueImageView> m_mipViews;     ///< one single-level storage view per mip
 
     harmonia::UniqueDescriptorSetLayout m_setLayout;

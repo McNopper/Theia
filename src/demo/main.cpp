@@ -10,7 +10,7 @@ constexpr float kRestirPtDenoiserStrength = 0.55F;
 } // namespace
 
 int main(int argc, char* const argv[]) {
-    Logger::setTag("THEIA");
+    harmonia::Logger::setTag("THEIA");
     harmonia::App::Config config;
     config.title = "Theia \xe2\x80\x94 Real-Time Renderer";
     config.width = 1024;
@@ -72,7 +72,7 @@ int main(int argc, char* const argv[]) {
     // filters the result (blurring/ghosting). TAA and offscreen accumulation cannot both
     // be active, so an *explicit* --taa together with --output is not allowed.
     if (taaForcedOn && !config.outputFile.empty()) {
-        Logger::error("--taa is incompatible with offscreen capture (--output): offscreen rendering uses "
+        harmonia::Logger::error("--taa is incompatible with offscreen capture (--output): offscreen rendering uses "
                       "progressive accumulation for anti-aliasing, and TAA would double-filter it. Drop "
                       "--taa for offscreen capture, or omit --output for interactive TAA.");
         return 2;

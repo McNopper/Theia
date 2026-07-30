@@ -109,7 +109,7 @@ class GiPass {
     GiPass(const GiPass&) = delete;
     GiPass& operator=(const GiPass&) = delete;
 
-    [[nodiscard]] bool initialize(const DeviceContext& ctx, const Config& cfg, const char* giSpv = "gi.comp.spv");
+    [[nodiscard]] bool initialize(const harmonia::DeviceContext& ctx, const Config& cfg, const char* giSpv = "gi.comp.spv");
     void shutdown();
 
     /// Dispatch the GI accumulation pass. Call AFTER ForwardRenderer::recordFrame()
@@ -159,7 +159,7 @@ class GiPass {
     void updateRestirDescriptors(const FrameParams& params); ///< A4: per-frame bindings 16/17/18 (ping-pong + motion)
     [[nodiscard]] bool descriptorsDirty(const FrameParams& params) const;
 
-    const DeviceContext* m_ctx = nullptr;
+    const harmonia::DeviceContext* m_ctx = nullptr;
     Config m_cfg{};
 
     harmonia::UniqueDescriptorSetLayout m_setLayout;
@@ -180,7 +180,7 @@ class GiPass {
     /// A3(b): 1×1 R32G32F placeholder bound to binding 15 when no A-SVGF
     /// gradient/variance guide is provided; hasGradientVariance=0 ensures the
     /// shader never reads it.
-    Image m_dummyGradientVariance{};
+    harmonia::Image m_dummyGradientVariance{};
     bool m_dummyGradientReady = false; ///< one-time UNDEFINED → GENERAL transition done
 
     // A4: ReSTIR DI reservoir ping-pong buffers (binding 16 = current write, 17 = prev
@@ -188,15 +188,15 @@ class GiPass {
     // is allocated generously (kReservoirStride) so it covers whichever std430-ish struct
     // layout Slang picks — the CPU never indexes the contents.
     static constexpr VkDeviceSize kReservoirStride = 64; ///< >= Slang Reservoir stride (float3 may be 16-aligned)
-    Buffer m_reservoirBuf[2]{};
+    harmonia::Buffer m_reservoirBuf[2]{};
     std::uint32_t m_reservoirPingPong = 0; ///< index of the buffer written THIS frame
     bool m_reservoirsCleared = false;      ///< one-time zero-fill of both reservoir buffers
     /// GI2 full PT: path reservoir ping-pong buffers (bindings 20 = cur, 21 = prev).
     static constexpr VkDeviceSize kPathReservoirStride = 64; ///< >= Slang PathReservoir stride
-    Buffer m_pathReservoirBuf[2]{};
+    harmonia::Buffer m_pathReservoirBuf[2]{};
     std::uint32_t m_pathReservoirPingPong = 0;
     bool m_pathReservoirsCleared = false;
-    Image m_dummyMotionVectors{}; ///< 1×1 R32G32F zero placeholder for binding 18
+    harmonia::Image m_dummyMotionVectors{}; ///< 1×1 R32G32F zero placeholder for binding 18
     bool m_dummyMotionReady = false;
     VkImageView m_boundMotionVectorView = VK_NULL_HANDLE;
 };

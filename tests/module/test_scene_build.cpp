@@ -14,18 +14,18 @@
 
 TEST_F(RtFixture, Scene_BuildWithMeshAndSphere) {
     Scene scene;
-    const std::uint32_t matDiffuse = scene.addMaterial(Material::diffuse(sm::float3(0.8F), 1.0F));
-    const std::uint32_t matMetal = scene.addMaterial(Material::metal(sm::float3(0.9F, 0.3F, 0.2F), 0.15F));
+    const std::uint32_t matDiffuse = scene.addMaterial(harmonia::Material::diffuse(sm::float3(0.8F), 1.0F));
+    const std::uint32_t matMetal = scene.addMaterial(harmonia::Material::metal(sm::float3(0.9F, 0.3F, 0.2F), 0.15F));
 
-    MeshData floor = harmonia::ProceduralGeometry::makeBox(sm::float3(2.0F, 0.1F, 2.0F)); // object space
+    harmonia::MeshData floor = harmonia::ProceduralGeometry::makeBox(sm::float3(2.0F, 0.1F, 2.0F)); // object space
     const std::uint32_t floorMesh = scene.addMesh(deviceCtx(), commandPool(), std::move(floor), "test.floor");
     ASSERT_NE(floorMesh, std::numeric_limits<std::uint32_t>::max());
 
     const std::uint32_t sphereMesh = scene.addSphereMesh(deviceCtx(), commandPool(), 0.5F, "test.sphere");
     ASSERT_NE(sphereMesh, std::numeric_limits<std::uint32_t>::max());
 
-    ASSERT_NE(scene.addInstance(floorMesh, Xform{}, matDiffuse), std::numeric_limits<std::uint32_t>::max());
-    ASSERT_NE(scene.addInstance(sphereMesh, Xform{.translation = {0.0F, 0.5F, 0.0F}}, matMetal),
+    ASSERT_NE(scene.addInstance(floorMesh, harmonia::Xform{}, matDiffuse), std::numeric_limits<std::uint32_t>::max());
+    ASSERT_NE(scene.addInstance(sphereMesh, harmonia::Xform{.translation = {0.0F, 0.5F, 0.0F}}, matMetal),
               std::numeric_limits<std::uint32_t>::max());
 
     const VkResult result = scene.build(deviceCtx(), commandPool());
@@ -41,12 +41,12 @@ TEST_F(RtFixture, Scene_BuildWithMeshAndSphere) {
 
 TEST_F(RtFixture, Scene_SynthesizesLightFromEmissiveMesh) {
     Scene scene;
-    const std::uint32_t matEmitter = scene.addMaterial(Material::emissive(sm::float3(1.0F), 1000.0F));
+    const std::uint32_t matEmitter = scene.addMaterial(harmonia::Material::emissive(sm::float3(1.0F), 1000.0F));
 
-    MeshData quad = harmonia::ProceduralGeometry::makeBox(sm::float3(1.0F, 0.01F, 1.0F));
+    harmonia::MeshData quad = harmonia::ProceduralGeometry::makeBox(sm::float3(1.0F, 0.01F, 1.0F));
     const std::uint32_t emitterMesh = scene.addMesh(deviceCtx(), commandPool(), std::move(quad), "test.emitter");
     ASSERT_NE(emitterMesh, std::numeric_limits<std::uint32_t>::max());
-    ASSERT_NE(scene.addInstance(emitterMesh, Xform{}, matEmitter), std::numeric_limits<std::uint32_t>::max());
+    ASSERT_NE(scene.addInstance(emitterMesh, harmonia::Xform{}, matEmitter), std::numeric_limits<std::uint32_t>::max());
 
     ASSERT_EQ(scene.build(deviceCtx(), commandPool()), VK_SUCCESS);
     EXPECT_GT(scene.lightCount(), 0U);
@@ -63,12 +63,12 @@ TEST_F(RtFixture, Scene_BuildEmptyFails) {
 
 TEST_F(RtFixture, Scene_DoesNotSynthesizeLightsForNonEmissiveGeometry) {
     Scene scene;
-    const std::uint32_t matDiffuse = scene.addMaterial(Material::diffuse(sm::float3(0.7F), 1.0F));
+    const std::uint32_t matDiffuse = scene.addMaterial(harmonia::Material::diffuse(sm::float3(0.7F), 1.0F));
 
-    MeshData floor = harmonia::ProceduralGeometry::makeBox(sm::float3(1.0F, 0.1F, 1.0F));
+    harmonia::MeshData floor = harmonia::ProceduralGeometry::makeBox(sm::float3(1.0F, 0.1F, 1.0F));
     const std::uint32_t floorMesh = scene.addMesh(deviceCtx(), commandPool(), std::move(floor), "test.floor");
     ASSERT_NE(floorMesh, std::numeric_limits<std::uint32_t>::max());
-    ASSERT_NE(scene.addInstance(floorMesh, Xform{}, matDiffuse), std::numeric_limits<std::uint32_t>::max());
+    ASSERT_NE(scene.addInstance(floorMesh, harmonia::Xform{}, matDiffuse), std::numeric_limits<std::uint32_t>::max());
 
     ASSERT_EQ(scene.build(deviceCtx(), commandPool()), VK_SUCCESS);
     EXPECT_EQ(scene.lightCount(), 0U);
@@ -80,14 +80,14 @@ TEST_F(RtFixture, Scene_DoesNotSynthesizeLightsForNonEmissiveGeometry) {
 // One mesh instanced N times — the core instancing case (one BLAS, N TLAS instances).
 TEST_F(RtFixture, Scene_BuildWithMultipleInstancesOfOneMesh) {
     Scene scene;
-    const std::uint32_t mat = scene.addMaterial(Material::diffuse(sm::float3(0.7F), 1.0F));
+    const std::uint32_t mat = scene.addMaterial(harmonia::Material::diffuse(sm::float3(0.7F), 1.0F));
 
-    MeshData box = harmonia::ProceduralGeometry::makeBox(sm::float3(0.8F)); // one unique mesh
+    harmonia::MeshData box = harmonia::ProceduralGeometry::makeBox(sm::float3(0.8F)); // one unique mesh
     const std::uint32_t mesh = scene.addMesh(deviceCtx(), commandPool(), std::move(box), "test.shared");
     ASSERT_NE(mesh, std::numeric_limits<std::uint32_t>::max());
 
     for (std::size_t i = 0; i < 4; ++i) {
-        const Xform xform{.translation = sm::float3(static_cast<float>(i) * 2.0F, 0.0F, 0.0F)};
+        const harmonia::Xform xform{.translation = sm::float3(static_cast<float>(i) * 2.0F, 0.0F, 0.0F)};
         ASSERT_NE(scene.addInstance(mesh, xform, mat), std::numeric_limits<std::uint32_t>::max()) << "instance " << i;
     }
 

@@ -19,7 +19,7 @@ TaaPass::~TaaPass() {
     shutdown();
 }
 
-bool TaaPass::initialize(const DeviceContext& ctx, const Config& cfg, const char* spvName) {
+bool TaaPass::initialize(const harmonia::DeviceContext& ctx, const Config& cfg, const char* spvName) {
     shutdown();
     m_ctx = &ctx;
     m_cfg = cfg;
@@ -28,7 +28,7 @@ bool TaaPass::initialize(const DeviceContext& ctx, const Config& cfg, const char
 
     if (cfg.width == 0 || cfg.height == 0 || cfg.hdrImage == VK_NULL_HANDLE || cfg.hdrView == VK_NULL_HANDLE ||
         cfg.motionVecView == VK_NULL_HANDLE) {
-        Logger::error("TaaPass: invalid Config");
+        harmonia::Logger::error("TaaPass: invalid Config");
         return false;
     }
 
@@ -57,27 +57,27 @@ void TaaPass::shutdown() {
 
 bool TaaPass::createImages() noexcept {
     // History buffer: read each frame as a sampled image; written by vkCmdCopyImage each frame.
-    auto hist = Image::create(*m_ctx,
+    auto hist = harmonia::Image::create(*m_ctx,
                               {m_cfg.width, m_cfg.height},
                               VK_FORMAT_R32G32B32A32_SFLOAT,
                               VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                               VK_IMAGE_ASPECT_COLOR_BIT,
                               "theia.taa.history");
     if (!hist) {
-        Logger::error("TaaPass: failed to create history image: VkResult {}", static_cast<int>(hist.error()));
+        harmonia::Logger::error("TaaPass: failed to create history image: VkResult {}", static_cast<int>(hist.error()));
         return false;
     }
     m_history = std::move(*hist);
 
     // TAA output: written by compute dispatch, then copied to history and HDR each frame.
-    auto out = Image::create(*m_ctx,
+    auto out = harmonia::Image::create(*m_ctx,
                              {m_cfg.width, m_cfg.height},
                              VK_FORMAT_R32G32B32A32_SFLOAT,
                              VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
                              VK_IMAGE_ASPECT_COLOR_BIT,
                              "theia.taa.output");
     if (!out) {
-        Logger::error("TaaPass: failed to create TAA output image: VkResult {}", static_cast<int>(out.error()));
+        harmonia::Logger::error("TaaPass: failed to create TAA output image: VkResult {}", static_cast<int>(out.error()));
         return false;
     }
     m_taaOutput = std::move(*out);
@@ -105,7 +105,7 @@ bool TaaPass::createSampler() noexcept {
     };
     VkSampler sampler{};
     if (vkCreateSampler(m_ctx->device, &info, nullptr, &sampler) != VK_SUCCESS) {
-        Logger::error("TaaPass: failed to create sampler");
+        harmonia::Logger::error("TaaPass: failed to create sampler");
         return false;
     }
     m_sampler = harmonia::UniqueSampler{m_ctx->device, sampler};
@@ -156,7 +156,7 @@ bool TaaPass::createPipeline(const char* spvName) noexcept {
     };
     VkDescriptorSetLayout setLayout{};
     if (vkCreateDescriptorSetLayout(m_ctx->device, &setInfo, nullptr, &setLayout) != VK_SUCCESS) {
-        Logger::error("TaaPass: failed to create descriptor set layout");
+        harmonia::Logger::error("TaaPass: failed to create descriptor set layout");
         return false;
     }
     m_setLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, setLayout};
@@ -177,14 +177,14 @@ bool TaaPass::createPipeline(const char* spvName) noexcept {
     };
     VkPipelineLayout pipeLayout{};
     if (vkCreatePipelineLayout(m_ctx->device, &layoutInfo, nullptr, &pipeLayout) != VK_SUCCESS) {
-        Logger::error("TaaPass: failed to create pipeline layout");
+        harmonia::Logger::error("TaaPass: failed to create pipeline layout");
         return false;
     }
     m_pipeLayout = harmonia::UniquePipelineLayout{m_ctx->device, pipeLayout};
 
     auto module = harmonia::createShaderModule(m_ctx->device, shaderPath(spvName));
     if (!module) {
-        Logger::error("TaaPass: cannot load shader: {}", spvName);
+        harmonia::Logger::error("TaaPass: cannot load shader: {}", spvName);
         return false;
     }
     const VkComputePipelineCreateInfo pipeInfo{
@@ -203,7 +203,7 @@ bool TaaPass::createPipeline(const char* spvName) noexcept {
     const VkResult res = vkCreateComputePipelines(m_ctx->device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &pipeline);
     vkDestroyShaderModule(m_ctx->device, *module, nullptr);
     if (res != VK_SUCCESS) {
-        Logger::error("TaaPass: failed to create compute pipeline");
+        harmonia::Logger::error("TaaPass: failed to create compute pipeline");
         return false;
     }
     m_pipeline = harmonia::UniquePipeline{m_ctx->device, pipeline};

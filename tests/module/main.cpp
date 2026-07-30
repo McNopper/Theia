@@ -36,18 +36,18 @@ int main(int argc, char* argv[]) {
     if (volkInitialize() == VK_SUCCESS && SDL_Init(SDL_INIT_VIDEO)) {
         window.reset(SDL_CreateWindow("Theia Module Tests", 64, 64, SDL_WINDOW_VULKAN | SDL_WINDOW_HIDDEN));
         if (window != nullptr) {
-            Context::Config cfg;
+            harmonia::Context::Config cfg;
             cfg.appName = "TheiaModuleTests";
             cfg.enableValidation = false;
             cfg.window = window.get();
 
-            auto ctx = Context::create(cfg);
+            auto ctx = harmonia::Context::create(cfg);
             if (ctx) {
-                testCtx.context = std::make_unique<Context>(std::move(*ctx));
-                auto pool = CommandPool::create(testCtx.context->deviceContext(),
+                testCtx.context = std::make_unique<harmonia::Context>(std::move(*ctx));
+                auto pool = harmonia::CommandPool::create(testCtx.context->deviceContext(),
                                                 testCtx.context->deviceContext().graphicsFamily);
                 if (pool) {
-                    testCtx.commandPool = std::make_unique<CommandPool>(std::move(*pool));
+                    testCtx.commandPool = std::make_unique<harmonia::CommandPool>(std::move(*pool));
                     testCtx.window = window.get();
                     g_vulkanTestCtx = &testCtx;
                 }

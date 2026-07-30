@@ -47,7 +47,7 @@ LightCuller::~LightCuller() {
     shutdown();
 }
 
-bool LightCuller::initialize(const DeviceContext& ctx, std::uint32_t w, std::uint32_t h, const char* spvFilename) {
+bool LightCuller::initialize(const harmonia::DeviceContext& ctx, std::uint32_t w, std::uint32_t h, const char* spvFilename) {
     shutdown();
     m_ctx = &ctx;
     m_screenWidth = w;
@@ -59,18 +59,18 @@ bool LightCuller::initialize(const DeviceContext& ctx, std::uint32_t w, std::uin
     const VkDeviceSize indicesBufSize =
         static_cast<VkDeviceSize>(m_tilesX * m_tilesY) * kMaxLightsPerTile * sizeof(std::uint32_t);
 
-    auto counts = Buffer::create(ctx,
+    auto counts = harmonia::Buffer::create(ctx,
                                  countsBufSize,
                                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                  VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
                                  "theia.tileLightCounts");
-    auto indices = Buffer::create(ctx,
+    auto indices = harmonia::Buffer::create(ctx,
                                   indicesBufSize,
                                   VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                                   VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
                                   "theia.tileLightIndices");
     if (!counts || !indices) {
-        Logger::error("LightCuller: failed to allocate tile buffers");
+        harmonia::Logger::error("LightCuller: failed to allocate tile buffers");
         return false;
     }
     m_tileLightCountsBuf = std::move(*counts);
@@ -98,7 +98,7 @@ bool LightCuller::initialize(const DeviceContext& ctx, std::uint32_t w, std::uin
     };
     VkDescriptorSetLayout setLayout{};
     if (vkCreateDescriptorSetLayout(ctx.device, &setLayoutInfo, nullptr, &setLayout) != VK_SUCCESS) {
-        Logger::error("LightCuller: failed to create set layout");
+        harmonia::Logger::error("LightCuller: failed to create set layout");
         return false;
     }
     m_setLayout = harmonia::UniqueDescriptorSetLayout{ctx.device, setLayout};
@@ -118,7 +118,7 @@ bool LightCuller::initialize(const DeviceContext& ctx, std::uint32_t w, std::uin
     };
     VkPipelineLayout pipelineLayout{};
     if (vkCreatePipelineLayout(ctx.device, &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
-        Logger::error("LightCuller: failed to create pipeline layout");
+        harmonia::Logger::error("LightCuller: failed to create pipeline layout");
         return false;
     }
     m_pipelineLayout = harmonia::UniquePipelineLayout{ctx.device, pipelineLayout};
@@ -126,7 +126,7 @@ bool LightCuller::initialize(const DeviceContext& ctx, std::uint32_t w, std::uin
     // Compile compute shader
     auto spirv = readSpirv(spvFilename);
     if (spirv.empty()) {
-        Logger::error("LightCuller: failed to read SPIR-V from '{}'", spvFilename);
+        harmonia::Logger::error("LightCuller: failed to read SPIR-V from '{}'", spvFilename);
         return false;
     }
     const VkShaderModuleCreateInfo shaderInfo{
@@ -136,7 +136,7 @@ bool LightCuller::initialize(const DeviceContext& ctx, std::uint32_t w, std::uin
     };
     VkShaderModule shaderModule = VK_NULL_HANDLE;
     if (vkCreateShaderModule(ctx.device, &shaderInfo, nullptr, &shaderModule) != VK_SUCCESS) {
-        Logger::error("LightCuller: failed to create shader module");
+        harmonia::Logger::error("LightCuller: failed to create shader module");
         return false;
     }
 
@@ -156,7 +156,7 @@ bool LightCuller::initialize(const DeviceContext& ctx, std::uint32_t w, std::uin
         vkCreateComputePipelines(ctx.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline);
     vkDestroyShaderModule(ctx.device, shaderModule, nullptr);
     if (pipeResult != VK_SUCCESS) {
-        Logger::error("LightCuller: failed to create compute pipeline");
+        harmonia::Logger::error("LightCuller: failed to create compute pipeline");
         return false;
     }
     m_pipeline = harmonia::UniquePipeline{ctx.device, pipeline};
@@ -172,7 +172,7 @@ bool LightCuller::initialize(const DeviceContext& ctx, std::uint32_t w, std::uin
     };
     VkDescriptorPool pool{};
     if (vkCreateDescriptorPool(ctx.device, &poolInfo, nullptr, &pool) != VK_SUCCESS) {
-        Logger::error("LightCuller: failed to create descriptor pool");
+        harmonia::Logger::error("LightCuller: failed to create descriptor pool");
         return false;
     }
     m_pool = harmonia::UniqueDescriptorPool{ctx.device, pool};
@@ -183,7 +183,7 @@ bool LightCuller::initialize(const DeviceContext& ctx, std::uint32_t w, std::uin
         .pSetLayouts = m_setLayout.ptr(),
     };
     if (vkAllocateDescriptorSets(ctx.device, &allocInfo, &m_set) != VK_SUCCESS) {
-        Logger::error("LightCuller: failed to allocate descriptor set");
+        harmonia::Logger::error("LightCuller: failed to allocate descriptor set");
         return false;
     }
 
@@ -214,7 +214,7 @@ bool LightCuller::initialize(const DeviceContext& ctx, std::uint32_t w, std::uin
     };
     vkUpdateDescriptorSets(ctx.device, 2, staticWrites.data(), 0, nullptr);
 
-    Logger::info("LightCuller: initialized {}×{} tiles ({}×{} px each) for {}×{} screen",
+    harmonia::Logger::info("LightCuller: initialized {}×{} tiles ({}×{} px each) for {}×{} screen",
                  m_tilesX,
                  m_tilesY,
                  kTileSize,

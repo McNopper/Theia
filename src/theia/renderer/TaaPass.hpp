@@ -41,7 +41,7 @@ class TaaPass {
     TaaPass(const TaaPass&) = delete;
     TaaPass& operator=(const TaaPass&) = delete;
 
-    [[nodiscard]] bool initialize(const DeviceContext& ctx, const Config& cfg, const char* spvName = "taa.comp.spv");
+    [[nodiscard]] bool initialize(const harmonia::DeviceContext& ctx, const Config& cfg, const char* spvName = "taa.comp.spv");
     void shutdown();
 
     /// Dispatch TAA.
@@ -64,12 +64,12 @@ class TaaPass {
     [[nodiscard]] bool createSampler() noexcept;
     [[nodiscard]] bool createPipeline(const char* spvName) noexcept;
 
-    const DeviceContext* m_ctx = nullptr;
+    const harmonia::DeviceContext* m_ctx = nullptr;
     Config m_cfg{};
 
     harmonia::UniqueSampler m_sampler;
-    Image m_history{};   ///< previous TAA output  (R32G32B32A32, SAMPLED | TRANSFER_DST)
-    Image m_taaOutput{}; ///< current TAA result   (R32G32B32A32, STORAGE | TRANSFER_SRC)
+    harmonia::Image m_history{};   ///< previous TAA output  (R32G32B32A32, SAMPLED | TRANSFER_DST)
+    harmonia::Image m_taaOutput{}; ///< current TAA result   (R32G32B32A32, STORAGE | TRANSFER_SRC)
     bool m_firstUse = true;
 
     harmonia::UniqueDescriptorSetLayout m_setLayout;

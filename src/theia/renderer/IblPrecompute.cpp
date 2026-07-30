@@ -20,16 +20,16 @@ constexpr VkExtent2D kSheenExtent{512, 512};
 constexpr VkExtent2D kSpecularExtent{1024, 512};
 constexpr std::uint32_t kSpecularMipLevels = 8;
 
-VkShaderModule loadShaderModule(const DeviceContext& ctx, const char* filename) {
+VkShaderModule loadShaderModule(const harmonia::DeviceContext& ctx, const char* filename) {
     auto module = harmonia::createShaderModule(ctx.device, theia::shaderPath(filename));
     if (!module) {
-        Logger::error("IblPrecompute: failed to load shader '{}'", filename);
+        harmonia::Logger::error("IblPrecompute: failed to load shader '{}'", filename);
         return VK_NULL_HANDLE;
     }
     return *module;
 }
 
-VkImageView createMipView(const DeviceContext& ctx, const Image& image, std::uint32_t mipLevel) {
+VkImageView createMipView(const harmonia::DeviceContext& ctx, const harmonia::Image& image, std::uint32_t mipLevel) {
     const VkImageViewCreateInfo viewInfo{
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
         .image = image.handle(),
@@ -54,7 +54,7 @@ VkImageView createMipView(const DeviceContext& ctx, const Image& image, std::uin
 
     VkImageView view = VK_NULL_HANDLE;
     if (vkCreateImageView(ctx.device, &viewInfo, nullptr, &view) != VK_SUCCESS) {
-        Logger::error("IblPrecompute: failed to create mip image view {}", mipLevel);
+        harmonia::Logger::error("IblPrecompute: failed to create mip image view {}", mipLevel);
         return VK_NULL_HANDLE;
     }
     return view;
@@ -63,7 +63,7 @@ VkImageView createMipView(const DeviceContext& ctx, const Image& image, std::uin
 // Fill an image with black when no env_map is provided.
 // Direct-light-only scenes must remain free of synthetic ambient terms so
 // Hyperion/Theia parity comparisons stay physically consistent.
-void clearNeutralAmbientImage(VkCommandBuffer cmd, const Image& image) {
+void clearNeutralAmbientImage(VkCommandBuffer cmd, const harmonia::Image& image) {
     image.transition(cmd,
                      VK_IMAGE_LAYOUT_UNDEFINED,
                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
@@ -104,8 +104,8 @@ IblPrecompute::~IblPrecompute() {
     shutdown();
 }
 
-bool IblPrecompute::initialize(const DeviceContext& ctx,
-                               const CommandPool& pool,
+bool IblPrecompute::initialize(const harmonia::DeviceContext& ctx,
+                               const harmonia::CommandPool& pool,
                                VkImageView envImageView,
                                VkSampler envSampler,
                                float envUnitNits,
@@ -135,20 +135,20 @@ bool IblPrecompute::initialize(const DeviceContext& ctx,
     const auto runPass = [this, &pool](bool (IblPrecompute::*pass)(VkCommandBuffer), const char* label) -> bool {
         auto cmdResult = pool.beginOneShot();
         if (!cmdResult) {
-            Logger::error("IblPrecompute: failed to allocate command buffer for {}", label);
+            harmonia::Logger::error("IblPrecompute: failed to allocate command buffer for {}", label);
             return false;
         }
 
         if (!(this->*pass)(*cmdResult)) {
             pool.free(*cmdResult);
             destroyTemporaryObjects();
-            Logger::error("IblPrecompute: {} pass failed", label);
+            harmonia::Logger::error("IblPrecompute: {} pass failed", label);
             return false;
         }
 
         if (const VkResult result = pool.endOneShot(*cmdResult); result != VK_SUCCESS) {
             destroyTemporaryObjects();
-            Logger::error("IblPrecompute: {} submission failed ({})", label, static_cast<int>(result));
+            harmonia::Logger::error("IblPrecompute: {} submission failed ({})", label, static_cast<int>(result));
             return false;
         }
 
@@ -165,7 +165,7 @@ bool IblPrecompute::initialize(const DeviceContext& ctx,
     }
 
     m_initialized = true;
-    Logger::info("IBL precompute complete");
+    harmonia::Logger::info("IBL precompute complete");
     return true;
 }
 
@@ -188,45 +188,45 @@ void IblPrecompute::shutdown() {
 }
 
 bool IblPrecompute::createTextures() {
-    auto sheen = Image::create(*m_ctx,
+    auto sheen = harmonia::Image::create(*m_ctx,
                                kSheenExtent,
                                VK_FORMAT_R16_SFLOAT,
                                VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                VK_IMAGE_ASPECT_COLOR_BIT,
                                "theia.ibl.sheen");
     if (!sheen) {
-        Logger::error("IblPrecompute: failed to create sheen LUT image");
+        harmonia::Logger::error("IblPrecompute: failed to create sheen LUT image");
         return false;
     }
     m_res.sheenLut = std::move(*sheen);
 
-    auto brdf = Image::create(*m_ctx,
+    auto brdf = harmonia::Image::create(*m_ctx,
                               kSheenExtent,
                               VK_FORMAT_R16G16_SFLOAT,
                               VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                               VK_IMAGE_ASPECT_COLOR_BIT,
                               "theia.ibl.brdf");
     if (!brdf) {
-        Logger::error("IblPrecompute: failed to create BRDF LUT image");
+        harmonia::Logger::error("IblPrecompute: failed to create BRDF LUT image");
         return false;
     }
     m_res.brdfLut = std::move(*brdf);
 
     auto diffuse =
-        Image::create(*m_ctx,
+        harmonia::Image::create(*m_ctx,
                       m_diffuseExtent,
                       VK_FORMAT_R16G16B16A16_SFLOAT,
                       VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                       VK_IMAGE_ASPECT_COLOR_BIT,
                       "theia.ibl.diffuse");
     if (!diffuse) {
-        Logger::error("IblPrecompute: failed to create diffuse irradiance image");
+        harmonia::Logger::error("IblPrecompute: failed to create diffuse irradiance image");
         return false;
     }
     m_res.diffuseIrrad = std::move(*diffuse);
 
     auto specular =
-        Image::create(*m_ctx,
+        harmonia::Image::create(*m_ctx,
                       kSpecularExtent,
                       VK_FORMAT_R16G16B16A16_SFLOAT,
                       VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
@@ -234,7 +234,7 @@ bool IblPrecompute::createTextures() {
                       "theia.ibl.specular",
                       kSpecularMipLevels);
     if (!specular) {
-        Logger::error("IblPrecompute: failed to create specular prefilter image");
+        harmonia::Logger::error("IblPrecompute: failed to create specular prefilter image");
         return false;
     }
     m_res.specularMipped = std::move(*specular);
@@ -263,7 +263,7 @@ bool IblPrecompute::createSamplers() {
     };
     VkSampler lutSampler = VK_NULL_HANDLE;
     if (vkCreateSampler(m_ctx->device, &lutSamplerInfo, nullptr, &lutSampler) != VK_SUCCESS) {
-        Logger::error("IblPrecompute: failed to create LUT sampler");
+        harmonia::Logger::error("IblPrecompute: failed to create LUT sampler");
         return false;
     }
     m_res.lutSampler = harmonia::UniqueSampler{m_ctx->device, lutSampler};
@@ -288,7 +288,7 @@ bool IblPrecompute::createSamplers() {
     };
     VkSampler envSampler = VK_NULL_HANDLE;
     if (vkCreateSampler(m_ctx->device, &envSamplerInfo, nullptr, &envSampler) != VK_SUCCESS) {
-        Logger::error("IblPrecompute: failed to create environment sampler");
+        harmonia::Logger::error("IblPrecompute: failed to create environment sampler");
         return false;
     }
     m_res.envSampler = harmonia::UniqueSampler{m_ctx->device, envSampler};
@@ -304,7 +304,7 @@ bool IblPrecompute::runSheenLutPass(VkCommandBuffer cmd) {
     return runLutPass(cmd, m_res.sheenLut, "ibl_sheen_lut.comp.spv", "sheen");
 }
 
-bool IblPrecompute::runLutPass(VkCommandBuffer cmd, Image& targetImage, const char* shaderName, const char* logLabel) {
+bool IblPrecompute::runLutPass(VkCommandBuffer cmd, harmonia::Image& targetImage, const char* shaderName, const char* logLabel) {
     const VkDescriptorSetLayoutBinding binding{
         0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
     const VkDescriptorSetLayoutCreateInfo layoutInfo{
@@ -315,7 +315,7 @@ bool IblPrecompute::runLutPass(VkCommandBuffer cmd, Image& targetImage, const ch
 
     VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
     if (vkCreateDescriptorSetLayout(m_ctx->device, &layoutInfo, nullptr, &setLayout) != VK_SUCCESS) {
-        Logger::error("IblPrecompute: failed to create {} set layout", logLabel);
+        harmonia::Logger::error("IblPrecompute: failed to create {} set layout", logLabel);
         return false;
     }
     m_tempSetLayouts.emplace_back(m_ctx->device, setLayout);
@@ -330,7 +330,7 @@ bool IblPrecompute::runLutPass(VkCommandBuffer cmd, Image& targetImage, const ch
 
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
     if (vkCreateDescriptorPool(m_ctx->device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
-        Logger::error("IblPrecompute: failed to create {} descriptor pool", logLabel);
+        harmonia::Logger::error("IblPrecompute: failed to create {} descriptor pool", logLabel);
         return false;
     }
     m_tempDescriptorPools.emplace_back(m_ctx->device, descriptorPool);
@@ -349,7 +349,7 @@ bool IblPrecompute::runLutPass(VkCommandBuffer cmd, Image& targetImage, const ch
     };
     VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
     if (vkAllocateDescriptorSets(m_ctx->device, &allocInfo, &descriptorSet) != VK_SUCCESS) {
-        Logger::error("IblPrecompute: failed to allocate {} descriptor set", logLabel);
+        harmonia::Logger::error("IblPrecompute: failed to allocate {} descriptor set", logLabel);
         return false;
     }
 
@@ -414,7 +414,7 @@ bool IblPrecompute::runDiffusePass(VkCommandBuffer cmd) {
 
     VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
     if (vkCreateDescriptorSetLayout(m_ctx->device, &layoutInfo, nullptr, &setLayout) != VK_SUCCESS) {
-        Logger::error("IblPrecompute: failed to create diffuse set layout");
+        harmonia::Logger::error("IblPrecompute: failed to create diffuse set layout");
         return false;
     }
     m_tempSetLayouts.emplace_back(m_ctx->device, setLayout);
@@ -435,7 +435,7 @@ bool IblPrecompute::runDiffusePass(VkCommandBuffer cmd) {
 
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
     if (vkCreateDescriptorPool(m_ctx->device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
-        Logger::error("IblPrecompute: failed to create diffuse descriptor pool");
+        harmonia::Logger::error("IblPrecompute: failed to create diffuse descriptor pool");
         return false;
     }
     m_tempDescriptorPools.emplace_back(m_ctx->device, descriptorPool);
@@ -460,7 +460,7 @@ bool IblPrecompute::runDiffusePass(VkCommandBuffer cmd) {
     };
     VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
     if (vkAllocateDescriptorSets(m_ctx->device, &allocInfo, &descriptorSet) != VK_SUCCESS) {
-        Logger::error("IblPrecompute: failed to allocate diffuse descriptor set");
+        harmonia::Logger::error("IblPrecompute: failed to allocate diffuse descriptor set");
         return false;
     }
 
@@ -569,7 +569,7 @@ bool IblPrecompute::runSpecularPass(VkCommandBuffer cmd) {
 
     VkDescriptorSetLayout setLayout = VK_NULL_HANDLE;
     if (vkCreateDescriptorSetLayout(m_ctx->device, &layoutInfo, nullptr, &setLayout) != VK_SUCCESS) {
-        Logger::error("IblPrecompute: failed to create specular set layout");
+        harmonia::Logger::error("IblPrecompute: failed to create specular set layout");
         return false;
     }
     m_tempSetLayouts.emplace_back(m_ctx->device, setLayout);
@@ -590,7 +590,7 @@ bool IblPrecompute::runSpecularPass(VkCommandBuffer cmd) {
 
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
     if (vkCreateDescriptorPool(m_ctx->device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
-        Logger::error("IblPrecompute: failed to create specular descriptor pool");
+        harmonia::Logger::error("IblPrecompute: failed to create specular descriptor pool");
         return false;
     }
     m_tempDescriptorPools.emplace_back(m_ctx->device, descriptorPool);
@@ -612,7 +612,7 @@ bool IblPrecompute::runSpecularPass(VkCommandBuffer cmd) {
     };
     std::vector<VkDescriptorSet> mipSets(mipCount, VK_NULL_HANDLE);
     if (vkAllocateDescriptorSets(m_ctx->device, &allocInfo, mipSets.data()) != VK_SUCCESS) {
-        Logger::error("IblPrecompute: failed to allocate specular descriptor sets");
+        harmonia::Logger::error("IblPrecompute: failed to allocate specular descriptor sets");
         return false;
     }
 
@@ -722,7 +722,7 @@ bool IblPrecompute::createComputePipeline(const char* spirvPath,
     };
     if (vkCreatePipelineLayout(m_ctx->device, &layoutInfo, nullptr, &outLayout) != VK_SUCCESS) {
         vkDestroyShaderModule(m_ctx->device, module, nullptr);
-        Logger::error("IblPrecompute: failed to create compute pipeline layout for '{}'", spirvPath);
+        harmonia::Logger::error("IblPrecompute: failed to create compute pipeline layout for '{}'", spirvPath);
         return false;
     }
     m_tempPipelineLayouts.emplace_back(m_ctx->device, outLayout);
@@ -741,7 +741,7 @@ bool IblPrecompute::createComputePipeline(const char* spirvPath,
     if (vkCreateComputePipelines(m_ctx->device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &outPipeline) !=
         VK_SUCCESS) {
         vkDestroyShaderModule(m_ctx->device, module, nullptr);
-        Logger::error("IblPrecompute: failed to create compute pipeline for '{}'", spirvPath);
+        harmonia::Logger::error("IblPrecompute: failed to create compute pipeline for '{}'", spirvPath);
         return false;
     }
     m_tempPipelines.emplace_back(m_ctx->device, outPipeline);

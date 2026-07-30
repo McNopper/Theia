@@ -32,7 +32,7 @@ class LightCuller {
 
     /// Initialize for a given render resolution.
     /// @param spvFilename  SPIR-V filename resolved against THEIA_SHADER_DIR.
-    [[nodiscard]] bool initialize(const DeviceContext& ctx,
+    [[nodiscard]] bool initialize(const harmonia::DeviceContext& ctx,
                                   std::uint32_t screenWidth,
                                   std::uint32_t screenHeight,
                                   const char* spvFilename = "light_cull.comp.spv");
@@ -57,7 +57,7 @@ class LightCuller {
     [[nodiscard]] std::uint32_t tilesY() const noexcept { return m_tilesY; }
 
   private:
-    const DeviceContext* m_ctx = nullptr;
+    const harmonia::DeviceContext* m_ctx = nullptr;
 
     harmonia::UniquePipeline m_pipeline;
     harmonia::UniquePipelineLayout m_pipelineLayout;
@@ -65,8 +65,8 @@ class LightCuller {
     harmonia::UniqueDescriptorPool m_pool;
     VkDescriptorSet m_set = VK_NULL_HANDLE;
 
-    Buffer m_tileLightCountsBuf;  // uint[tilesX*tilesY]
-    Buffer m_tileLightIndicesBuf; // uint[tilesX*tilesY * kMaxLightsPerTile]
+    harmonia::Buffer m_tileLightCountsBuf;  // uint[tilesX*tilesY]
+    harmonia::Buffer m_tileLightIndicesBuf; // uint[tilesX*tilesY * kMaxLightsPerTile]
 
     std::uint32_t m_tilesX = 0;
     std::uint32_t m_tilesY = 0;

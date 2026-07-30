@@ -31,7 +31,7 @@ class GpuDrivenState {
     // indirect draw command; ForwardRenderer consumes it via vkCmdDrawMeshTasksIndirectEXT
     // (GD3) or vkCmdExecuteGeneratedCommandsEXT (GD6 DGC path).
     GpuCullPass gpuCullPass;
-    Buffer identityInstanceList;                      ///< [0,1,...,kMaxInstances-1] binding-10 fallback
+    harmonia::Buffer identityInstanceList;                      ///< [0,1,...,kMaxInstances-1] binding-10 fallback
     harmonia::UniqueIndirectCommandsLayout dgcLayout; ///< DRAW_MESH_TASKS_EXT token, stride=12
     VkBuffer dgcPreprocessBuf = VK_NULL_HANDLE;       ///< vkCmdExecuteGeneratedCommandsEXT scratch
     VmaAllocation dgcPreprocessAlloc = VK_NULL_HANDLE;
@@ -39,7 +39,7 @@ class GpuDrivenState {
     VkDeviceSize dgcPreprocessSize = 0;
 
     HiZPass hiZPass;                                  ///< current-frame depth pyramid builder (B4)
-    Buffer meshletVisibility[2];                      ///< ping-pong per-meshlet visibility (uint/meshlet)
+    harmonia::Buffer meshletVisibility[2];                      ///< ping-pong per-meshlet visibility (uint/meshlet)
     std::uint32_t visFrame = 0;                       ///< index of PREVIOUS-frame visibility buffer
     std::uint32_t visMeshletCount = 0;                ///< meshlet count the visibility buffers were sized for
     const Scene* visBuiltFor = nullptr;               ///< scene the visibility buffers were built for
@@ -49,7 +49,7 @@ class GpuDrivenState {
     bool forceSinglePass = false;                     ///< THEIA_SINGLE_PASS: bypass two-pass Hi-Z (A-B debug)
 
     /// (Re)create the ping-pong meshlet-visibility buffers when the scene changes.
-    [[nodiscard]] bool ensureVisibilityBuffers(const DeviceContext& ctx, const Scene& scene);
+    [[nodiscard]] bool ensureVisibilityBuffers(const harmonia::DeviceContext& ctx, const Scene& scene);
     /// Run the GPU frustum cull + the post-cull barrier (compactInstanceList + indirectDrawBuf).
     void dispatchCull(VkCommandBuffer cmd, const Scene& scene, std::uint32_t instanceCount, const sm::float4x4& viewProj);
     /// Issue the mesh-task draw: DGC (GD6) when available, else indirect (GD3), else CPU-count.

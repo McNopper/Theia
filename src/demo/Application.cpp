@@ -67,14 +67,14 @@ bool Application::onInitialize() {
                                     .hdrImage = hdrImage().handle(),
                                     .hdrImageView = hdrImage().view(),
                                 })) {
-        Logger::error("Failed to initialize ForwardRenderer");
+        harmonia::Logger::error("Failed to initialize ForwardRenderer");
         return false;
     }
     m_renderer->setIndirectAmbient(config().indirectAmbient);
     m_renderer->setRngDebug(config().rngDebug);
     m_renderer->setCameraJitterEnabled(m_cameraJitterEnabled);
     if (!m_cameraJitterEnabled) {
-        Logger::info("Camera jitter disabled (--no-camera-jitter)");
+        harmonia::Logger::info("harmonia::Camera jitter disabled (--no-camera-jitter)");
     }
 
     // Progressive accumulation in the interactive window: a stationary camera
@@ -87,7 +87,7 @@ bool Application::onInitialize() {
 
     // LightCuller (Forward+ tile-based light culling)
     if (!m_lightCuller.initialize(deviceContext(), swapchain().extent().width, swapchain().extent().height)) {
-        Logger::warn("LightCuller failed to initialize — direct loop fallback active");
+        harmonia::Logger::warn("LightCuller failed to initialize — direct loop fallback active");
     } else {
         m_renderer->setTileBuffers(m_lightCuller.tileLightCountsBuffer(),
                                    m_lightCuller.tileLightIndicesBuffer(),
@@ -110,7 +110,7 @@ bool Application::onInitialize() {
             .gbufferView = m_renderer->gbufferView(),
         };
         if (!m_giPass.initialize(deviceContext(), giCfg)) {
-            Logger::warn("GiPass failed to initialize — ray-query GI disabled");
+            harmonia::Logger::warn("GiPass failed to initialize — ray-query GI disabled");
         }
         // When GI will run, the forward pass must emit direct+emission only (no IBL/ambient);
         // the GI compute stage supplies the indirect term.
@@ -130,7 +130,7 @@ bool Application::onInitialize() {
                 .giBufferView = m_renderer->giBufferView(),
             };
             if (!m_motionVectorPass.initialize(deviceContext(), mvCfg)) {
-                Logger::warn("MotionVectorPass failed to initialize — static history fallback active");
+                harmonia::Logger::warn("MotionVectorPass failed to initialize — static history fallback active");
             }
         }
     } else {
@@ -150,9 +150,9 @@ bool Application::onInitialize() {
             .motionVecView = m_motionVectorPass.motionVectorImageView(),
         };
         if (!m_taaPass.initialize(deviceContext(), taaCfg)) {
-            Logger::warn("TaaPass failed to initialize — TAA disabled");
+            harmonia::Logger::warn("TaaPass failed to initialize — TAA disabled");
         } else {
-            Logger::info("TaaPass initialized (cross-vendor TAA, alpha=0.1)");
+            harmonia::Logger::info("TaaPass initialized (cross-vendor TAA, alpha=0.1)");
         }
     }
 
@@ -211,9 +211,9 @@ bool Application::onInitialize() {
 
         if (ok) {
             m_asyncComputeEnabled = true;
-            Logger::info("Async compute queue available — GI + denoiser will overlap with raster");
+            harmonia::Logger::info("Async compute queue available — GI + denoiser will overlap with raster");
         } else {
-            Logger::warn("Async compute setup failed — falling back to single-queue path");
+            harmonia::Logger::warn("Async compute setup failed — falling back to single-queue path");
         }
     }
 
@@ -228,9 +228,9 @@ void Application::onSceneUnload() {
     m_scene = std::make_unique<Scene>();
 }
 
-bool Application::onSceneLoaded(const SceneLoader::SceneConfig& sceneConfig) {
+bool Application::onSceneLoaded(const harmonia::SceneLoader::SceneConfig& sceneConfig) {
     if (m_scene->build(deviceContext(), commandPool()) != VK_SUCCESS) {
-        Logger::error("Failed to build scene TLAS");
+        harmonia::Logger::error("Failed to build scene TLAS");
         return false;
     }
     m_renderer->setScene(m_scene.get());
@@ -244,7 +244,7 @@ bool Application::onSceneLoaded(const SceneLoader::SceneConfig& sceneConfig) {
     // Physical camera exposure — shared factory from harmonia::Camera.
     {
         const float ev100 = sceneConfig.cameraEv100.value_or(7.0f);
-        m_camera.physical = Camera::PhysicalCamera::fromEv100(ev100);
+        m_camera.physical = harmonia::Camera::PhysicalCamera::fromEv100(ev100);
     }
     // Reset camera controller orientation to match the new target.
     const sm::float3 dir = sm::normalize(m_camera.target - m_camera.position);
@@ -252,8 +252,8 @@ bool Application::onSceneLoaded(const SceneLoader::SceneConfig& sceneConfig) {
 
     // Scene-scale-aware near/far — shared helper from harmonia::Camera.
     const float camDist = sm::length(m_camera.target - m_camera.position);
-    std::tie(m_camera.nearPlane, m_camera.farPlane) = Camera::nearFarFromDistance(camDist);
-    // Camera move speed also scales with the scene (5× the camera distance, so navigating
+    std::tie(m_camera.nearPlane, m_camera.farPlane) = harmonia::Camera::nearFarFromDistance(camDist);
+    // harmonia::Camera move speed also scales with the scene (5× the camera distance, so navigating
     // a scene feels responsive rather than crawling); mouse-wheel still adjusts on top.
     m_camCtrl.speed = std::max(0.1f, camDist * 2.5f);
 
@@ -261,7 +261,7 @@ bool Application::onSceneLoaded(const SceneLoader::SceneConfig& sceneConfig) {
     m_sceneMaxDepth = sceneConfig.maxDepth.value_or(3u);
     m_renderer->setTransparentMaxDepth(sceneConfig.maxDepth.value_or(2u));
 
-    Logger::info("Loaded scene: {} instances, {} bytes vb, {} bytes ib",
+    harmonia::Logger::info("Loaded scene: {} instances, {} bytes vb, {} bytes ib",
                  m_scene->instanceCount(),
                  m_scene->vertexBuffer().size(),
                  m_scene->indexBuffer().size());
@@ -290,7 +290,7 @@ bool Application::onSceneLoaded(const SceneLoader::SceneConfig& sceneConfig) {
                           conditionalCdf,
                           cdfW,
                           cdfH)) {
-        Logger::error("IBL precomputation failed");
+        harmonia::Logger::error("IBL precomputation failed");
         return false;
     }
     m_renderer->setIbl(m_ibl.resources(), envView, envNits);
@@ -324,7 +324,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
     const sm::float4x4& view = cam.view;
     const sm::float4x4& curViewProj = cam.viewProj;
 
-    // Camera-cut detection: disable the Hi-Z occlusion test for one frame after a large view
+    // harmonia::Camera-cut detection: disable the Hi-Z occlusion test for one frame after a large view
     // change so newly disoccluded meshlets (whose stale visibility is 0) are drawn instead of
     // wrongly culled. Uses view-direction angle + focus-relative translation (scale-independent).
     {
@@ -511,11 +511,11 @@ void Application::submitAsyncCompute(VkCommandBuffer cmd,
 
     if (const VkResult r = vkWaitForFences(deviceContext().device, 1, &m_asyncFences[slot], VK_TRUE, UINT64_MAX);
         r != VK_SUCCESS)
-        Logger::error("async compute wait for fences failed: {}", static_cast<std::int32_t>(r));
+        harmonia::Logger::error("async compute wait for fences failed: {}", static_cast<std::int32_t>(r));
     if (const VkResult r = vkResetFences(deviceContext().device, 1, &m_asyncFences[slot]); r != VK_SUCCESS)
-        Logger::error("async compute reset fences failed: {}", static_cast<std::int32_t>(r));
+        harmonia::Logger::error("async compute reset fences failed: {}", static_cast<std::int32_t>(r));
     if (const VkResult r = vkResetCommandBuffer(m_asyncCmdBufs[slot], 0); r != VK_SUCCESS)
-        Logger::error("async compute reset command buffer failed: {}", static_cast<std::int32_t>(r));
+        harmonia::Logger::error("async compute reset command buffer failed: {}", static_cast<std::int32_t>(r));
     constexpr VkCommandBufferBeginInfo asyncBegin{
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         .pNext = nullptr,
@@ -523,7 +523,7 @@ void Application::submitAsyncCompute(VkCommandBuffer cmd,
         .pInheritanceInfo = nullptr,
     };
     if (const VkResult r = vkBeginCommandBuffer(m_asyncCmdBufs[slot], &asyncBegin); r != VK_SUCCESS)
-        Logger::error("async compute begin command buffer failed: {}", static_cast<std::int32_t>(r));
+        harmonia::Logger::error("async compute begin command buffer failed: {}", static_cast<std::int32_t>(r));
     const VkCommandBuffer asyncCmd = m_asyncCmdBufs[slot];
 
     const std::array<VkImageMemoryBarrier2, 3> asyncAcquire{{
@@ -608,7 +608,7 @@ void Application::submitAsyncCompute(VkCommandBuffer cmd,
     }};
     harmonia::pipelineBarrier(asyncCmd, asyncRelease);
     if (const VkResult r = vkEndCommandBuffer(asyncCmd); r != VK_SUCCESS)
-        Logger::error("async compute end command buffer failed: {}", static_cast<std::int32_t>(r));
+        harmonia::Logger::error("async compute end command buffer failed: {}", static_cast<std::int32_t>(r));
 
     m_prevViewProj = curViewProj;
     m_prevViewProjValid = true;
@@ -671,14 +671,14 @@ void Application::onResize(VkExtent2D extent) noexcept {
     // Resize ForwardRenderer: recreates depth/GBuffer at new extent, updates
     // the HDR image handles (App::handleResize has already recreated the HDR image).
     if (!m_renderer->resize(extent.width, extent.height, hdrImage().handle(), hdrImage().view())) {
-        Logger::error("ForwardRenderer resize failed");
+        harmonia::Logger::error("ForwardRenderer resize failed");
         return;
     }
 
     // Reinitialize LightCuller for the new tile grid.
     m_lightCuller.shutdown();
     if (!m_lightCuller.initialize(deviceContext(), extent.width, extent.height)) {
-        Logger::warn("LightCuller resize failed — direct loop fallback active");
+        harmonia::Logger::warn("LightCuller resize failed — direct loop fallback active");
     } else {
         m_renderer->setTileBuffers(m_lightCuller.tileLightCountsBuffer(),
                                    m_lightCuller.tileLightIndicesBuffer(),
@@ -699,7 +699,7 @@ void Application::onResize(VkExtent2D extent) noexcept {
             .gbufferView = m_renderer->gbufferView(),
         };
         if (!m_giPass.initialize(deviceContext(), giCfg)) {
-            Logger::warn("GiPass resize failed — ray-query GI disabled");
+            harmonia::Logger::warn("GiPass resize failed — ray-query GI disabled");
         }
         m_renderer->setGiEnabled(giActive());
         m_renderer->setRestirDiActive(giActive() && (m_useRestirDi || m_useRestirPt));
@@ -713,7 +713,7 @@ void Application::onResize(VkExtent2D extent) noexcept {
                 .giBufferView = m_renderer->giBufferView(),
             };
             if (!m_motionVectorPass.initialize(deviceContext(), mvCfg)) {
-                Logger::warn("MotionVectorPass resize failed — static history fallback active");
+                harmonia::Logger::warn("MotionVectorPass resize failed — static history fallback active");
             }
         }
     } else {
@@ -730,7 +730,7 @@ void Application::onResize(VkExtent2D extent) noexcept {
             .motionVecView = m_motionVectorPass.motionVectorImageView(),
         };
         if (!m_taaPass.initialize(deviceContext(), taaCfg)) {
-            Logger::warn("TaaPass resize failed — TAA disabled");
+            harmonia::Logger::warn("TaaPass resize failed — TAA disabled");
         }
     }
 
@@ -777,7 +777,7 @@ std::pair<VkCommandBuffer, VkSemaphore> Application::onBeforeSceneStages(VkComma
     };
     if (const VkResult r = vkQueueSubmit2(deviceContext().graphicsQueue, 1, &gfxSubmit, VK_NULL_HANDLE);
         r != VK_SUCCESS)
-        Logger::error("async compute graphics submit failed: {}", static_cast<std::int32_t>(r));
+        harmonia::Logger::error("async compute graphics submit failed: {}", static_cast<std::int32_t>(r));
 
     // ── Submit 2: async compute (GI + MotionVector) ──
     const VkCommandBufferSubmitInfo asyncCmdInfo{
@@ -815,7 +815,7 @@ std::pair<VkCommandBuffer, VkSemaphore> Application::onBeforeSceneStages(VkComma
     };
     if (const VkResult r = vkQueueSubmit2(deviceContext().asyncComputeQueue, 1, &asyncSubmit, m_asyncFences[slot]);
         r != VK_SUCCESS)
-        Logger::error("async compute submit failed: {}", static_cast<std::int32_t>(r));
+        harmonia::Logger::error("async compute submit failed: {}", static_cast<std::int32_t>(r));
 
     // ── Open m_stagesCmdBufs[slot] (graphics family) for scene stages ──
     VkCommandBuffer stagesCmd = m_stagesCmdBufs[slot];
@@ -949,14 +949,14 @@ bool Application::onEvent(const SDL_Event& event) {
             if (down) {
                 const float ev100 = m_camera.physical.ev100() - 0.5f;
                 m_camera.physical.shutterSpeedHz = std::pow(2.0f, ev100);
-                Logger::info("EV100 = {:.1f}", m_camera.physical.ev100());
+                harmonia::Logger::info("EV100 = {:.1f}", m_camera.physical.ev100());
             }
             return true;
         case SDL_SCANCODE_RIGHTBRACKET:
             if (down) {
                 const float ev100 = m_camera.physical.ev100() + 0.5f;
                 m_camera.physical.shutterSpeedHz = std::pow(2.0f, ev100);
-                Logger::info("EV100 = {:.1f}", m_camera.physical.ev100());
+                harmonia::Logger::info("EV100 = {:.1f}", m_camera.physical.ev100());
             }
             return true;
         default:

@@ -26,11 +26,11 @@ namespace theia {
 
 /// GPU-driven forward renderer using Vulkan 1.4 features.
 /// - Dynamic rendering (no render passes)
-/// - Mesh shaders (VK_EXT_mesh_shader) for GPU-driven geometry
+/// - harmonia::Mesh shaders (VK_EXT_mesh_shader) for GPU-driven geometry
 /// - Depth pre-pass ready (depth target owned here)
 ///
 /// The HDR color target is owned by Application (same as Hyperion''s hdrImage)
-/// and passed in via Config so ToneMapper can read it as a storage image.
+/// and passed in via Config so harmonia::ToneMapper can read it as a storage image.
 class ForwardRenderer {
   public:
     struct Config {
@@ -46,16 +46,16 @@ class ForwardRenderer {
         VkSampler iblLutSampler = VK_NULL_HANDLE;
     };
 
-    /// Camera parameters. Uses the shared harmonia::Camera::Params so both
+    /// harmonia::Camera parameters. Uses the shared harmonia::Camera::Params so both
     /// Hyperion and Theia describe their cameras with the same type.
     /// ForwardRenderer reads: position, target, up, vfovDeg, nearPlane,
     /// farPlane, and physical.ev100() for exposure.
-    using CameraParams = Camera::Params;
+    using CameraParams = harmonia::Camera::Params;
 
     ForwardRenderer() = default;
     ~ForwardRenderer();
 
-    bool initialize(const DeviceContext& ctx, const Config& config);
+    bool initialize(const harmonia::DeviceContext& ctx, const Config& config);
     void shutdown();
 
     /// Resize to a new extent after the host (App) has recreated the HDR image.
@@ -125,7 +125,7 @@ class ForwardRenderer {
 
     /// Record scene geometry rendering into cmd.
     /// Transitions hdrImage UNDEFINED/GENERAL -> ATTACHMENT_OPTIMAL, renders, leaves it there.
-    /// Application::mainLoop() will barrier it to GENERAL before the ToneMapper.
+    /// Application::mainLoop() will barrier it to GENERAL before the harmonia::ToneMapper.
     void recordFrame(VkCommandBuffer cmd);
 
     // Thin GBuffer (RGBA16F: xyz=view-space normal [0,1], w=roughness) for SSR.
@@ -200,17 +200,17 @@ class ForwardRenderer {
 
     Config m_config{};
     CameraParams m_camera{};
-    const DeviceContext* m_ctx = nullptr;
+    const harmonia::DeviceContext* m_ctx = nullptr;
     const Scene* m_scene = nullptr;
 
     // Depth-only target (color target is externally owned)
-    Image m_depthTarget;
+    harmonia::Image m_depthTarget;
     // Thin GBuffer target (RGBA16F: view-space normal + roughness)
-    Image m_gbufferTarget;
+    harmonia::Image m_gbufferTarget;
     // GI GBuffer target (RGBA32F: world-space primary hit position + material index)
-    Image m_giBufferTarget;
+    harmonia::Image m_giBufferTarget;
 
-    // Mesh + fragment graphics pipeline
+    // harmonia::Mesh + fragment graphics pipeline
     harmonia::UniquePipelineLayout m_pipelineLayout;
     harmonia::UniquePipeline m_graphicsPipeline;
     harmonia::UniquePipeline m_graphicsPipelineTransparent;
@@ -281,8 +281,8 @@ class ForwardRenderer {
     std::uint32_t m_tilesX = 0;
     std::uint32_t m_tilesY = 0;
     // Dummy 1-element buffers bound when no tile data is available (fallback to full light loop).
-    Buffer m_dummyTileCounts;
-    Buffer m_dummyTileIndices;
+    harmonia::Buffer m_dummyTileCounts;
+    harmonia::Buffer m_dummyTileIndices;
 
     bool m_initialized = false;
     bool m_hdrFirstUse = true; ///< tracks whether HDR image is still in UNDEFINED layout

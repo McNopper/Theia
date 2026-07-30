@@ -14,10 +14,10 @@
 namespace theia {
 
 struct IblResources {
-    Image sheenLut;                        // 512×512 R16F  — Charlie sheen directional albedo
-    Image brdfLut;                         // 512×512 RG16F — GGX split-sum BRDF integration (A/B)
-    Image diffuseIrrad;                    // configurable RGBA16F — Lambertian-convolved irradiance
-    Image specularMipped;                  // 512×256 RGBA16F, 8 mip levels — GGX prefiltered specular
+    harmonia::Image sheenLut;                        // 512×512 R16F  — Charlie sheen directional albedo
+    harmonia::Image brdfLut;                         // 512×512 RG16F — GGX split-sum BRDF integration (A/B)
+    harmonia::Image diffuseIrrad;                    // configurable RGBA16F — Lambertian-convolved irradiance
+    harmonia::Image specularMipped;                  // 512×256 RGBA16F, 8 mip levels — GGX prefiltered specular
     harmonia::UniqueSampler lutSampler; // clamp+linear, no mip (for sheenLut)
     harmonia::UniqueSampler envSampler; // clamp+linear-mip (diffuse + specular)
 };
@@ -32,13 +32,13 @@ class IblPrecompute {
     // Precompute all IBL textures. envImageView/envSampler may be VK_NULL_HANDLE
     // (no env map) — in that case, diffuse and specular textures will be black.
     //
-    // marginalCdf / conditionalCdf are the GPU buffers built by IblProbe for env
+    // marginalCdf / conditionalCdf are the GPU buffers built by harmonia::IblProbe for env
     // importance sampling (PBR Book §12.5).  They must be provided together with
     // cdfWidth/cdfHeight when an env map is present; the diffuse irradiance pass
     // uses them instead of cosine-weighted sampling so that high-dynamic-range
     // panoramas (e.g. a visible sun disc) are represented correctly.
-    bool initialize(const DeviceContext& ctx,
-                    const CommandPool& pool,
+    bool initialize(const harmonia::DeviceContext& ctx,
+                    const harmonia::CommandPool& pool,
                     VkImageView envImageView,
                     VkSampler envSampler,
                     float envUnitNits = 1.0f,
@@ -57,7 +57,7 @@ class IblPrecompute {
     bool createSamplers();
     bool runBrdfLutPass(VkCommandBuffer cmd);
     bool runSheenLutPass(VkCommandBuffer cmd);
-    bool runLutPass(VkCommandBuffer cmd, Image& targetImage, const char* shaderName, const char* logLabel);
+    bool runLutPass(VkCommandBuffer cmd, harmonia::Image& targetImage, const char* shaderName, const char* logLabel);
     bool runDiffusePass(VkCommandBuffer cmd);
     bool runSpecularPass(VkCommandBuffer cmd);
     bool createComputePipeline(const char* spirvPath,
@@ -67,8 +67,8 @@ class IblPrecompute {
                                VkPipelineLayout& outLayout);
     void destroyTemporaryObjects() noexcept;
 
-    const DeviceContext* m_ctx = nullptr;
-    const CommandPool* m_pool = nullptr;
+    const harmonia::DeviceContext* m_ctx = nullptr;
+    const harmonia::CommandPool* m_pool = nullptr;
     VkImageView m_envImageView = VK_NULL_HANDLE;
     VkSampler m_envSampler = VK_NULL_HANDLE;
     VkBuffer m_marginalCdf = VK_NULL_HANDLE;

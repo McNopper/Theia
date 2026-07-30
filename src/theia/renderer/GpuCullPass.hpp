@@ -19,7 +19,7 @@ namespace theia {
 ///   - indirectDrawBuf:     single VkDrawMeshTasksIndirectCommandEXT = {visibleCount, 1, 1}
 ///                          (STORAGE + INDIRECT + DEVICE_ADDRESS)
 ///
-/// Two draw paths (selected by ForwardRenderer based on DeviceContext::dgcSupported):
+/// Two draw paths (selected by ForwardRenderer based on harmonia::DeviceContext::dgcSupported):
 ///
 ///   DGC path (preferred when VK_EXT_device_generated_commands is available):
 ///     - vkCmdExecuteGeneratedCommandsEXT with a single sequence whose command is
@@ -53,7 +53,7 @@ class GpuCullPass {
 
     /// Initialize the cull pass pipeline and output buffers.
     /// @param spvFilename  SPIR-V filename resolved against THEIA_SHADER_DIR.
-    [[nodiscard]] bool initialize(const DeviceContext& ctx, const char* spvFilename = "forward_cull.comp.spv");
+    [[nodiscard]] bool initialize(const harmonia::DeviceContext& ctx, const char* spvFilename = "forward_cull.comp.spv");
 
     void shutdown();
 
@@ -88,7 +88,7 @@ class GpuCullPass {
     [[nodiscard]] VkDeviceAddress indirectDrawAddress() const noexcept { return m_indirectDrawBuf.deviceAddress(); }
 
   private:
-    const DeviceContext* m_ctx = nullptr;
+    const harmonia::DeviceContext* m_ctx = nullptr;
 
     harmonia::UniquePipeline m_pipeline;
     harmonia::UniquePipelineLayout m_pipelineLayout;
@@ -96,8 +96,8 @@ class GpuCullPass {
     harmonia::UniqueDescriptorPool m_pool;
     VkDescriptorSet m_set = VK_NULL_HANDLE;
 
-    Buffer m_compactInstanceListBuf; ///< uint[kMaxInstances]  STORAGE
-    Buffer m_indirectDrawBuf;        ///< single VkDrawMeshTasksIndirectCommandEXT  STORAGE | INDIRECT | DEVICE_ADDR
+    harmonia::Buffer m_compactInstanceListBuf; ///< uint[kMaxInstances]  STORAGE
+    harmonia::Buffer m_indirectDrawBuf;        ///< single VkDrawMeshTasksIndirectCommandEXT  STORAGE | INDIRECT | DEVICE_ADDR
 };
 
 } // namespace theia

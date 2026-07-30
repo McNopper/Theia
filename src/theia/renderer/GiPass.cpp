@@ -22,7 +22,7 @@ GiPass::~GiPass() {
     shutdown();
 }
 
-bool GiPass::initialize(const DeviceContext& ctx, const Config& cfg, const char* giSpv) {
+bool GiPass::initialize(const harmonia::DeviceContext& ctx, const Config& cfg, const char* giSpv) {
     m_ctx = &ctx;
     m_cfg = cfg;
     m_hdrFirstUse = true;
@@ -37,14 +37,14 @@ bool GiPass::initialize(const DeviceContext& ctx, const Config& cfg, const char*
 
     // A3(b): 1×1 R32G32F placeholder for binding 15 when no A-SVGF gradient/variance
     // guide is available. Keeps the descriptor valid; hasGradientVariance=0 gates reads.
-    auto dummyGrad = Image::create(ctx,
+    auto dummyGrad = harmonia::Image::create(ctx,
                                    {1U, 1U},
                                    VK_FORMAT_R32G32_SFLOAT,
                                    VK_IMAGE_USAGE_SAMPLED_BIT,
                                    VK_IMAGE_ASPECT_COLOR_BIT,
                                    "theia.gi.dummyGradientVariance");
     if (!dummyGrad) {
-        Logger::error("GiPass: failed to create dummy gradient/variance image: VkResult {}",
+        harmonia::Logger::error("GiPass: failed to create dummy gradient/variance image: VkResult {}",
                       static_cast<int>(dummyGrad.error()));
         return false;
     }
@@ -52,14 +52,14 @@ bool GiPass::initialize(const DeviceContext& ctx, const Config& cfg, const char*
 
     // A4: 1×1 R32G32F zero placeholder for the motion-vector binding (18) when no real
     // motion vectors are wired (static-history temporal reuse).
-    auto dummyMotion = Image::create(ctx,
+    auto dummyMotion = harmonia::Image::create(ctx,
                                      {1U, 1U},
                                      VK_FORMAT_R32G32_SFLOAT,
                                      VK_IMAGE_USAGE_SAMPLED_BIT,
                                      VK_IMAGE_ASPECT_COLOR_BIT,
                                      "theia.gi.dummyMotionVectors");
     if (!dummyMotion) {
-        Logger::error("GiPass: failed to create dummy motion-vector image: VkResult {}",
+        harmonia::Logger::error("GiPass: failed to create dummy motion-vector image: VkResult {}",
                       static_cast<int>(dummyMotion.error()));
         return false;
     }
@@ -71,13 +71,13 @@ bool GiPass::initialize(const DeviceContext& ctx, const Config& cfg, const char*
         static_cast<VkDeviceSize>(cfg.width) * static_cast<VkDeviceSize>(cfg.height) * kReservoirStride;
     if (reservoirBytes > 0) {
         for (auto& slot : m_reservoirBuf) {
-            auto buf = Buffer::create(ctx,
+            auto buf = harmonia::Buffer::create(ctx,
                                       reservoirBytes,
                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                       VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
                                       "theia.gi.restirReservoir");
             if (!buf) {
-                Logger::error("GiPass: failed to create ReSTIR reservoir buffer: VkResult {}",
+                harmonia::Logger::error("GiPass: failed to create ReSTIR reservoir buffer: VkResult {}",
                               static_cast<int>(buf.error()));
                 return false;
             }
@@ -87,13 +87,13 @@ bool GiPass::initialize(const DeviceContext& ctx, const Config& cfg, const char*
         const VkDeviceSize pathReservoirBytes =
             static_cast<VkDeviceSize>(cfg.width) * static_cast<VkDeviceSize>(cfg.height) * kPathReservoirStride;
         for (auto& slot : m_pathReservoirBuf) {
-            auto buf = Buffer::create(ctx,
+            auto buf = harmonia::Buffer::create(ctx,
                                       pathReservoirBytes,
                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                                       VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
                                       "theia.gi.restirPathReservoir");
             if (!buf) {
-                Logger::error("GiPass: failed to create ReSTIR path reservoir buffer: VkResult {}",
+                harmonia::Logger::error("GiPass: failed to create ReSTIR path reservoir buffer: VkResult {}",
                               static_cast<int>(buf.error()));
                 return false;
             }
@@ -199,7 +199,7 @@ bool GiPass::createDescriptors() {
     };
     VkDescriptorSetLayout setLayout{};
     if (vkCreateDescriptorSetLayout(m_ctx->device, &setInfo, nullptr, &setLayout) != VK_SUCCESS) {
-        Logger::error("GiPass: failed to create descriptor set layout");
+        harmonia::Logger::error("GiPass: failed to create descriptor set layout");
         return false;
     }
     m_setLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, setLayout};
@@ -222,7 +222,7 @@ bool GiPass::createDescriptors() {
     };
     VkDescriptorPool pool{};
     if (vkCreateDescriptorPool(m_ctx->device, &poolInfo, nullptr, &pool) != VK_SUCCESS) {
-        Logger::error("GiPass: failed to create descriptor pool");
+        harmonia::Logger::error("GiPass: failed to create descriptor pool");
         return false;
     }
     m_pool = harmonia::UniqueDescriptorPool{m_ctx->device, pool};
@@ -234,7 +234,7 @@ bool GiPass::createDescriptors() {
         .pSetLayouts = m_setLayout.ptr(),
     };
     if (vkAllocateDescriptorSets(m_ctx->device, &allocInfo, &m_set) != VK_SUCCESS) {
-        Logger::error("GiPass: failed to allocate descriptor set");
+        harmonia::Logger::error("GiPass: failed to allocate descriptor set");
         return false;
     }
     return true;
@@ -255,14 +255,14 @@ bool GiPass::createPipeline(const char* giSpv) {
     };
     VkPipelineLayout pipelineLayout{};
     if (vkCreatePipelineLayout(m_ctx->device, &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
-        Logger::error("GiPass: failed to create pipeline layout");
+        harmonia::Logger::error("GiPass: failed to create pipeline layout");
         return false;
     }
     m_pipelineLayout = harmonia::UniquePipelineLayout{m_ctx->device, pipelineLayout};
 
     auto module = harmonia::createShaderModule(m_ctx->device, shaderPath(giSpv));
     if (!module) {
-        Logger::error("GiPass: cannot load shader: {}", giSpv);
+        harmonia::Logger::error("GiPass: cannot load shader: {}", giSpv);
         return false;
     }
 
@@ -278,7 +278,7 @@ bool GiPass::createPipeline(const char* giSpv) {
     const VkResult res = vkCreateComputePipelines(m_ctx->device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &pipeline);
     vkDestroyShaderModule(m_ctx->device, *module, nullptr);
     if (res != VK_SUCCESS) {
-        Logger::error("GiPass: failed to create compute pipeline");
+        harmonia::Logger::error("GiPass: failed to create compute pipeline");
         return false;
     }
     m_pipeline = harmonia::UniquePipeline{m_ctx->device, pipeline};

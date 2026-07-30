@@ -71,9 +71,9 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
   protected:
     // harmonia::App hooks
     [[nodiscard]] harmonia::IRenderer& renderer() noexcept override { return *this; }
-    [[nodiscard]] ISceneBuilder& sceneBuilder() noexcept override { return *m_scene; }
+    [[nodiscard]] harmonia::ISceneBuilder& sceneBuilder() noexcept override { return *m_scene; }
     [[nodiscard]] bool onInitialize() override;
-    [[nodiscard]] bool onSceneLoaded(const SceneLoader::SceneConfig& sceneConfig) override;
+    [[nodiscard]] bool onSceneLoaded(const harmonia::SceneLoader::SceneConfig& sceneConfig) override;
     void onSceneUnload() override;
     bool onEvent(const SDL_Event& event) override;
     void onUpdate(float dtSeconds) override;
@@ -153,7 +153,7 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     float m_prevEv100 = 0.0f;
     bool m_viewSigValid = false;
 
-    // Camera-cut detection for two-pass Hi-Z occlusion culling: on a large view change the
+    // harmonia::Camera-cut detection for two-pass Hi-Z occlusion culling: on a large view change the
     // previous-frame visibility set is stale, so the Hi-Z test is disabled for that frame and
     // all remaining meshlets are drawn conservatively (prevents culling disoccluded geometry).
     sm::float3 m_hiZPrevPos{0.0f, 0.0f, 0.0f};

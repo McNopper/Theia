@@ -37,7 +37,7 @@ HiZPass::~HiZPass() {
     shutdown();
 }
 
-bool HiZPass::initialize(const DeviceContext& ctx, std::uint32_t width, std::uint32_t height, const char* spvName) {
+bool HiZPass::initialize(const harmonia::DeviceContext& ctx, std::uint32_t width, std::uint32_t height, const char* spvName) {
     shutdown();
     m_ctx = &ctx;
     m_width = width;
@@ -45,7 +45,7 @@ bool HiZPass::initialize(const DeviceContext& ctx, std::uint32_t width, std::uin
     m_firstUse = true;
 
     if (width == 0 || height == 0) {
-        Logger::error("HiZPass: invalid extent {}x{}", width, height);
+        harmonia::Logger::error("HiZPass: invalid extent {}x{}", width, height);
         m_ctx = nullptr;
         return false;
     }
@@ -58,10 +58,10 @@ bool HiZPass::initialize(const DeviceContext& ctx, std::uint32_t width, std::uin
     if (!createPipeline(spvName)) {
         // Backward-compatible: keep the image (so callers can still bind a valid Hi-Z
         // descriptor) but report failure via isInitialized() == false.
-        Logger::warn("HiZPass: pipeline unavailable — occlusion culling disabled");
+        harmonia::Logger::warn("HiZPass: pipeline unavailable — occlusion culling disabled");
         return false;
     }
-    Logger::info("HiZPass: initialized {}x{} with {} mip levels", width, height, m_mipLevels);
+    harmonia::Logger::info("HiZPass: initialized {}x{} with {} mip levels", width, height, m_mipLevels);
     return true;
 }
 
@@ -82,7 +82,7 @@ void HiZPass::shutdown() {
 }
 
 bool HiZPass::createImage() noexcept {
-    auto img = Image::create(*m_ctx,
+    auto img = harmonia::Image::create(*m_ctx,
                              {m_width, m_height},
                              VK_FORMAT_R32_SFLOAT,
                              VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
@@ -90,7 +90,7 @@ bool HiZPass::createImage() noexcept {
                              "theia.hiZ",
                              m_mipLevels);
     if (!img) {
-        Logger::error("HiZPass: failed to create Hi-Z image: VkResult {}", static_cast<int>(img.error()));
+        harmonia::Logger::error("HiZPass: failed to create Hi-Z image: VkResult {}", static_cast<int>(img.error()));
         return false;
     }
     m_image = std::move(*img);
@@ -108,7 +108,7 @@ bool HiZPass::createImage() noexcept {
         };
         VkImageView view{};
         if (vkCreateImageView(m_ctx->device, &viewInfo, nullptr, &view) != VK_SUCCESS) {
-            Logger::error("HiZPass: failed to create mip view {}", level);
+            harmonia::Logger::error("HiZPass: failed to create mip view {}", level);
             return false;
         }
         m_mipViews.emplace_back(m_ctx->device, view);
@@ -146,7 +146,7 @@ bool HiZPass::createPipeline(const char* spvName) noexcept {
     {
         VkDescriptorSetLayout setLayout{};
         if (vkCreateDescriptorSetLayout(m_ctx->device, &setInfo, nullptr, &setLayout) != VK_SUCCESS) {
-            Logger::error("HiZPass: failed to create descriptor set layout");
+            harmonia::Logger::error("HiZPass: failed to create descriptor set layout");
             return false;
         }
         m_setLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, setLayout};
@@ -167,7 +167,7 @@ bool HiZPass::createPipeline(const char* spvName) noexcept {
     {
         VkPipelineLayout pipelineLayout{};
         if (vkCreatePipelineLayout(m_ctx->device, &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
-            Logger::error("HiZPass: failed to create pipeline layout");
+            harmonia::Logger::error("HiZPass: failed to create pipeline layout");
             return false;
         }
         m_pipelineLayout = harmonia::UniquePipelineLayout{m_ctx->device, pipelineLayout};
@@ -175,7 +175,7 @@ bool HiZPass::createPipeline(const char* spvName) noexcept {
 
     auto module = harmonia::createShaderModule(m_ctx->device, shaderPath(spvName));
     if (!module) {
-        Logger::error("HiZPass: cannot load shader: {}", spvName);
+        harmonia::Logger::error("HiZPass: cannot load shader: {}", spvName);
         return false;
     }
     const VkComputePipelineCreateInfo pipeInfo{
@@ -190,7 +190,7 @@ bool HiZPass::createPipeline(const char* spvName) noexcept {
     const VkResult res = vkCreateComputePipelines(m_ctx->device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &pipeline);
     vkDestroyShaderModule(m_ctx->device, *module, nullptr);
     if (res != VK_SUCCESS) {
-        Logger::error("HiZPass: failed to create compute pipeline");
+        harmonia::Logger::error("HiZPass: failed to create compute pipeline");
         return false;
     }
     m_pipeline = harmonia::UniquePipeline{m_ctx->device, pipeline};
