@@ -63,7 +63,7 @@ int main(int argc, char* const argv[]) {
             taaForcedOn = true;
             continue;
         }
-        static_cast<void>(harmonia::App::applyCommonArg(config, i, argc, argv));
+        static_cast<void>(harmonia::CliParser::applyCommonArg(config, i, argc, argv));
     }
 
     // Reject incompatible flag combinations rather than silently degrading the output.
