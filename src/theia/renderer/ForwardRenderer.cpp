@@ -39,15 +39,15 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
     // shader) is non-fatal: the image is still created, the occlusion test disabled, and the
     // renderer falls back to drawing all meshlets. Only a failure to create the image itself
     // (catastrophic / OOM) is fatal.
-    (void)m_hiZPass.initialize(ctx, config.width, config.height);
-    if (m_hiZPass.sampledView() == VK_NULL_HANDLE) {
+    (void)m_gpu.hiZPass.initialize(ctx, config.width, config.height);
+    if (m_gpu.hiZPass.sampledView() == VK_NULL_HANDLE) {
         Logger::error("Failed to create Hi-Z image");
         return false;
     }
 
     // GPU-driven frustum cull pass (GD2/GD3). Non-fatal on failure: renderer falls back to
     // vkCmdDrawMeshTasksEXT with the CPU-known instance count.
-    if (!m_gpuCullPass.initialize(ctx)) {
+    if (!m_gpu.gpuCullPass.initialize(ctx)) {
         Logger::warn("GpuCullPass: initialization failed — falling back to CPU-count draw");
     }
 
@@ -69,7 +69,7 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
     // GD6: create DGC indirect commands layout when VK_EXT_device_generated_commands is available.
     // One token: DRAW_MESH_TASKS_EXT (stride=12 = VkDrawMeshTasksIndirectCommandEXT).
     // sequenceCountAddress will point to indirectDrawBuf[0..3] (visible instance count).
-    if (ctx.dgcSupported && m_gpuCullPass.isInitialized() && !forceGd3) {
+    if (ctx.dgcSupported && m_gpu.gpuCullPass.isInitialized() && !forceGd3) {
         const VkIndirectCommandsLayoutTokenEXT dgcToken{
             .sType = VK_STRUCTURE_TYPE_INDIRECT_COMMANDS_LAYOUT_TOKEN_EXT,
             .type = VK_INDIRECT_COMMANDS_TOKEN_TYPE_DRAW_MESH_TASKS_EXT,
@@ -88,7 +88,7 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
         if (vkCreateIndirectCommandsLayoutEXT(ctx.device, &dgcLayoutCI, nullptr, &dgcLayout) != VK_SUCCESS) {
             Logger::warn("ForwardRenderer: vkCreateIndirectCommandsLayoutEXT failed — GD3 fallback");
         } else {
-            m_dgcLayout = harmonia::UniqueIndirectCommandsLayout{ctx.device, dgcLayout};
+            m_gpu.dgcLayout = harmonia::UniqueIndirectCommandsLayout{ctx.device, dgcLayout};
         }
     }
 
@@ -100,7 +100,7 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
     // GD6: query and allocate preprocess buffer after pipeline creation (requires pipeline handle).
     // VkBufferUsageFlags2CreateInfo is needed because VK_BUFFER_USAGE_2_PREPROCESS_BUFFER_BIT_EXT
     // is a 64-bit flag not representable in the 32-bit VkBufferUsageFlags enum.
-    if (m_dgcLayout != VK_NULL_HANDLE) {
+    if (m_gpu.dgcLayout != VK_NULL_HANDLE) {
         const VkGeneratedCommandsPipelineInfoEXT memReqPipelineInfo{
             .sType = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_PIPELINE_INFO_EXT,
             .pipeline = m_graphicsPipeline,
@@ -109,15 +109,15 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
             .sType = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_MEMORY_REQUIREMENTS_INFO_EXT,
             .pNext = &memReqPipelineInfo,
             .indirectExecutionSet = VK_NULL_HANDLE,
-            .indirectCommandsLayout = m_dgcLayout,
+            .indirectCommandsLayout = m_gpu.dgcLayout,
             .maxSequenceCount = 1u, // single GPU-generated draw (see drawOpaque/drawTransparent)
             .maxDrawCount = 1,
         };
         VkMemoryRequirements2 memReq{.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2};
         vkGetGeneratedCommandsMemoryRequirementsEXT(ctx.device, &memReqInfo, &memReq);
-        m_dgcPreprocessSize = memReq.memoryRequirements.size;
+        m_gpu.dgcPreprocessSize = memReq.memoryRequirements.size;
 
-        if (m_dgcPreprocessSize > 0) {
+        if (m_gpu.dgcPreprocessSize > 0) {
             constexpr VkBufferUsageFlags2KHR kPreprocessUsage =
                 VK_BUFFER_USAGE_2_PREPROCESS_BUFFER_BIT_EXT | VK_BUFFER_USAGE_2_SHADER_DEVICE_ADDRESS_BIT_KHR;
             const VkBufferUsageFlags2CreateInfo usageFlags2{
@@ -127,7 +127,7 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
             const VkBufferCreateInfo ppBufCI{
                 .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
                 .pNext = &usageFlags2,
-                .size = m_dgcPreprocessSize,
+                .size = m_gpu.dgcPreprocessSize,
                 .usage = 0, // usage provided via VkBufferUsageFlags2CreateInfo
                 .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
             };
@@ -136,17 +136,17 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
                 .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
             };
             if (vmaCreateBuffer(
-                    ctx.allocator, &ppBufCI, &ppAllocCI, &m_dgcPreprocessBuf, &m_dgcPreprocessAlloc, nullptr) ==
+                    ctx.allocator, &ppBufCI, &ppAllocCI, &m_gpu.dgcPreprocessBuf, &m_gpu.dgcPreprocessAlloc, nullptr) ==
                 VK_SUCCESS) {
                 const VkBufferDeviceAddressInfo addrInfo{
                     .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO,
-                    .buffer = m_dgcPreprocessBuf,
+                    .buffer = m_gpu.dgcPreprocessBuf,
                 };
-                m_dgcPreprocessAddr = vkGetBufferDeviceAddress(ctx.device, &addrInfo);
+                m_gpu.dgcPreprocessAddr = vkGetBufferDeviceAddress(ctx.device, &addrInfo);
             } else {
                 Logger::warn("ForwardRenderer: failed to allocate DGC preprocess buffer — GD3 fallback");
-                m_dgcLayout.reset();
-                m_dgcPreprocessSize = 0;
+                m_gpu.dgcLayout.reset();
+                m_gpu.dgcPreprocessSize = 0;
             }
         }
     }
@@ -166,9 +166,9 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
     char* hiZDisableRaw = nullptr;
     std::size_t hiZDisableLen = 0;
     if (_dupenv_s(&hiZDisableRaw, &hiZDisableLen, "THEIA_DISABLE_HIZ") == 0 && hiZDisableRaw != nullptr) {
-        m_hiZDebugDisabled = (hiZDisableRaw[0] != '\0' && hiZDisableRaw[0] != '0');
+        m_gpu.hiZDebugDisabled = (hiZDisableRaw[0] != '\0' && hiZDisableRaw[0] != '0');
         std::free(hiZDisableRaw);
-        if (m_hiZDebugDisabled) {
+        if (m_gpu.hiZDebugDisabled) {
             Logger::info("THEIA_DISABLE_HIZ set — Hi-Z occlusion test disabled");
         }
     }
@@ -176,9 +176,9 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
     char* singlePassRaw = nullptr;
     std::size_t singlePassLen = 0;
     if (_dupenv_s(&singlePassRaw, &singlePassLen, "THEIA_SINGLE_PASS") == 0 && singlePassRaw != nullptr) {
-        m_forceSinglePass = (singlePassRaw[0] != '\0' && singlePassRaw[0] != '0');
+        m_gpu.forceSinglePass = (singlePassRaw[0] != '\0' && singlePassRaw[0] != '0');
         std::free(singlePassRaw);
-        if (m_forceSinglePass) {
+        if (m_gpu.forceSinglePass) {
             Logger::info("THEIA_SINGLE_PASS set — two-pass Hi-Z bypassed (single draw pass)");
         }
     }
@@ -213,14 +213,14 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
                                        "theia.identityInstanceList");
         if (identBuf) {
             identBuf->uploadData(identity.data(), static_cast<VkDeviceSize>(kIdCount) * sizeof(std::uint32_t), 0);
-            m_identityInstanceList = std::move(*identBuf);
+            m_gpu.identityInstanceList = std::move(*identBuf);
         }
     }
 
     m_initialized = true;
     m_hdrFirstUse = true;
-    const char* drawPath = m_dgcLayout != VK_NULL_HANDLE   ? "DGC"
-                           : m_gpuCullPass.isInitialized() ? "indirect"
+    const char* drawPath = m_gpu.dgcLayout != VK_NULL_HANDLE   ? "DGC"
+                           : m_gpu.gpuCullPass.isInitialized() ? "indirect"
                                                            : "CPU-count";
     Logger::info("GPU-driven forward renderer initialized ({}x{}) [{}]", config.width, config.height, drawPath);
     return true;
@@ -257,30 +257,30 @@ void ForwardRenderer::shutdown() {
 
     m_dummyTileCounts = {};
     m_dummyTileIndices = {};
-    m_identityInstanceList = {};
+    m_gpu.identityInstanceList = {};
 
-    if (m_dgcPreprocessBuf != VK_NULL_HANDLE) {
-        vmaDestroyBuffer(m_ctx->allocator, m_dgcPreprocessBuf, m_dgcPreprocessAlloc);
-        m_dgcPreprocessBuf = VK_NULL_HANDLE;
-        m_dgcPreprocessAlloc = VK_NULL_HANDLE;
-        m_dgcPreprocessAddr = 0;
-        m_dgcPreprocessSize = 0;
+    if (m_gpu.dgcPreprocessBuf != VK_NULL_HANDLE) {
+        vmaDestroyBuffer(m_ctx->allocator, m_gpu.dgcPreprocessBuf, m_gpu.dgcPreprocessAlloc);
+        m_gpu.dgcPreprocessBuf = VK_NULL_HANDLE;
+        m_gpu.dgcPreprocessAlloc = VK_NULL_HANDLE;
+        m_gpu.dgcPreprocessAddr = 0;
+        m_gpu.dgcPreprocessSize = 0;
     }
 
-    m_dgcLayout.reset();
+    m_gpu.dgcLayout.reset();
 
     m_meshSet = VK_NULL_HANDLE;
     m_matSet = VK_NULL_HANDLE;
     m_iblSet = VK_NULL_HANDLE;
     m_textureSet = VK_NULL_HANDLE;
     m_texturesBoundFor = nullptr;
-    m_hiZPass.shutdown();
-    m_gpuCullPass.shutdown();
-    m_meshletVisibility[0] = {};
-    m_meshletVisibility[1] = {};
-    m_visBuiltFor = nullptr;
-    m_visMeshletCount = 0;
-    m_visFrame = 0;
+    m_gpu.hiZPass.shutdown();
+    m_gpu.gpuCullPass.shutdown();
+    m_gpu.meshletVisibility[0] = {};
+    m_gpu.meshletVisibility[1] = {};
+    m_gpu.visBuiltFor = nullptr;
+    m_gpu.visMeshletCount = 0;
+    m_gpu.visFrame = 0;
     m_depthTarget = {};
     m_gbufferTarget = {};
     m_giBufferTarget = {};
@@ -306,7 +306,7 @@ bool ForwardRenderer::resize(std::uint32_t width,
     m_hdrFirstUse = true;
     // Recreate the Hi-Z pyramid at the new resolution. Visibility buffers are
     // resolution-independent (one entry per meshlet) and are kept across resize.
-    (void)m_hiZPass.initialize(*m_ctx, width, height);
+    (void)m_gpu.hiZPass.initialize(*m_ctx, width, height);
     return createDepthTarget();
 }
 
@@ -455,12 +455,12 @@ bool ForwardRenderer::ensureVisibilityBuffers() {
     if (m_scene == nullptr) {
         return false;
     }
-    if (m_visBuiltFor == m_scene && m_meshletVisibility[0].handle() != VK_NULL_HANDLE) {
+    if (m_gpu.visBuiltFor == m_scene && m_gpu.meshletVisibility[0].handle() != VK_NULL_HANDLE) {
         return true;
     }
     const std::uint32_t meshletCount = std::max(1u, m_scene->meshletCount());
     const VkDeviceSize size = static_cast<VkDeviceSize>(meshletCount) * sizeof(std::uint32_t);
-    for (auto& buf : m_meshletVisibility) {
+    for (auto& buf : m_gpu.meshletVisibility) {
         auto created = Buffer::create(*m_ctx,
                                       size,
                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -472,11 +472,11 @@ bool ForwardRenderer::ensureVisibilityBuffers() {
         }
         buf = std::move(*created);
     }
-    m_visMeshletCount = meshletCount;
-    m_visBuiltFor = m_scene;
-    m_visFrame = 0;
+    m_gpu.visMeshletCount = meshletCount;
+    m_gpu.visBuiltFor = m_scene;
+    m_gpu.visFrame = 0;
     // Both buffers hold undefined VMA memory; the first frame clears both (see recordFrame).
-    m_visClearPrev = true;
+    m_gpu.visClearPrev = true;
     return true;
 }
 
@@ -501,7 +501,7 @@ void ForwardRenderer::drawOpaque(VkCommandBuffer cmd,
                        0,
                        sizeof(MeshPushConstants),
                        &pc);
-    if (m_gpuCullPass.isInitialized() && m_dgcLayout != VK_NULL_HANDLE) {
+    if (m_gpu.gpuCullPass.isInitialized() && m_gpu.dgcLayout != VK_NULL_HANDLE) {
         // GD6 DGC path: one GPU-generated DRAW_MESH_TASKS command via VK_EXT_device_generated_commands.
         // indirectAddress points at indirectDrawBuf = {visibleCount, 1, 1} (written by GpuCullPass),
         // so a single sequence dispatches `visibleCount` task workgroups. The task shader indexes
@@ -516,20 +516,20 @@ void ForwardRenderer::drawOpaque(VkCommandBuffer cmd,
             .pNext = &dgcPipelineInfo,
             .shaderStages = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
             .indirectExecutionSet = VK_NULL_HANDLE,
-            .indirectCommandsLayout = m_dgcLayout,
-            .indirectAddress = m_gpuCullPass.indirectDrawAddress(),
+            .indirectCommandsLayout = m_gpu.dgcLayout,
+            .indirectAddress = m_gpu.gpuCullPass.indirectDrawAddress(),
             .indirectAddressSize = kMeshTaskIndirectCmdSize,
-            .preprocessAddress = m_dgcPreprocessAddr,
-            .preprocessSize = m_dgcPreprocessSize,
+            .preprocessAddress = m_gpu.dgcPreprocessAddr,
+            .preprocessSize = m_gpu.dgcPreprocessSize,
             .maxSequenceCount = 1u,    // single GPU-generated draw
             .sequenceCountAddress = 0, // fixed count of 1
             .maxDrawCount = 1,
         };
         vkCmdExecuteGeneratedCommandsEXT(cmd, VK_FALSE, &dgcInfo);
-    } else if (m_gpuCullPass.isInitialized() && vkCmdDrawMeshTasksIndirectEXT != nullptr) {
+    } else if (m_gpu.gpuCullPass.isInitialized() && vkCmdDrawMeshTasksIndirectEXT != nullptr) {
         // GD3 fallback: single indirect draw; task shader gid.x = visible instance position.
         vkCmdDrawMeshTasksIndirectEXT(cmd,
-                                      m_gpuCullPass.indirectDrawBuffer(),
+                                      m_gpu.gpuCullPass.indirectDrawBuffer(),
                                       0,
                                       1, // exactly one indirect command entry
                                       kMeshTaskIndirectCmdSize);
@@ -1151,9 +1151,9 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
     // inside a render pass). Dispatch before the Hi-Z passes and barrier results.
     dispatchGpuCull(cmd, instanceCount, viewProj);
 
-    const bool twoPass = canDraw && visReady && !m_forceSinglePass;
+    const bool twoPass = canDraw && visReady && !m_gpu.forceSinglePass;
     const std::uint32_t hiZMip =
-        (twoPass && m_hiZPass.isInitialized() && m_hiZTestEnabled && !m_hiZDebugDisabled) ? m_hiZPass.mipLevels() : 0u;
+        (twoPass && m_gpu.hiZPass.isInitialized() && m_gpu.hiZTestEnabled && !m_gpu.hiZDebugDisabled) ? m_gpu.hiZPass.mipLevels() : 0u;
 
     if (!twoPass) {
         recordOpaquePass(cmd, pcBase);
@@ -1162,16 +1162,16 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
 
     // ---- Two-pass Hi-Z occlusion culling ----
     // Ensure the Hi-Z image is sampleable in both passes (first-use layout transition).
-    m_hiZPass.prepareForSampling(cmd);
+    m_gpu.hiZPass.prepareForSampling(cmd);
 
-    const VkBuffer prevVisBuf = m_meshletVisibility[m_visFrame].handle();
-    const VkBuffer currVisBuf = m_meshletVisibility[m_visFrame ^ 1u].handle();
+    const VkBuffer prevVisBuf = m_gpu.meshletVisibility[m_gpu.visFrame].handle();
+    const VkBuffer currVisBuf = m_gpu.meshletVisibility[m_gpu.visFrame ^ 1u].handle();
 
     // Reset the current-frame visibility (and previous on the first frame for a scene).
     vkCmdFillBuffer(cmd, currVisBuf, 0, VK_WHOLE_SIZE, 0u);
-    if (m_visClearPrev) {
+    if (m_gpu.visClearPrev) {
         vkCmdFillBuffer(cmd, prevVisBuf, 0, VK_WHOLE_SIZE, 0u);
-        m_visClearPrev = false;
+        m_gpu.visClearPrev = false;
     }
     const std::array visFillBarriers{
         VkBufferMemoryBarrier2{
@@ -1230,7 +1230,7 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
         };
         vkCmdPipelineBarrier2(cmd, &depthReadDep);
 
-        m_hiZPass.build(cmd, m_depthTarget.view());
+        m_gpu.hiZPass.build(cmd, m_depthTarget.view());
 
         // Restore depth to a write attachment for pass 2 (contents preserved for LOAD).
         const VkImageMemoryBarrier2 depthToAttach{
@@ -1281,7 +1281,7 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
     vkCmdEndRendering(cmd);
 
     // Swap ping-pong: this frame's visibility becomes next frame's "previous".
-    m_visFrame ^= 1u;
+    m_gpu.visFrame ^= 1u;
     m_hdrFirstUse = false;
 }
 
@@ -1424,8 +1424,8 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
     };
 
     const VkBuffer visFallbackBuf = m_scene->meshletBuffer().handle();
-    const VkBuffer prevVisBuf = m_meshletVisibility[m_visFrame].handle();
-    const VkBuffer currVisBuf = m_meshletVisibility[m_visFrame ^ 1u].handle();
+    const VkBuffer prevVisBuf = m_gpu.meshletVisibility[m_gpu.visFrame].handle();
+    const VkBuffer currVisBuf = m_gpu.meshletVisibility[m_gpu.visFrame ^ 1u].handle();
     VkDescriptorBufferInfo prevVisInfo{
         .buffer = (prevVisBuf != VK_NULL_HANDLE) ? prevVisBuf : visFallbackBuf,
         .offset = 0,
@@ -1438,14 +1438,14 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
     };
     VkDescriptorImageInfo hiZInfo{
         .sampler = VK_NULL_HANDLE,
-        .imageView = m_hiZPass.sampledView(),
+        .imageView = m_gpu.hiZPass.sampledView(),
         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
     };
 
     const VkBuffer identFallback =
-        m_identityInstanceList.isValid() ? m_identityInstanceList.handle() : m_scene->instanceBuffer().handle();
+        m_gpu.identityInstanceList.isValid() ? m_gpu.identityInstanceList.handle() : m_scene->instanceBuffer().handle();
     const VkBuffer compactInstBuf =
-        m_gpuCullPass.isInitialized() ? m_gpuCullPass.compactInstanceListBuffer() : identFallback;
+        m_gpu.gpuCullPass.isInitialized() ? m_gpu.gpuCullPass.compactInstanceListBuffer() : identFallback;
     VkDescriptorBufferInfo compactInstInfo{compactInstBuf, 0, VK_WHOLE_SIZE};
 
     std::array<VkWriteDescriptorSet, 20> writes{
@@ -1641,10 +1641,10 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
 
 void ForwardRenderer::dispatchGpuCull(VkCommandBuffer cmd, std::uint32_t instanceCount, const sm::float4x4& viewProj) {
     const bool canDraw = (instanceCount > 0) && (vkCmdDrawMeshTasksEXT != nullptr);
-    if (!canDraw || !m_gpuCullPass.isInitialized()) {
+    if (!canDraw || !m_gpu.gpuCullPass.isInitialized()) {
         return;
     }
-    m_gpuCullPass.dispatch(
+    m_gpu.gpuCullPass.dispatch(
         cmd, m_scene->instanceBuffer().handle(), m_scene->instanceBoundsBuffer().handle(), instanceCount, viewProj);
     const std::array cullBarriers{
         VkBufferMemoryBarrier2{
@@ -1653,7 +1653,7 @@ void ForwardRenderer::dispatchGpuCull(VkCommandBuffer cmd, std::uint32_t instanc
             .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
             .dstStageMask = VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT,
             .dstAccessMask = VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
-            .buffer = m_gpuCullPass.compactInstanceListBuffer(),
+            .buffer = m_gpu.gpuCullPass.compactInstanceListBuffer(),
             .offset = 0,
             .size = VK_WHOLE_SIZE,
         },
@@ -1663,7 +1663,7 @@ void ForwardRenderer::dispatchGpuCull(VkCommandBuffer cmd, std::uint32_t instanc
             .srcAccessMask = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
             .dstStageMask = VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_COMMAND_PREPROCESS_BIT_EXT,
             .dstAccessMask = VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_COMMAND_PREPROCESS_READ_BIT_EXT,
-            .buffer = m_gpuCullPass.indirectDrawBuffer(),
+            .buffer = m_gpu.gpuCullPass.indirectDrawBuffer(),
             .offset = 0,
             .size = VK_WHOLE_SIZE,
         },
@@ -1767,7 +1767,7 @@ void ForwardRenderer::recordTransparent(VkCommandBuffer cmd, const MeshPushConst
                        sizeof(MeshPushConstants),
                        &pc);
     const std::uint32_t instCnt = m_scene->instanceCount();
-    if (m_gpuCullPass.isInitialized() && m_dgcLayout != VK_NULL_HANDLE) {
+    if (m_gpu.gpuCullPass.isInitialized() && m_gpu.dgcLayout != VK_NULL_HANDLE) {
         const VkGeneratedCommandsPipelineInfoEXT dgcPipelineInfo{
             .sType = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_PIPELINE_INFO_EXT,
             .pipeline = m_graphicsPipelineTransparent,
@@ -1777,18 +1777,18 @@ void ForwardRenderer::recordTransparent(VkCommandBuffer cmd, const MeshPushConst
             .pNext = &dgcPipelineInfo,
             .shaderStages = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
             .indirectExecutionSet = VK_NULL_HANDLE,
-            .indirectCommandsLayout = m_dgcLayout,
-            .indirectAddress = m_gpuCullPass.indirectDrawAddress(),
+            .indirectCommandsLayout = m_gpu.dgcLayout,
+            .indirectAddress = m_gpu.gpuCullPass.indirectDrawAddress(),
             .indirectAddressSize = kMeshTaskIndirectCmdSize,
-            .preprocessAddress = m_dgcPreprocessAddr,
-            .preprocessSize = m_dgcPreprocessSize,
+            .preprocessAddress = m_gpu.dgcPreprocessAddr,
+            .preprocessSize = m_gpu.dgcPreprocessSize,
             .maxSequenceCount = 1u,
             .sequenceCountAddress = 0,
             .maxDrawCount = 1,
         };
         vkCmdExecuteGeneratedCommandsEXT(cmd, VK_FALSE, &dgcInfo);
-    } else if (m_gpuCullPass.isInitialized() && vkCmdDrawMeshTasksIndirectEXT != nullptr) {
-        vkCmdDrawMeshTasksIndirectEXT(cmd, m_gpuCullPass.indirectDrawBuffer(), 0, 1, kMeshTaskIndirectCmdSize);
+    } else if (m_gpu.gpuCullPass.isInitialized() && vkCmdDrawMeshTasksIndirectEXT != nullptr) {
+        vkCmdDrawMeshTasksIndirectEXT(cmd, m_gpu.gpuCullPass.indirectDrawBuffer(), 0, 1, kMeshTaskIndirectCmdSize);
     } else {
         vkCmdDrawMeshTasksEXT(cmd, instCnt, 1, 1);
     }
@@ -1800,7 +1800,7 @@ void ForwardRenderer::recordOpaquePass(VkCommandBuffer cmd, const MeshPushConsta
     if (instanceCount > 0 && vkCmdDrawMeshTasksEXT == nullptr) {
         Logger::error("vkCmdDrawMeshTasksEXT is NULL - mesh shader extension not loaded!");
     }
-    m_hiZPass.prepareForSampling(cmd);
+    m_gpu.hiZPass.prepareForSampling(cmd);
     beginSceneRendering(cmd, VK_ATTACHMENT_LOAD_OP_CLEAR);
     recordSky(cmd);
     if (canDraw) {

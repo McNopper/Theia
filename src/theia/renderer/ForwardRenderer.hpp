@@ -116,7 +116,7 @@ class ForwardRenderer {
 
     /// Enable/disable the Hi-Z occlusion test for the NEXT frame. Disabled on a camera cut
     /// (large motion) so newly disoccluded geometry is drawn conservatively.
-    void setHiZTestEnabled(bool enabled) noexcept { m_hiZTestEnabled = enabled; }
+    void setHiZTestEnabled(bool enabled) noexcept { m_gpu.hiZTestEnabled = enabled; }
 
     /// Update tile light list buffers (called by LightCuller each frame before recordFrame).
     void
@@ -286,32 +286,30 @@ class ForwardRenderer {
     bool m_initialized = false;
     bool m_hdrFirstUse = true; ///< tracks whether HDR image is still in UNDEFINED layout
 
-    // GPU-driven frustum cull pass (GD2/GD3/GD6). Writes compactInstanceList + a single
-    // indirect draw command; ForwardRenderer uses vkCmdDrawMeshTasksIndirectEXT (GD3) or
-    // vkCmdExecuteGeneratedCommandsEXT (GD6 DGC path).
-    GpuCullPass m_gpuCullPass;
-    /// Identity list [0,1,...,kMaxInstances-1] for binding 10 when GpuCullPass is unavailable.
-    Buffer m_identityInstanceList;
-    /// DGC commands layout: one DRAW_MESH_TASKS_EXT token, stride=12.
-    /// Non-null when VK_EXT_device_generated_commands is available (ctx.dgcSupported).
-    harmonia::UniqueIndirectCommandsLayout m_dgcLayout;
-    /// Preprocess buffer required by vkCmdExecuteGeneratedCommandsEXT (driver scratch space).
-    /// Allocated with VK_BUFFER_USAGE_2_PREPROCESS_BUFFER_BIT_EXT (64-bit usage flag).
-    VkBuffer m_dgcPreprocessBuf = VK_NULL_HANDLE;
-    VmaAllocation m_dgcPreprocessAlloc = VK_NULL_HANDLE;
-    VkDeviceAddress m_dgcPreprocessAddr = 0;
-    VkDeviceSize m_dgcPreprocessSize = 0;
+    /// GPU-driven rendering state: frustum cull (GD2/GD3/GD6) + DGC + two-pass Hi-Z occlusion
+    /// culling + ping-pong meshlet visibility. Extracted cohort (R8/CH9).
+    struct GpuDrivenState {
+        // GPU-driven frustum cull pass (GD2/GD3/GD6). Writes compactInstanceList + a single
+        // indirect draw command; ForwardRenderer uses vkCmdDrawMeshTasksIndirectEXT (GD3) or
+        // vkCmdExecuteGeneratedCommandsEXT (GD6 DGC path).
+        GpuCullPass gpuCullPass;
+        Buffer identityInstanceList;                   ///< [0,1,...,kMaxInstances-1] binding-10 fallback
+        harmonia::UniqueIndirectCommandsLayout dgcLayout; ///< DRAW_MESH_TASKS_EXT token, stride=12
+        VkBuffer dgcPreprocessBuf = VK_NULL_HANDLE;    ///< vkCmdExecuteGeneratedCommandsEXT scratch
+        VmaAllocation dgcPreprocessAlloc = VK_NULL_HANDLE;
+        VkDeviceAddress dgcPreprocessAddr = 0;
+        VkDeviceSize dgcPreprocessSize = 0;
 
-    // Two-pass Hi-Z occlusion culling (B4).
-    HiZPass m_hiZPass;                    ///< current-frame depth pyramid builder
-    Buffer m_meshletVisibility[2];        ///< ping-pong per-meshlet visibility (uint per meshlet)
-    std::uint32_t m_visFrame = 0;         ///< index of the buffer holding PREVIOUS-frame visibility
-    std::uint32_t m_visMeshletCount = 0;  ///< meshlet count the visibility buffers were sized for
-    const Scene* m_visBuiltFor = nullptr; ///< scene the visibility buffers were built for
-    bool m_hiZTestEnabled = true;         ///< set false for one frame on a camera cut
-    bool m_visClearPrev = false;          ///< clear PREV visibility next frame (freshly (re)built)
-    bool m_hiZDebugDisabled = false;      ///< THEIA_DISABLE_HIZ: draw all meshlets (A-B debug)
-    bool m_forceSinglePass = false;       ///< THEIA_SINGLE_PASS: bypass two-pass Hi-Z (A-B debug)
+        HiZPass hiZPass;                               ///< current-frame depth pyramid builder (B4)
+        Buffer meshletVisibility[2];                   ///< ping-pong per-meshlet visibility (uint/meshlet)
+        std::uint32_t visFrame = 0;                    ///< index of PREVIOUS-frame visibility buffer
+        std::uint32_t visMeshletCount = 0;             ///< meshlet count the visibility buffers were sized for
+        const Scene* visBuiltFor = nullptr;            ///< scene the visibility buffers were built for
+        bool hiZTestEnabled = true;                    ///< set false for one frame on a camera cut
+        bool visClearPrev = false;                     ///< clear PREV visibility next frame (freshly (re)built)
+        bool hiZDebugDisabled = false;                 ///< THEIA_DISABLE_HIZ: draw all meshlets (A-B debug)
+        bool forceSinglePass = false;                  ///< THEIA_SINGLE_PASS: bypass two-pass Hi-Z (A-B debug)
+    } m_gpu;
 };
 
 } // namespace theia
