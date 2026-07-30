@@ -36,11 +36,11 @@ TEST(TheiaBsdfSamplingContract, FresnelBranchProbabilityTracksExpectation) {
     constexpr float eta = 1.5F;
     const float expectedF = fresnelDielectric(cosTheta, eta);
 
-    std::uint32_t state = Rng::composeSeed({23U, 11U}, 7U, 0U, 2026U);
+    std::uint32_t state = harmonia::Rng::composeSeed({23U, 11U}, 7U, 0U, 2026U);
     constexpr std::size_t kSamples = 100000;
     std::size_t reflectCount = 0;
     for (std::size_t i = 0; i < kSamples; ++i) {
-        if (Rng::nextFloat(state) < expectedF) {
+        if (harmonia::Rng::nextFloat(state) < expectedF) {
             ++reflectCount;
         }
     }
@@ -54,12 +54,12 @@ TEST(TheiaBsdfSamplingContract, DeterministicReplayKeepsFresnelBranchSequence) {
     constexpr float eta = 1.45F;
     const float expectedF = fresnelDielectric(cosTheta, eta);
 
-    std::uint32_t s0 = Rng::composeSeed({9U, 4U}, 2U, 3U, 77U);
-    std::uint32_t s1 = Rng::composeSeed({9U, 4U}, 2U, 3U, 77U);
+    std::uint32_t s0 = harmonia::Rng::composeSeed({9U, 4U}, 2U, 3U, 77U);
+    std::uint32_t s1 = harmonia::Rng::composeSeed({9U, 4U}, 2U, 3U, 77U);
 
     for (std::size_t i = 0; i < 256; ++i) {
-        const bool b0 = Rng::nextFloat(s0) < expectedF;
-        const bool b1 = Rng::nextFloat(s1) < expectedF;
+        const bool b0 = harmonia::Rng::nextFloat(s0) < expectedF;
+        const bool b1 = harmonia::Rng::nextFloat(s1) < expectedF;
         EXPECT_EQ(b0, b1);
     }
 }

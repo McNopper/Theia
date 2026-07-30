@@ -44,7 +44,7 @@ Scene::addSphereMesh(const DeviceContext& ctx, const CommandPool& pool, float ra
     // Theia is a rasterizer (mesh-shader pipeline), so an analytic sphere cannot
     // be drawn directly — it is tessellated into a triangle mesh (object space,
     // centred at the origin) and placed by the instance transform.
-    MeshData mesh = ProceduralGeometry::makeSphere(sm::float3{0.0f, 0.0f, 0.0f}, radius);
+    MeshData mesh = harmonia::ProceduralGeometry::makeSphere(sm::float3{0.0f, 0.0f, 0.0f}, radius);
     return addMesh(ctx, pool, std::move(mesh), name.empty() ? "sphere" : name);
 }
 
