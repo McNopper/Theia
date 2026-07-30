@@ -69,25 +69,11 @@ void HiZPass::shutdown() {
     if (m_ctx == nullptr) {
         return;
     }
-    for (VkImageView view : m_mipViews) {
-        if (view != VK_NULL_HANDLE) {
-            vkDestroyImageView(m_ctx->device, view, nullptr);
-        }
-    }
     m_mipViews.clear();
     m_image = {};
-    if (m_pipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(m_ctx->device, m_pipeline, nullptr);
-        m_pipeline = VK_NULL_HANDLE;
-    }
-    if (m_pipelineLayout != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(m_ctx->device, m_pipelineLayout, nullptr);
-        m_pipelineLayout = VK_NULL_HANDLE;
-    }
-    if (m_setLayout != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_setLayout, nullptr);
-        m_setLayout = VK_NULL_HANDLE;
-    }
+    m_pipeline.reset();
+    m_pipelineLayout.reset();
+    m_setLayout.reset();
     m_ctx = nullptr;
     m_width = 0;
     m_height = 0;
@@ -110,7 +96,8 @@ bool HiZPass::createImage() noexcept {
     m_image = std::move(*img);
 
     // One single-mip storage view per level (used as reduction source/destination).
-    m_mipViews.assign(m_mipLevels, VK_NULL_HANDLE);
+    m_mipViews.clear();
+    m_mipViews.reserve(m_mipLevels);
     for (std::uint32_t level = 0; level < m_mipLevels; ++level) {
         const VkImageViewCreateInfo viewInfo{
             .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
@@ -119,10 +106,12 @@ bool HiZPass::createImage() noexcept {
             .format = VK_FORMAT_R32_SFLOAT,
             .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, level, 1, 0, 1},
         };
-        if (vkCreateImageView(m_ctx->device, &viewInfo, nullptr, &m_mipViews[level]) != VK_SUCCESS) {
+        VkImageView view{};
+        if (vkCreateImageView(m_ctx->device, &viewInfo, nullptr, &view) != VK_SUCCESS) {
             Logger::error("HiZPass: failed to create mip view {}", level);
             return false;
         }
+        m_mipViews.emplace_back(m_ctx->device, view);
     }
     return true;
 }
@@ -154,9 +143,13 @@ bool HiZPass::createPipeline(const char* spvName) noexcept {
         .bindingCount = static_cast<std::uint32_t>(bindings.size()),
         .pBindings = bindings.data(),
     };
-    if (vkCreateDescriptorSetLayout(m_ctx->device, &setInfo, nullptr, &m_setLayout) != VK_SUCCESS) {
-        Logger::error("HiZPass: failed to create descriptor set layout");
-        return false;
+    {
+        VkDescriptorSetLayout setLayout{};
+        if (vkCreateDescriptorSetLayout(m_ctx->device, &setInfo, nullptr, &setLayout) != VK_SUCCESS) {
+            Logger::error("HiZPass: failed to create descriptor set layout");
+            return false;
+        }
+        m_setLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, setLayout};
     }
 
     const VkPushConstantRange pcRange{
@@ -167,13 +160,17 @@ bool HiZPass::createPipeline(const char* spvName) noexcept {
     const VkPipelineLayoutCreateInfo layoutInfo{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .setLayoutCount = 1,
-        .pSetLayouts = &m_setLayout,
+        .pSetLayouts = m_setLayout.ptr(),
         .pushConstantRangeCount = 1,
         .pPushConstantRanges = &pcRange,
     };
-    if (vkCreatePipelineLayout(m_ctx->device, &layoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
-        Logger::error("HiZPass: failed to create pipeline layout");
-        return false;
+    {
+        VkPipelineLayout pipelineLayout{};
+        if (vkCreatePipelineLayout(m_ctx->device, &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
+            Logger::error("HiZPass: failed to create pipeline layout");
+            return false;
+        }
+        m_pipelineLayout = harmonia::UniquePipelineLayout{m_ctx->device, pipelineLayout};
     }
 
     auto module = harmonia::createShaderModule(m_ctx->device, shaderPath(spvName));
@@ -189,12 +186,14 @@ bool HiZPass::createPipeline(const char* spvName) noexcept {
                   .pName = "main"},
         .layout = m_pipelineLayout,
     };
-    const VkResult res = vkCreateComputePipelines(m_ctx->device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &m_pipeline);
+    VkPipeline pipeline{};
+    const VkResult res = vkCreateComputePipelines(m_ctx->device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &pipeline);
     vkDestroyShaderModule(m_ctx->device, *module, nullptr);
     if (res != VK_SUCCESS) {
         Logger::error("HiZPass: failed to create compute pipeline");
         return false;
     }
+    m_pipeline = harmonia::UniquePipeline{m_ctx->device, pipeline};
     return true;
 }
 

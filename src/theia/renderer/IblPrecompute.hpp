@@ -9,6 +9,7 @@
 #include "harmonia/DeviceContext.hpp"
 #include "harmonia/core/CommandPool.hpp"
 #include "harmonia/core/Image.hpp"
+#include "harmonia/core/VulkanHandle.hpp"
 
 namespace theia {
 
@@ -17,8 +18,8 @@ struct IblResources {
     Image brdfLut;                         // 512×512 RG16F — GGX split-sum BRDF integration (A/B)
     Image diffuseIrrad;                    // configurable RGBA16F — Lambertian-convolved irradiance
     Image specularMipped;                  // 512×256 RGBA16F, 8 mip levels — GGX prefiltered specular
-    VkSampler lutSampler = VK_NULL_HANDLE; // clamp+linear, no mip (for sheenLut)
-    VkSampler envSampler = VK_NULL_HANDLE; // clamp+linear-mip (diffuse + specular)
+    harmonia::UniqueSampler lutSampler; // clamp+linear, no mip (for sheenLut)
+    harmonia::UniqueSampler envSampler; // clamp+linear-mip (diffuse + specular)
 };
 
 class IblPrecompute {
@@ -79,11 +80,11 @@ class IblPrecompute {
     float m_envUnitNits = 1.0f;
 
     bool m_initialized = false;
-    std::vector<VkDescriptorPool> m_tempDescriptorPools;
-    std::vector<VkDescriptorSetLayout> m_tempSetLayouts;
-    std::vector<VkPipelineLayout> m_tempPipelineLayouts;
-    std::vector<VkPipeline> m_tempPipelines;
-    std::vector<VkImageView> m_tempImageViews;
+    std::vector<harmonia::UniqueDescriptorPool> m_tempDescriptorPools;
+    std::vector<harmonia::UniqueDescriptorSetLayout> m_tempSetLayouts;
+    std::vector<harmonia::UniquePipelineLayout> m_tempPipelineLayouts;
+    std::vector<harmonia::UniquePipeline> m_tempPipelines;
+    std::vector<harmonia::UniqueImageView> m_tempImageViews;
 };
 
 } // namespace theia

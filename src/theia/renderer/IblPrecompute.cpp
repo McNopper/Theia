@@ -172,16 +172,8 @@ bool IblPrecompute::initialize(const DeviceContext& ctx,
 void IblPrecompute::shutdown() {
     destroyTemporaryObjects();
 
-    if (m_ctx != nullptr && m_ctx->device != VK_NULL_HANDLE) {
-        if (m_res.lutSampler != VK_NULL_HANDLE) {
-            vkDestroySampler(m_ctx->device, m_res.lutSampler, nullptr);
-            m_res.lutSampler = VK_NULL_HANDLE;
-        }
-        if (m_res.envSampler != VK_NULL_HANDLE) {
-            vkDestroySampler(m_ctx->device, m_res.envSampler, nullptr);
-            m_res.envSampler = VK_NULL_HANDLE;
-        }
-    }
+    m_res.lutSampler.reset();
+    m_res.envSampler.reset();
 
     m_res.sheenLut = {};
     m_res.brdfLut = {};
@@ -269,10 +261,12 @@ bool IblPrecompute::createSamplers() {
         .borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK,
         .unnormalizedCoordinates = VK_FALSE,
     };
-    if (vkCreateSampler(m_ctx->device, &lutSamplerInfo, nullptr, &m_res.lutSampler) != VK_SUCCESS) {
+    VkSampler lutSampler = VK_NULL_HANDLE;
+    if (vkCreateSampler(m_ctx->device, &lutSamplerInfo, nullptr, &lutSampler) != VK_SUCCESS) {
         Logger::error("IblPrecompute: failed to create LUT sampler");
         return false;
     }
+    m_res.lutSampler = harmonia::UniqueSampler{m_ctx->device, lutSampler};
 
     const VkSamplerCreateInfo envSamplerInfo{
         .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
@@ -292,10 +286,12 @@ bool IblPrecompute::createSamplers() {
         .borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK,
         .unnormalizedCoordinates = VK_FALSE,
     };
-    if (vkCreateSampler(m_ctx->device, &envSamplerInfo, nullptr, &m_res.envSampler) != VK_SUCCESS) {
+    VkSampler envSampler = VK_NULL_HANDLE;
+    if (vkCreateSampler(m_ctx->device, &envSamplerInfo, nullptr, &envSampler) != VK_SUCCESS) {
         Logger::error("IblPrecompute: failed to create environment sampler");
         return false;
     }
+    m_res.envSampler = harmonia::UniqueSampler{m_ctx->device, envSampler};
 
     return true;
 }
@@ -322,7 +318,7 @@ bool IblPrecompute::runLutPass(VkCommandBuffer cmd, Image& targetImage, const ch
         Logger::error("IblPrecompute: failed to create {} set layout", logLabel);
         return false;
     }
-    m_tempSetLayouts.push_back(setLayout);
+    m_tempSetLayouts.emplace_back(m_ctx->device, setLayout);
 
     const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1};
     const VkDescriptorPoolCreateInfo poolInfo{
@@ -337,7 +333,7 @@ bool IblPrecompute::runLutPass(VkCommandBuffer cmd, Image& targetImage, const ch
         Logger::error("IblPrecompute: failed to create {} descriptor pool", logLabel);
         return false;
     }
-    m_tempDescriptorPools.push_back(descriptorPool);
+    m_tempDescriptorPools.emplace_back(m_ctx->device, descriptorPool);
 
     VkPipeline pipeline = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
@@ -421,7 +417,7 @@ bool IblPrecompute::runDiffusePass(VkCommandBuffer cmd) {
         Logger::error("IblPrecompute: failed to create diffuse set layout");
         return false;
     }
-    m_tempSetLayouts.push_back(setLayout);
+    m_tempSetLayouts.emplace_back(m_ctx->device, setLayout);
 
     const std::array<VkDescriptorPoolSize, 4> poolSizes{
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1},
@@ -442,7 +438,7 @@ bool IblPrecompute::runDiffusePass(VkCommandBuffer cmd) {
         Logger::error("IblPrecompute: failed to create diffuse descriptor pool");
         return false;
     }
-    m_tempDescriptorPools.push_back(descriptorPool);
+    m_tempDescriptorPools.emplace_back(m_ctx->device, descriptorPool);
 
     struct DiffusePC {
         float envScale{};
@@ -576,7 +572,7 @@ bool IblPrecompute::runSpecularPass(VkCommandBuffer cmd) {
         Logger::error("IblPrecompute: failed to create specular set layout");
         return false;
     }
-    m_tempSetLayouts.push_back(setLayout);
+    m_tempSetLayouts.emplace_back(m_ctx->device, setLayout);
 
     // One descriptor set per mip level — all sets are fully written before
     // any CB recording begins, so no descriptor set is ever updated while bound.
@@ -597,7 +593,7 @@ bool IblPrecompute::runSpecularPass(VkCommandBuffer cmd) {
         Logger::error("IblPrecompute: failed to create specular descriptor pool");
         return false;
     }
-    m_tempDescriptorPools.push_back(descriptorPool);
+    m_tempDescriptorPools.emplace_back(m_ctx->device, descriptorPool);
 
     VkPipeline pipeline = VK_NULL_HANDLE;
     VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
@@ -628,7 +624,7 @@ bool IblPrecompute::runSpecularPass(VkCommandBuffer cmd) {
         if (mipView == VK_NULL_HANDLE) {
             return false;
         }
-        m_tempImageViews.push_back(mipView);
+        m_tempImageViews.emplace_back(m_ctx->device, mipView);
 
         const VkDescriptorImageInfo outputInfo{VK_NULL_HANDLE, mipView, VK_IMAGE_LAYOUT_GENERAL};
         const std::array<VkWriteDescriptorSet, 3> writes{
@@ -729,7 +725,7 @@ bool IblPrecompute::createComputePipeline(const char* spirvPath,
         Logger::error("IblPrecompute: failed to create compute pipeline layout for '{}'", spirvPath);
         return false;
     }
-    m_tempPipelineLayouts.push_back(outLayout);
+    m_tempPipelineLayouts.emplace_back(m_ctx->device, outLayout);
 
     const VkPipelineShaderStageCreateInfo stageInfo{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -748,55 +744,17 @@ bool IblPrecompute::createComputePipeline(const char* spirvPath,
         Logger::error("IblPrecompute: failed to create compute pipeline for '{}'", spirvPath);
         return false;
     }
-    m_tempPipelines.push_back(outPipeline);
+    m_tempPipelines.emplace_back(m_ctx->device, outPipeline);
 
     vkDestroyShaderModule(m_ctx->device, module, nullptr);
     return true;
 }
 
 void IblPrecompute::destroyTemporaryObjects() noexcept {
-    if (m_ctx == nullptr || m_ctx->device == VK_NULL_HANDLE) {
-        m_tempDescriptorPools.clear();
-        m_tempSetLayouts.clear();
-        m_tempPipelineLayouts.clear();
-        m_tempPipelines.clear();
-        m_tempImageViews.clear();
-        return;
-    }
-
-    for (VkImageView view : m_tempImageViews) {
-        if (view != VK_NULL_HANDLE) {
-            vkDestroyImageView(m_ctx->device, view, nullptr);
-        }
-    }
     m_tempImageViews.clear();
-
-    for (VkPipeline pipeline : m_tempPipelines) {
-        if (pipeline != VK_NULL_HANDLE) {
-            vkDestroyPipeline(m_ctx->device, pipeline, nullptr);
-        }
-    }
     m_tempPipelines.clear();
-
-    for (VkPipelineLayout layout : m_tempPipelineLayouts) {
-        if (layout != VK_NULL_HANDLE) {
-            vkDestroyPipelineLayout(m_ctx->device, layout, nullptr);
-        }
-    }
     m_tempPipelineLayouts.clear();
-
-    for (VkDescriptorPool pool : m_tempDescriptorPools) {
-        if (pool != VK_NULL_HANDLE) {
-            vkDestroyDescriptorPool(m_ctx->device, pool, nullptr);
-        }
-    }
     m_tempDescriptorPools.clear();
-
-    for (VkDescriptorSetLayout setLayout : m_tempSetLayouts) {
-        if (setLayout != VK_NULL_HANDLE) {
-            vkDestroyDescriptorSetLayout(m_ctx->device, setLayout, nullptr);
-        }
-    }
     m_tempSetLayouts.clear();
 }
 

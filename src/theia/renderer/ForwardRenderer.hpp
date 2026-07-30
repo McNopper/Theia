@@ -12,6 +12,7 @@
 #include "harmonia/core/Buffer.hpp"
 #include "harmonia/core/CommandPool.hpp"
 #include "harmonia/core/Image.hpp"
+#include "harmonia/core/VulkanHandle.hpp"
 #include "harmonia/renderer/Camera.hpp"
 #include "theia/renderer/GpuCullPass.hpp"
 #include "theia/renderer/HiZPass.hpp"
@@ -213,9 +214,9 @@ class ForwardRenderer {
     Image m_giBufferTarget;
 
     // Mesh + fragment graphics pipeline
-    VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
-    VkPipeline m_graphicsPipeline = VK_NULL_HANDLE;
-    VkPipeline m_graphicsPipelineTransparent = VK_NULL_HANDLE;
+    harmonia::UniquePipelineLayout m_pipelineLayout;
+    harmonia::UniquePipeline m_graphicsPipeline;
+    harmonia::UniquePipeline m_graphicsPipelineTransparent;
 
     // Sky/background fullscreen pipeline (samples env panorama, or black).
     struct SkyPushConstants {
@@ -227,8 +228,8 @@ class ForwardRenderer {
         std::uint32_t _pad1 = 0;
     };
     static_assert(sizeof(SkyPushConstants) == 96);
-    VkPipelineLayout m_skyPipelineLayout = VK_NULL_HANDLE;
-    VkPipeline m_skyPipeline = VK_NULL_HANDLE;
+    harmonia::UniquePipelineLayout m_skyPipelineLayout;
+    harmonia::UniquePipeline m_skyPipeline;
     bool m_hasEnv = false;
     sm::float3 m_sunDir{0.0f, 1.0f, 0.0f}; ///< world dir toward dominant IBL light
     float m_sunStrength = 0.0f;            ///< [0,1] ray-traced sun shadow strength
@@ -243,23 +244,23 @@ class ForwardRenderer {
     std::uint32_t m_rngDebug = 0;
 
     // Set 0: geometry buffers (vertex/instance/index/meshlet data — task + mesh stages)
-    VkDescriptorSetLayout m_meshSetLayout = VK_NULL_HANDLE;
+    harmonia::UniqueDescriptorSetLayout m_meshSetLayout;
     VkDescriptorSet m_meshSet = VK_NULL_HANDLE;
 
     // Set 1: material/lighting buffers (materials/lights/emissive — fragment stage)
-    VkDescriptorSetLayout m_matSetLayout = VK_NULL_HANDLE;
+    harmonia::UniqueDescriptorSetLayout m_matSetLayout;
     VkDescriptorSet m_matSet = VK_NULL_HANDLE;
 
     // Set 2: IBL textures + samplers (fragment stage)
-    VkDescriptorSetLayout m_iblSetLayout = VK_NULL_HANDLE;
+    harmonia::UniqueDescriptorSetLayout m_iblSetLayout;
     VkDescriptorSet m_iblSet = VK_NULL_HANDLE;
 
     // Set 3: bindless material textures (base_color/normal/ORM/emission — fragment stage)
-    VkDescriptorSetLayout m_textureSetLayout = VK_NULL_HANDLE;
+    harmonia::UniqueDescriptorSetLayout m_textureSetLayout;
     VkDescriptorSet m_textureSet = VK_NULL_HANDLE;
     const Scene* m_texturesBoundFor = nullptr; ///< scene the bindless set was last written for
 
-    VkDescriptorPool m_descriptorPool = VK_NULL_HANDLE;
+    harmonia::UniqueDescriptorPool m_descriptorPool;
 
     VkDescriptorImageInfo m_iblDiffuseInfo{};
     VkDescriptorImageInfo m_iblSpecularInfo{};
@@ -293,7 +294,7 @@ class ForwardRenderer {
     Buffer m_identityInstanceList;
     /// DGC commands layout: one DRAW_MESH_TASKS_EXT token, stride=12.
     /// Non-null when VK_EXT_device_generated_commands is available (ctx.dgcSupported).
-    VkIndirectCommandsLayoutEXT m_dgcLayout = VK_NULL_HANDLE;
+    harmonia::UniqueIndirectCommandsLayout m_dgcLayout;
     /// Preprocess buffer required by vkCmdExecuteGeneratedCommandsEXT (driver scratch space).
     /// Allocated with VK_BUFFER_USAGE_2_PREPROCESS_BUFFER_BIT_EXT (64-bit usage flag).
     VkBuffer m_dgcPreprocessBuf = VK_NULL_HANDLE;

@@ -42,28 +42,13 @@ bool TaaPass::initialize(const DeviceContext& ctx, const Config& cfg, const char
 }
 
 void TaaPass::shutdown() {
-    if (m_ctx == nullptr)
-        return;
-
     m_history = {};
     m_taaOutput = {};
 
-    if (m_sampler != VK_NULL_HANDLE) {
-        vkDestroySampler(m_ctx->device, m_sampler, nullptr);
-        m_sampler = VK_NULL_HANDLE;
-    }
-    if (m_pipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(m_ctx->device, m_pipeline, nullptr);
-        m_pipeline = VK_NULL_HANDLE;
-    }
-    if (m_pipeLayout != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(m_ctx->device, m_pipeLayout, nullptr);
-        m_pipeLayout = VK_NULL_HANDLE;
-    }
-    if (m_setLayout != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_setLayout, nullptr);
-        m_setLayout = VK_NULL_HANDLE;
-    }
+    m_sampler.reset();
+    m_pipeline.reset();
+    m_pipeLayout.reset();
+    m_setLayout.reset();
     m_ctx = nullptr;
     m_cfg = {};
     m_firstUse = true;
@@ -118,10 +103,12 @@ bool TaaPass::createSampler() noexcept {
         .borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK,
         .unnormalizedCoordinates = VK_FALSE,
     };
-    if (vkCreateSampler(m_ctx->device, &info, nullptr, &m_sampler) != VK_SUCCESS) {
+    VkSampler sampler{};
+    if (vkCreateSampler(m_ctx->device, &info, nullptr, &sampler) != VK_SUCCESS) {
         Logger::error("TaaPass: failed to create sampler");
         return false;
     }
+    m_sampler = harmonia::UniqueSampler{m_ctx->device, sampler};
     return true;
 }
 
@@ -167,10 +154,12 @@ bool TaaPass::createPipeline(const char* spvName) noexcept {
         .bindingCount = static_cast<std::uint32_t>(bindings.size()),
         .pBindings = bindings.data(),
     };
-    if (vkCreateDescriptorSetLayout(m_ctx->device, &setInfo, nullptr, &m_setLayout) != VK_SUCCESS) {
+    VkDescriptorSetLayout setLayout{};
+    if (vkCreateDescriptorSetLayout(m_ctx->device, &setInfo, nullptr, &setLayout) != VK_SUCCESS) {
         Logger::error("TaaPass: failed to create descriptor set layout");
         return false;
     }
+    m_setLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, setLayout};
 
     const VkPushConstantRange pcRange{
         .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
@@ -182,14 +171,16 @@ bool TaaPass::createPipeline(const char* spvName) noexcept {
         .pNext = nullptr,
         .flags = 0,
         .setLayoutCount = 1,
-        .pSetLayouts = &m_setLayout,
+        .pSetLayouts = m_setLayout.ptr(),
         .pushConstantRangeCount = 1,
         .pPushConstantRanges = &pcRange,
     };
-    if (vkCreatePipelineLayout(m_ctx->device, &layoutInfo, nullptr, &m_pipeLayout) != VK_SUCCESS) {
+    VkPipelineLayout pipeLayout{};
+    if (vkCreatePipelineLayout(m_ctx->device, &layoutInfo, nullptr, &pipeLayout) != VK_SUCCESS) {
         Logger::error("TaaPass: failed to create pipeline layout");
         return false;
     }
+    m_pipeLayout = harmonia::UniquePipelineLayout{m_ctx->device, pipeLayout};
 
     auto module = harmonia::createShaderModule(m_ctx->device, shaderPath(spvName));
     if (!module) {
@@ -208,13 +199,15 @@ bool TaaPass::createPipeline(const char* spvName) noexcept {
         .basePipelineHandle = VK_NULL_HANDLE,
         .basePipelineIndex = 0,
     };
-    const VkResult res = vkCreateComputePipelines(m_ctx->device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &m_pipeline);
+    VkPipeline pipeline{};
+    const VkResult res = vkCreateComputePipelines(m_ctx->device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &pipeline);
     vkDestroyShaderModule(m_ctx->device, *module, nullptr);
     if (res != VK_SUCCESS) {
         Logger::error("TaaPass: failed to create compute pipeline");
         return false;
     }
-    m_ctx->setDebugName(VK_OBJECT_TYPE_PIPELINE, m_pipeline, "theia.taa.pipeline");
+    m_pipeline = harmonia::UniquePipeline{m_ctx->device, pipeline};
+    m_ctx->setDebugName(VK_OBJECT_TYPE_PIPELINE, m_pipeline.get(), "theia.taa.pipeline");
     return true;
 }
 

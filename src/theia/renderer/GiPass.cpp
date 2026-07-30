@@ -117,10 +117,6 @@ bool GiPass::initialize(const DeviceContext& ctx, const Config& cfg, const char*
 }
 
 void GiPass::shutdown() {
-    if (m_ctx == nullptr) {
-        return;
-    }
-    const VkDevice device = m_ctx->device;
     m_dummyGradientVariance = {};
     m_dummyGradientReady = false;
     m_dummyMotionVectors = {};
@@ -134,23 +130,11 @@ void GiPass::shutdown() {
     m_pathReservoirsCleared = false;
     m_pathReservoirPingPong = 0;
     m_boundMotionVectorView = VK_NULL_HANDLE;
-    if (m_pipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(device, m_pipeline, nullptr);
-        m_pipeline = VK_NULL_HANDLE;
-    }
-    if (m_pipelineLayout != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(device, m_pipelineLayout, nullptr);
-        m_pipelineLayout = VK_NULL_HANDLE;
-    }
-    if (m_pool != VK_NULL_HANDLE) {
-        vkDestroyDescriptorPool(device, m_pool, nullptr);
-        m_pool = VK_NULL_HANDLE;
-        m_set = VK_NULL_HANDLE;
-    }
-    if (m_setLayout != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(device, m_setLayout, nullptr);
-        m_setLayout = VK_NULL_HANDLE;
-    }
+    m_pipeline.reset();
+    m_pipelineLayout.reset();
+    m_pool.reset();
+    m_set = VK_NULL_HANDLE;
+    m_setLayout.reset();
     m_boundScene = nullptr;
     m_texturesBoundFor = nullptr;
     m_boundEnvMapView = VK_NULL_HANDLE;
@@ -213,10 +197,12 @@ bool GiPass::createDescriptors() {
         .bindingCount = static_cast<std::uint32_t>(bindings.size()),
         .pBindings = bindings.data(),
     };
-    if (vkCreateDescriptorSetLayout(m_ctx->device, &setInfo, nullptr, &m_setLayout) != VK_SUCCESS) {
+    VkDescriptorSetLayout setLayout{};
+    if (vkCreateDescriptorSetLayout(m_ctx->device, &setInfo, nullptr, &setLayout) != VK_SUCCESS) {
         Logger::error("GiPass: failed to create descriptor set layout");
         return false;
     }
+    m_setLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, setLayout};
 
     const std::array<VkDescriptorPoolSize, 6> poolSizes{{
         {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
@@ -234,16 +220,18 @@ bool GiPass::createDescriptors() {
         .poolSizeCount = static_cast<std::uint32_t>(poolSizes.size()),
         .pPoolSizes = poolSizes.data(),
     };
-    if (vkCreateDescriptorPool(m_ctx->device, &poolInfo, nullptr, &m_pool) != VK_SUCCESS) {
+    VkDescriptorPool pool{};
+    if (vkCreateDescriptorPool(m_ctx->device, &poolInfo, nullptr, &pool) != VK_SUCCESS) {
         Logger::error("GiPass: failed to create descriptor pool");
         return false;
     }
+    m_pool = harmonia::UniqueDescriptorPool{m_ctx->device, pool};
 
     const VkDescriptorSetAllocateInfo allocInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
         .descriptorPool = m_pool,
         .descriptorSetCount = 1,
-        .pSetLayouts = &m_setLayout,
+        .pSetLayouts = m_setLayout.ptr(),
     };
     if (vkAllocateDescriptorSets(m_ctx->device, &allocInfo, &m_set) != VK_SUCCESS) {
         Logger::error("GiPass: failed to allocate descriptor set");
@@ -261,14 +249,16 @@ bool GiPass::createPipeline(const char* giSpv) {
     const VkPipelineLayoutCreateInfo layoutInfo{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .setLayoutCount = 1,
-        .pSetLayouts = &m_setLayout,
+        .pSetLayouts = m_setLayout.ptr(),
         .pushConstantRangeCount = 1,
         .pPushConstantRanges = &pcRange,
     };
-    if (vkCreatePipelineLayout(m_ctx->device, &layoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
+    VkPipelineLayout pipelineLayout{};
+    if (vkCreatePipelineLayout(m_ctx->device, &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
         Logger::error("GiPass: failed to create pipeline layout");
         return false;
     }
+    m_pipelineLayout = harmonia::UniquePipelineLayout{m_ctx->device, pipelineLayout};
 
     auto module = harmonia::createShaderModule(m_ctx->device, shaderPath(giSpv));
     if (!module) {
@@ -284,12 +274,14 @@ bool GiPass::createPipeline(const char* giSpv) {
                   .pName = "main"},
         .layout = m_pipelineLayout,
     };
-    const VkResult res = vkCreateComputePipelines(m_ctx->device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &m_pipeline);
+    VkPipeline pipeline{};
+    const VkResult res = vkCreateComputePipelines(m_ctx->device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &pipeline);
     vkDestroyShaderModule(m_ctx->device, *module, nullptr);
     if (res != VK_SUCCESS) {
         Logger::error("GiPass: failed to create compute pipeline");
         return false;
     }
+    m_pipeline = harmonia::UniquePipeline{m_ctx->device, pipeline};
     return true;
 }
 

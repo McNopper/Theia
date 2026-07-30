@@ -84,9 +84,11 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
             .tokenCount = 1,
             .pTokens = &dgcToken,
         };
-        if (vkCreateIndirectCommandsLayoutEXT(ctx.device, &dgcLayoutCI, nullptr, &m_dgcLayout) != VK_SUCCESS) {
+        VkIndirectCommandsLayoutEXT dgcLayout{};
+        if (vkCreateIndirectCommandsLayoutEXT(ctx.device, &dgcLayoutCI, nullptr, &dgcLayout) != VK_SUCCESS) {
             Logger::warn("ForwardRenderer: vkCreateIndirectCommandsLayoutEXT failed — GD3 fallback");
-            m_dgcLayout = VK_NULL_HANDLE;
+        } else {
+            m_dgcLayout = harmonia::UniqueIndirectCommandsLayout{ctx.device, dgcLayout};
         }
     }
 
@@ -143,8 +145,7 @@ bool ForwardRenderer::initialize(const DeviceContext& ctx, const Config& config)
                 m_dgcPreprocessAddr = vkGetBufferDeviceAddress(ctx.device, &addrInfo);
             } else {
                 Logger::warn("ForwardRenderer: failed to allocate DGC preprocess buffer — GD3 fallback");
-                vkDestroyIndirectCommandsLayoutEXT(ctx.device, m_dgcLayout, nullptr);
-                m_dgcLayout = VK_NULL_HANDLE;
+                m_dgcLayout.reset();
                 m_dgcPreprocessSize = 0;
             }
         }
@@ -232,46 +233,16 @@ void ForwardRenderer::shutdown() {
 
     vkDeviceWaitIdle(m_ctx->device);
 
-    if (m_graphicsPipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(m_ctx->device, m_graphicsPipeline, nullptr);
-        m_graphicsPipeline = VK_NULL_HANDLE;
-    }
-    if (m_graphicsPipelineTransparent != VK_NULL_HANDLE) {
-        vkDestroyPipeline(m_ctx->device, m_graphicsPipelineTransparent, nullptr);
-        m_graphicsPipelineTransparent = VK_NULL_HANDLE;
-    }
-    if (m_skyPipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(m_ctx->device, m_skyPipeline, nullptr);
-        m_skyPipeline = VK_NULL_HANDLE;
-    }
-    if (m_skyPipelineLayout != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(m_ctx->device, m_skyPipelineLayout, nullptr);
-        m_skyPipelineLayout = VK_NULL_HANDLE;
-    }
-    if (m_pipelineLayout != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(m_ctx->device, m_pipelineLayout, nullptr);
-        m_pipelineLayout = VK_NULL_HANDLE;
-    }
-    if (m_meshSetLayout != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_meshSetLayout, nullptr);
-        m_meshSetLayout = VK_NULL_HANDLE;
-    }
-    if (m_matSetLayout != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_matSetLayout, nullptr);
-        m_matSetLayout = VK_NULL_HANDLE;
-    }
-    if (m_iblSetLayout != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_iblSetLayout, nullptr);
-        m_iblSetLayout = VK_NULL_HANDLE;
-    }
-    if (m_textureSetLayout != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_textureSetLayout, nullptr);
-        m_textureSetLayout = VK_NULL_HANDLE;
-    }
-    if (m_descriptorPool != VK_NULL_HANDLE) {
-        vkDestroyDescriptorPool(m_ctx->device, m_descriptorPool, nullptr);
-        m_descriptorPool = VK_NULL_HANDLE;
-    }
+    m_graphicsPipeline.reset();
+    m_graphicsPipelineTransparent.reset();
+    m_skyPipeline.reset();
+    m_skyPipelineLayout.reset();
+    m_pipelineLayout.reset();
+    m_meshSetLayout.reset();
+    m_matSetLayout.reset();
+    m_iblSetLayout.reset();
+    m_textureSetLayout.reset();
+    m_descriptorPool.reset();
 
     m_iblDiffuseInfo = {};
     m_iblSpecularInfo = {};
@@ -296,10 +267,7 @@ void ForwardRenderer::shutdown() {
         m_dgcPreprocessSize = 0;
     }
 
-    if (m_dgcLayout != VK_NULL_HANDLE) {
-        vkDestroyIndirectCommandsLayoutEXT(m_ctx->device, m_dgcLayout, nullptr);
-        m_dgcLayout = VK_NULL_HANDLE;
-    }
+    m_dgcLayout.reset();
 
     m_meshSet = VK_NULL_HANDLE;
     m_matSet = VK_NULL_HANDLE;
@@ -681,10 +649,12 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
         .bindingCount = static_cast<std::uint32_t>(meshBindings.size()),
         .pBindings = meshBindings.data(),
     };
-    if (vkCreateDescriptorSetLayout(m_ctx->device, &meshSetLayoutInfo, nullptr, &m_meshSetLayout) != VK_SUCCESS) {
+    VkDescriptorSetLayout meshSetLayout{};
+    if (vkCreateDescriptorSetLayout(m_ctx->device, &meshSetLayoutInfo, nullptr, &meshSetLayout) != VK_SUCCESS) {
         Logger::error("Failed to create mesh descriptor set layout");
         return false;
     }
+    m_meshSetLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, meshSetLayout};
 
     const std::array<VkDescriptorSetLayoutBinding, 6> matBindings{
         VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
@@ -708,12 +678,13 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
         .bindingCount = static_cast<std::uint32_t>(matBindings.size()),
         .pBindings = matBindings.data(),
     };
-    if (vkCreateDescriptorSetLayout(m_ctx->device, &matSetLayoutInfo, nullptr, &m_matSetLayout) != VK_SUCCESS) {
+    VkDescriptorSetLayout matSetLayout{};
+    if (vkCreateDescriptorSetLayout(m_ctx->device, &matSetLayoutInfo, nullptr, &matSetLayout) != VK_SUCCESS) {
         Logger::error("Failed to create material descriptor set layout");
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_meshSetLayout, nullptr);
-        m_meshSetLayout = VK_NULL_HANDLE;
+        m_meshSetLayout.reset();
         return false;
     }
+    m_matSetLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, matSetLayout};
 
     const std::array<VkDescriptorSetLayoutBinding, 8> iblBindings{
         VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
@@ -738,14 +709,14 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
         .bindingCount = static_cast<std::uint32_t>(iblBindings.size()),
         .pBindings = iblBindings.data(),
     };
-    if (vkCreateDescriptorSetLayout(m_ctx->device, &iblSetLayoutInfo, nullptr, &m_iblSetLayout) != VK_SUCCESS) {
+    VkDescriptorSetLayout iblSetLayout{};
+    if (vkCreateDescriptorSetLayout(m_ctx->device, &iblSetLayoutInfo, nullptr, &iblSetLayout) != VK_SUCCESS) {
         Logger::error("Failed to create IBL descriptor set layout");
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_matSetLayout, nullptr);
-        m_matSetLayout = VK_NULL_HANDLE;
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_meshSetLayout, nullptr);
-        m_meshSetLayout = VK_NULL_HANDLE;
+        m_matSetLayout.reset();
+        m_meshSetLayout.reset();
         return false;
     }
+    m_iblSetLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, iblSetLayout};
 
     const VkDescriptorSetLayoutBinding textureBinding{
         0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
@@ -763,16 +734,15 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
         .bindingCount = 1,
         .pBindings = &textureBinding,
     };
-    if (vkCreateDescriptorSetLayout(m_ctx->device, &textureSetLayoutInfo, nullptr, &m_textureSetLayout) != VK_SUCCESS) {
+    VkDescriptorSetLayout textureSetLayout{};
+    if (vkCreateDescriptorSetLayout(m_ctx->device, &textureSetLayoutInfo, nullptr, &textureSetLayout) != VK_SUCCESS) {
         Logger::error("Failed to create bindless texture descriptor set layout");
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_iblSetLayout, nullptr);
-        m_iblSetLayout = VK_NULL_HANDLE;
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_matSetLayout, nullptr);
-        m_matSetLayout = VK_NULL_HANDLE;
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_meshSetLayout, nullptr);
-        m_meshSetLayout = VK_NULL_HANDLE;
+        m_iblSetLayout.reset();
+        m_matSetLayout.reset();
+        m_meshSetLayout.reset();
         return false;
     }
+    m_textureSetLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, textureSetLayout};
 
     const std::array<VkDescriptorPoolSize, 5> poolSizes{
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 18},
@@ -788,18 +758,16 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
         .poolSizeCount = static_cast<std::uint32_t>(poolSizes.size()),
         .pPoolSizes = poolSizes.data(),
     };
-    if (vkCreateDescriptorPool(m_ctx->device, &poolInfo, nullptr, &m_descriptorPool) != VK_SUCCESS) {
+    VkDescriptorPool descriptorPool{};
+    if (vkCreateDescriptorPool(m_ctx->device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
         Logger::error("Failed to create descriptor pool");
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_textureSetLayout, nullptr);
-        m_textureSetLayout = VK_NULL_HANDLE;
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_iblSetLayout, nullptr);
-        m_iblSetLayout = VK_NULL_HANDLE;
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_matSetLayout, nullptr);
-        m_matSetLayout = VK_NULL_HANDLE;
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_meshSetLayout, nullptr);
-        m_meshSetLayout = VK_NULL_HANDLE;
+        m_textureSetLayout.reset();
+        m_iblSetLayout.reset();
+        m_matSetLayout.reset();
+        m_meshSetLayout.reset();
         return false;
     }
+    m_descriptorPool = harmonia::UniqueDescriptorPool{m_ctx->device, descriptorPool};
 
     const std::array<VkDescriptorSetLayout, 4> setLayouts{
         m_meshSetLayout, m_matSetLayout, m_iblSetLayout, m_textureSetLayout};
@@ -812,16 +780,11 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
     std::array<VkDescriptorSet, 4> sets{};
     if (vkAllocateDescriptorSets(m_ctx->device, &allocInfo, sets.data()) != VK_SUCCESS) {
         Logger::error("Failed to allocate descriptor sets");
-        vkDestroyDescriptorPool(m_ctx->device, m_descriptorPool, nullptr);
-        m_descriptorPool = VK_NULL_HANDLE;
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_textureSetLayout, nullptr);
-        m_textureSetLayout = VK_NULL_HANDLE;
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_iblSetLayout, nullptr);
-        m_iblSetLayout = VK_NULL_HANDLE;
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_matSetLayout, nullptr);
-        m_matSetLayout = VK_NULL_HANDLE;
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_meshSetLayout, nullptr);
-        m_meshSetLayout = VK_NULL_HANDLE;
+        m_descriptorPool.reset();
+        m_textureSetLayout.reset();
+        m_iblSetLayout.reset();
+        m_matSetLayout.reset();
+        m_meshSetLayout.reset();
         return false;
     }
     m_meshSet = sets[0];
@@ -846,20 +809,17 @@ bool ForwardRenderer::createPipelineLayouts() {
         .pushConstantRangeCount = 1,
         .pPushConstantRanges = &pushConstantRange,
     };
-    if (vkCreatePipelineLayout(m_ctx->device, &layoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
+    VkPipelineLayout pipelineLayout{};
+    if (vkCreatePipelineLayout(m_ctx->device, &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
         Logger::error("Failed to create graphics pipeline layout");
-        vkDestroyDescriptorPool(m_ctx->device, m_descriptorPool, nullptr);
-        m_descriptorPool = VK_NULL_HANDLE;
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_textureSetLayout, nullptr);
-        m_textureSetLayout = VK_NULL_HANDLE;
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_iblSetLayout, nullptr);
-        m_iblSetLayout = VK_NULL_HANDLE;
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_matSetLayout, nullptr);
-        m_matSetLayout = VK_NULL_HANDLE;
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_meshSetLayout, nullptr);
-        m_meshSetLayout = VK_NULL_HANDLE;
+        m_descriptorPool.reset();
+        m_textureSetLayout.reset();
+        m_iblSetLayout.reset();
+        m_matSetLayout.reset();
+        m_meshSetLayout.reset();
         return false;
     }
+    m_pipelineLayout = harmonia::UniquePipelineLayout{m_ctx->device, pipelineLayout};
     return true;
 }
 
@@ -920,21 +880,18 @@ bool ForwardRenderer::createOpaquePipeline() {
         .pDynamicState = &b.dynamicState,
         .layout = m_pipelineLayout,
     };
-    if (vkCreateGraphicsPipelines(m_ctx->device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_graphicsPipeline) !=
+    VkPipeline graphicsPipeline{};
+    if (vkCreateGraphicsPipelines(m_ctx->device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline) !=
         VK_SUCCESS) {
         Logger::error("Failed to create graphics pipeline");
-        vkDestroyPipelineLayout(m_ctx->device, m_pipelineLayout, nullptr);
-        m_pipelineLayout = VK_NULL_HANDLE;
-        vkDestroyDescriptorPool(m_ctx->device, m_descriptorPool, nullptr);
-        m_descriptorPool = VK_NULL_HANDLE;
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_iblSetLayout, nullptr);
-        m_iblSetLayout = VK_NULL_HANDLE;
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_matSetLayout, nullptr);
-        m_matSetLayout = VK_NULL_HANDLE;
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_meshSetLayout, nullptr);
-        m_meshSetLayout = VK_NULL_HANDLE;
+        m_pipelineLayout.reset();
+        m_descriptorPool.reset();
+        m_iblSetLayout.reset();
+        m_matSetLayout.reset();
+        m_meshSetLayout.reset();
         return false;
     }
+    m_graphicsPipeline = harmonia::UniquePipeline{m_ctx->device, graphicsPipeline};
     return true;
 }
 
@@ -998,26 +955,21 @@ bool ForwardRenderer::createTransparentPipeline() {
         .pDynamicState = &b.dynamicState,
         .layout = m_pipelineLayout,
     };
+    VkPipeline graphicsPipelineTransparent{};
     if (vkCreateGraphicsPipelines(
-            m_ctx->device, VK_NULL_HANDLE, 1, &transparentPipelineInfo, nullptr, &m_graphicsPipelineTransparent) !=
+            m_ctx->device, VK_NULL_HANDLE, 1, &transparentPipelineInfo, nullptr, &graphicsPipelineTransparent) !=
         VK_SUCCESS) {
         Logger::error("Failed to create transparent graphics pipeline");
-        vkDestroyPipeline(m_ctx->device, m_graphicsPipeline, nullptr);
-        m_graphicsPipeline = VK_NULL_HANDLE;
-        vkDestroyPipelineLayout(m_ctx->device, m_pipelineLayout, nullptr);
-        m_pipelineLayout = VK_NULL_HANDLE;
-        vkDestroyDescriptorPool(m_ctx->device, m_descriptorPool, nullptr);
-        m_descriptorPool = VK_NULL_HANDLE;
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_textureSetLayout, nullptr);
-        m_textureSetLayout = VK_NULL_HANDLE;
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_iblSetLayout, nullptr);
-        m_iblSetLayout = VK_NULL_HANDLE;
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_matSetLayout, nullptr);
-        m_matSetLayout = VK_NULL_HANDLE;
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_meshSetLayout, nullptr);
-        m_meshSetLayout = VK_NULL_HANDLE;
+        m_graphicsPipeline.reset();
+        m_pipelineLayout.reset();
+        m_descriptorPool.reset();
+        m_textureSetLayout.reset();
+        m_iblSetLayout.reset();
+        m_matSetLayout.reset();
+        m_meshSetLayout.reset();
         return false;
     }
+    m_graphicsPipelineTransparent = harmonia::UniquePipeline{m_ctx->device, graphicsPipelineTransparent};
     return true;
 }
 
@@ -1042,16 +994,18 @@ bool ForwardRenderer::createSkyPipeline() {
     const VkPipelineLayoutCreateInfo skyLayoutInfo{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .setLayoutCount = 1,
-        .pSetLayouts = &m_iblSetLayout,
+        .pSetLayouts = m_iblSetLayout.ptr(),
         .pushConstantRangeCount = 1,
         .pPushConstantRanges = &skyPcRange,
     };
-    if (vkCreatePipelineLayout(m_ctx->device, &skyLayoutInfo, nullptr, &m_skyPipelineLayout) != VK_SUCCESS) {
+    VkPipelineLayout skyPipelineLayout{};
+    if (vkCreatePipelineLayout(m_ctx->device, &skyLayoutInfo, nullptr, &skyPipelineLayout) != VK_SUCCESS) {
         Logger::error("Failed to create sky pipeline layout");
         vkDestroyShaderModule(m_ctx->device, skyVert, nullptr);
         vkDestroyShaderModule(m_ctx->device, skyFrag, nullptr);
         return false;
     }
+    m_skyPipelineLayout = harmonia::UniquePipelineLayout{m_ctx->device, skyPipelineLayout};
 
     const std::array<VkPipelineShaderStageCreateInfo, 2> skyStages{
         VkPipelineShaderStageCreateInfo{
@@ -1105,14 +1059,16 @@ bool ForwardRenderer::createSkyPipeline() {
         .pDynamicState = &b.dynamicState,
         .layout = m_skyPipelineLayout,
     };
+    VkPipeline skyPipeline{};
     const VkResult skyRes =
-        vkCreateGraphicsPipelines(m_ctx->device, VK_NULL_HANDLE, 1, &skyPipelineInfo, nullptr, &m_skyPipeline);
+        vkCreateGraphicsPipelines(m_ctx->device, VK_NULL_HANDLE, 1, &skyPipelineInfo, nullptr, &skyPipeline);
     vkDestroyShaderModule(m_ctx->device, skyVert, nullptr);
     vkDestroyShaderModule(m_ctx->device, skyFrag, nullptr);
     if (skyRes != VK_SUCCESS) {
         Logger::error("Failed to create sky pipeline");
         return false;
     }
+    m_skyPipeline = harmonia::UniquePipeline{m_ctx->device, skyPipeline};
     return true;
 }
 

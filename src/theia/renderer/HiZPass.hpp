@@ -8,6 +8,7 @@
 
 #include "harmonia/DeviceContext.hpp"
 #include "harmonia/core/Image.hpp"
+#include "harmonia/core/VulkanHandle.hpp"
 
 namespace theia {
 
@@ -78,12 +79,12 @@ class HiZPass {
     std::uint32_t m_height = 0;
     std::uint32_t m_mipLevels = 1;
 
-    Image m_image{};                     ///< R32F max-depth pyramid (STORAGE + SAMPLED)
-    std::vector<VkImageView> m_mipViews; ///< one single-level storage view per mip
+    Image m_image{};                                       ///< R32F max-depth pyramid (STORAGE + SAMPLED)
+    std::vector<harmonia::UniqueImageView> m_mipViews;     ///< one single-level storage view per mip
 
-    VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
-    VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
-    VkPipeline m_pipeline = VK_NULL_HANDLE;
+    harmonia::UniqueDescriptorSetLayout m_setLayout;
+    harmonia::UniquePipelineLayout m_pipelineLayout;
+    harmonia::UniquePipeline m_pipeline;
 
     bool m_firstUse = true;
 };

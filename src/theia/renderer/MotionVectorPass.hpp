@@ -8,6 +8,7 @@
 
 #include "harmonia/DeviceContext.hpp"
 #include "harmonia/core/Image.hpp"
+#include "harmonia/core/VulkanHandle.hpp"
 
 namespace theia {
 
@@ -84,9 +85,9 @@ class MotionVectorPass {
     const DeviceContext* m_ctx = nullptr;
     Config m_cfg{};
 
-    VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
-    VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
-    VkPipeline m_pipeline = VK_NULL_HANDLE;
+    harmonia::UniqueDescriptorSetLayout m_setLayout;
+    harmonia::UniquePipelineLayout m_pipelineLayout;
+    harmonia::UniquePipeline m_pipeline;
 
     Image m_motionVectorImage{};
     bool m_firstUse = true;

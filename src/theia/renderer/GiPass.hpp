@@ -9,6 +9,7 @@
 #include "harmonia/DeviceContext.hpp"
 #include "harmonia/core/Buffer.hpp"
 #include "harmonia/core/Image.hpp"
+#include "harmonia/core/VulkanHandle.hpp"
 #include "theia/renderer/RendererConstants.hpp"
 
 class Scene;
@@ -161,11 +162,11 @@ class GiPass {
     const DeviceContext* m_ctx = nullptr;
     Config m_cfg{};
 
-    VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
-    VkDescriptorPool m_pool = VK_NULL_HANDLE;
+    harmonia::UniqueDescriptorSetLayout m_setLayout;
+    harmonia::UniqueDescriptorPool m_pool;
     VkDescriptorSet m_set = VK_NULL_HANDLE;
-    VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
-    VkPipeline m_pipeline = VK_NULL_HANDLE;
+    harmonia::UniquePipelineLayout m_pipelineLayout;
+    harmonia::UniquePipeline m_pipeline;
 
     bool m_hdrFirstUse = true;
     const Scene* m_boundScene = nullptr;

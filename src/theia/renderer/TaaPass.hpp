@@ -7,6 +7,7 @@
 
 #include "harmonia/DeviceContext.hpp"
 #include "harmonia/core/Image.hpp"
+#include "harmonia/core/VulkanHandle.hpp"
 
 namespace theia {
 
@@ -66,14 +67,14 @@ class TaaPass {
     const DeviceContext* m_ctx = nullptr;
     Config m_cfg{};
 
-    VkSampler m_sampler = VK_NULL_HANDLE;
+    harmonia::UniqueSampler m_sampler;
     Image m_history{};   ///< previous TAA output  (R32G32B32A32, SAMPLED | TRANSFER_DST)
     Image m_taaOutput{}; ///< current TAA result   (R32G32B32A32, STORAGE | TRANSFER_SRC)
     bool m_firstUse = true;
 
-    VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
-    VkPipelineLayout m_pipeLayout = VK_NULL_HANDLE;
-    VkPipeline m_pipeline = VK_NULL_HANDLE;
+    harmonia::UniqueDescriptorSetLayout m_setLayout;
+    harmonia::UniquePipelineLayout m_pipeLayout;
+    harmonia::UniquePipeline m_pipeline;
 
     std::uint32_t m_frameCount = 0;
 };

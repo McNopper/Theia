@@ -8,6 +8,7 @@
 
 #include "harmonia/DeviceContext.hpp"
 #include "harmonia/core/Buffer.hpp"
+#include "harmonia/core/VulkanHandle.hpp"
 
 namespace theia {
 
@@ -47,8 +48,8 @@ class GpuCullPass {
 
     GpuCullPass(const GpuCullPass&) = delete;
     GpuCullPass& operator=(const GpuCullPass&) = delete;
-    GpuCullPass(GpuCullPass&&) noexcept;
-    GpuCullPass& operator=(GpuCullPass&&) noexcept;
+    GpuCullPass(GpuCullPass&&) noexcept = default;
+    GpuCullPass& operator=(GpuCullPass&&) noexcept = default;
 
     /// Initialize the cull pass pipeline and output buffers.
     /// @param spvFilename  SPIR-V filename resolved against THEIA_SHADER_DIR.
@@ -89,10 +90,10 @@ class GpuCullPass {
   private:
     const DeviceContext* m_ctx = nullptr;
 
-    VkPipeline m_pipeline = VK_NULL_HANDLE;
-    VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
-    VkDescriptorSetLayout m_setLayout = VK_NULL_HANDLE;
-    VkDescriptorPool m_pool = VK_NULL_HANDLE;
+    harmonia::UniquePipeline m_pipeline;
+    harmonia::UniquePipelineLayout m_pipelineLayout;
+    harmonia::UniqueDescriptorSetLayout m_setLayout;
+    harmonia::UniqueDescriptorPool m_pool;
     VkDescriptorSet m_set = VK_NULL_HANDLE;
 
     Buffer m_compactInstanceListBuf; ///< uint[kMaxInstances]  STORAGE

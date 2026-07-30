@@ -47,42 +47,6 @@ LightCuller::~LightCuller() {
     shutdown();
 }
 
-LightCuller::LightCuller(LightCuller&& o) noexcept
-    : m_ctx(o.m_ctx),
-      m_pipeline(std::exchange(o.m_pipeline, VK_NULL_HANDLE)),
-      m_pipelineLayout(std::exchange(o.m_pipelineLayout, VK_NULL_HANDLE)),
-      m_setLayout(std::exchange(o.m_setLayout, VK_NULL_HANDLE)),
-      m_pool(std::exchange(o.m_pool, VK_NULL_HANDLE)),
-      m_set(std::exchange(o.m_set, VK_NULL_HANDLE)),
-      m_tileLightCountsBuf(std::move(o.m_tileLightCountsBuf)),
-      m_tileLightIndicesBuf(std::move(o.m_tileLightIndicesBuf)),
-      m_tilesX(o.m_tilesX),
-      m_tilesY(o.m_tilesY),
-      m_screenWidth(o.m_screenWidth),
-      m_screenHeight(o.m_screenHeight) {
-    o.m_ctx = nullptr;
-}
-
-LightCuller& LightCuller::operator=(LightCuller&& o) noexcept {
-    if (this != &o) {
-        shutdown();
-        m_ctx = o.m_ctx;
-        m_pipeline = std::exchange(o.m_pipeline, VK_NULL_HANDLE);
-        m_pipelineLayout = std::exchange(o.m_pipelineLayout, VK_NULL_HANDLE);
-        m_setLayout = std::exchange(o.m_setLayout, VK_NULL_HANDLE);
-        m_pool = std::exchange(o.m_pool, VK_NULL_HANDLE);
-        m_set = std::exchange(o.m_set, VK_NULL_HANDLE);
-        m_tileLightCountsBuf = std::move(o.m_tileLightCountsBuf);
-        m_tileLightIndicesBuf = std::move(o.m_tileLightIndicesBuf);
-        m_tilesX = o.m_tilesX;
-        m_tilesY = o.m_tilesY;
-        m_screenWidth = o.m_screenWidth;
-        m_screenHeight = o.m_screenHeight;
-        o.m_ctx = nullptr;
-    }
-    return *this;
-}
-
 bool LightCuller::initialize(const DeviceContext& ctx, std::uint32_t w, std::uint32_t h, const char* spvFilename) {
     shutdown();
     m_ctx = &ctx;
@@ -132,10 +96,12 @@ bool LightCuller::initialize(const DeviceContext& ctx, std::uint32_t w, std::uin
         .bindingCount = static_cast<std::uint32_t>(bindings.size()),
         .pBindings = bindings.data(),
     };
-    if (vkCreateDescriptorSetLayout(ctx.device, &setLayoutInfo, nullptr, &m_setLayout) != VK_SUCCESS) {
+    VkDescriptorSetLayout setLayout{};
+    if (vkCreateDescriptorSetLayout(ctx.device, &setLayoutInfo, nullptr, &setLayout) != VK_SUCCESS) {
         Logger::error("LightCuller: failed to create set layout");
         return false;
     }
+    m_setLayout = harmonia::UniqueDescriptorSetLayout{ctx.device, setLayout};
 
     // Push constant: LightCullPC struct in shader (4×4 + 4×4 + 2 + 2 + 3 + 1 uints + floats)
     const VkPushConstantRange pcRange{
@@ -146,14 +112,16 @@ bool LightCuller::initialize(const DeviceContext& ctx, std::uint32_t w, std::uin
     const VkPipelineLayoutCreateInfo layoutInfo{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .setLayoutCount = 1,
-        .pSetLayouts = &m_setLayout,
+        .pSetLayouts = m_setLayout.ptr(),
         .pushConstantRangeCount = 1,
         .pPushConstantRanges = &pcRange,
     };
-    if (vkCreatePipelineLayout(ctx.device, &layoutInfo, nullptr, &m_pipelineLayout) != VK_SUCCESS) {
+    VkPipelineLayout pipelineLayout{};
+    if (vkCreatePipelineLayout(ctx.device, &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
         Logger::error("LightCuller: failed to create pipeline layout");
         return false;
     }
+    m_pipelineLayout = harmonia::UniquePipelineLayout{ctx.device, pipelineLayout};
 
     // Compile compute shader
     auto spirv = readSpirv(spvFilename);
@@ -183,13 +151,15 @@ bool LightCuller::initialize(const DeviceContext& ctx, std::uint32_t w, std::uin
             },
         .layout = m_pipelineLayout,
     };
+    VkPipeline pipeline{};
     const VkResult pipeResult =
-        vkCreateComputePipelines(ctx.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &m_pipeline);
+        vkCreateComputePipelines(ctx.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline);
     vkDestroyShaderModule(ctx.device, shaderModule, nullptr);
     if (pipeResult != VK_SUCCESS) {
         Logger::error("LightCuller: failed to create compute pipeline");
         return false;
     }
+    m_pipeline = harmonia::UniquePipeline{ctx.device, pipeline};
 
     // Descriptor pool + set
     const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3};
@@ -200,15 +170,17 @@ bool LightCuller::initialize(const DeviceContext& ctx, std::uint32_t w, std::uin
         .poolSizeCount = 1,
         .pPoolSizes = &poolSize,
     };
-    if (vkCreateDescriptorPool(ctx.device, &poolInfo, nullptr, &m_pool) != VK_SUCCESS) {
+    VkDescriptorPool pool{};
+    if (vkCreateDescriptorPool(ctx.device, &poolInfo, nullptr, &pool) != VK_SUCCESS) {
         Logger::error("LightCuller: failed to create descriptor pool");
         return false;
     }
+    m_pool = harmonia::UniqueDescriptorPool{ctx.device, pool};
     const VkDescriptorSetAllocateInfo allocInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
         .descriptorPool = m_pool,
         .descriptorSetCount = 1,
-        .pSetLayouts = &m_setLayout,
+        .pSetLayouts = m_setLayout.ptr(),
     };
     if (vkAllocateDescriptorSets(ctx.device, &allocInfo, &m_set) != VK_SUCCESS) {
         Logger::error("LightCuller: failed to allocate descriptor set");
@@ -253,29 +225,14 @@ bool LightCuller::initialize(const DeviceContext& ctx, std::uint32_t w, std::uin
 }
 
 void LightCuller::shutdown() {
-    if (!m_ctx)
-        return;
-
     m_tileLightCountsBuf = {};
     m_tileLightIndicesBuf = {};
 
-    if (m_pool != VK_NULL_HANDLE) {
-        vkDestroyDescriptorPool(m_ctx->device, m_pool, nullptr);
-        m_pool = VK_NULL_HANDLE;
-        m_set = VK_NULL_HANDLE;
-    }
-    if (m_pipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(m_ctx->device, m_pipeline, nullptr);
-        m_pipeline = VK_NULL_HANDLE;
-    }
-    if (m_pipelineLayout != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(m_ctx->device, m_pipelineLayout, nullptr);
-        m_pipelineLayout = VK_NULL_HANDLE;
-    }
-    if (m_setLayout != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(m_ctx->device, m_setLayout, nullptr);
-        m_setLayout = VK_NULL_HANDLE;
-    }
+    m_pool.reset();
+    m_set = VK_NULL_HANDLE;
+    m_pipeline.reset();
+    m_pipelineLayout.reset();
+    m_setLayout.reset();
     m_ctx = nullptr;
 }
 
