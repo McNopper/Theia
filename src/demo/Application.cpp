@@ -248,7 +248,7 @@ bool Application::onSceneLoaded(const SceneLoader::SceneConfig& sceneConfig) {
     }
     // Reset camera controller orientation to match the new target.
     const sm::float3 dir = sm::normalize(m_camera.target - m_camera.position);
-    directionToYawPitch(dir, m_camCtrl.yaw, m_camCtrl.pitch);
+    CameraController::directionToYawPitch(dir, m_camCtrl.yaw, m_camCtrl.pitch);
 
     // Scene-scale-aware near/far — shared helper from harmonia::Camera.
     const float camDist = sm::length(m_camera.target - m_camera.position);
@@ -981,18 +981,14 @@ bool Application::onEvent(const SDL_Event& event) {
 
     case SDL_EVENT_MOUSE_MOTION:
         if (m_camCtrl.captured) {
-            m_camCtrl.yaw += event.motion.xrel * m_camCtrl.sensitivity;
-            m_camCtrl.pitch -= event.motion.yrel * m_camCtrl.sensitivity;
-            // Clamp pitch to avoid gimbal lock at poles
-            m_camCtrl.pitch = std::max(-89.0f, std::min(89.0f, m_camCtrl.pitch));
+            m_camCtrl.handleMotion(event.motion.xrel, event.motion.yrel);
             return true;
         }
         return false;
 
     case SDL_EVENT_MOUSE_WHEEL:
         // Scroll up = faster, scroll down = slower
-        m_camCtrl.speed *= std::pow(1.2f, event.wheel.y);
-        m_camCtrl.speed = std::max(1.0f, std::min(5000.0f, m_camCtrl.speed));
+        m_camCtrl.adjustSpeed(static_cast<float>(event.wheel.y));
         return true;
 
     default:
@@ -1001,33 +997,9 @@ bool Application::onEvent(const SDL_Event& event) {
 }
 
 void Application::onUpdate(float dtSeconds) {
-    // Rebuild forward direction from yaw/pitch
-    const float yawRad = sm::radians(m_camCtrl.yaw);
-    const float pitchRad = sm::radians(m_camCtrl.pitch);
-    const sm::float3 forward{
-        std::cos(yawRad) * std::cos(pitchRad),
-        std::sin(pitchRad),
-        std::sin(yawRad) * std::cos(pitchRad),
-    };
-    const sm::float3 worldUp{0.0f, 1.0f, 0.0f};
-    const sm::float3 right = sm::normalize(sm::cross(forward, worldUp));
-    const sm::float3 up = sm::normalize(sm::cross(right, forward));
-
-    if (m_camCtrl.wDown)
-        m_camera.position += forward * m_camCtrl.speed * dtSeconds;
-    if (m_camCtrl.sDown)
-        m_camera.position -= forward * m_camCtrl.speed * dtSeconds;
-    if (m_camCtrl.dDown)
-        m_camera.position += right * m_camCtrl.speed * dtSeconds;
-    if (m_camCtrl.aDown)
-        m_camera.position -= right * m_camCtrl.speed * dtSeconds;
-    if (m_camCtrl.eDown)
-        m_camera.position += up * m_camCtrl.speed * dtSeconds;
-    if (m_camCtrl.qDown)
-        m_camera.position -= up * m_camCtrl.speed * dtSeconds;
-
-    m_camera.target = m_camera.position + forward;
-    m_camera.up = worldUp;
+    m_camera.position = m_camCtrl.integrate(m_camera.position, dtSeconds);
+    m_camera.target = m_camera.position + m_camCtrl.forward();
+    m_camera.up = sm::float3{0.0f, 1.0f, 0.0f};
     m_renderer->setCamera(m_camera);
 
     // Restart progressive accumulation whenever the view changes so a moving
@@ -1065,12 +1037,6 @@ void Application::onUpdate(float dtSeconds) {
         fpsFrames = 0;
         fpsLastTick = SDL_GetTicksNS();
     }
-}
-
-void Application::directionToYawPitch(const sm::float3& dir, float& yaw, float& pitch) {
-    const sm::float3 d = sm::normalize(dir);
-    pitch = sm::degrees(std::asin(d.y));
-    yaw = sm::degrees(std::atan2(d.z, d.x));
 }
 
 } // namespace theia

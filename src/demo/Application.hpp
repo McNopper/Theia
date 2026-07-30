@@ -10,6 +10,7 @@
 
 #include "harmonia/app/App.hpp"
 #include "harmonia/app/IRenderer.hpp"
+#include "theia/renderer/CameraController.hpp"
 #include "theia/renderer/EnvImportanceResources.hpp"
 #include "theia/renderer/ForwardRenderer.hpp"
 #include "theia/renderer/GiPass.hpp"
@@ -85,24 +86,6 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     onBeforeSceneStages(VkCommandBuffer renderCmd) noexcept override;
 
   private:
-    /// First-person camera controller (WASD + right-mouse-drag + scroll).
-    struct CameraController {
-        float yaw = -90.0f;        ///< degrees, -90 = looking toward -Z (Cornell default)
-        float pitch = 0.0f;        ///< degrees, clamped ±89
-        float speed = 50.0f;       ///< units/second (Cornell box ~560 units tall)
-        float sensitivity = 0.15f; ///< degrees per pixel of mouse movement
-        bool captured = false;     ///< whether relative mouse mode is active
-        bool wDown = false;
-        bool aDown = false;
-        bool sDown = false;
-        bool dDown = false;
-        bool qDown = false; ///< Q = move down
-        bool eDown = false; ///< E = move up
-    };
-
-    /// Compute initial yaw/pitch from a camera direction vector.
-    static void directionToYawPitch(const sm::float3& dir, float& yaw, float& pitch);
-
     struct CameraMatrices {
         sm::float4x4 proj;
         sm::float4x4 view;
