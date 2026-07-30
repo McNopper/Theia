@@ -10,6 +10,7 @@
 
 #include "harmonia/app/App.hpp"
 #include "harmonia/app/IRenderer.hpp"
+#include "theia/renderer/EnvImportanceResources.hpp"
 #include "theia/renderer/ForwardRenderer.hpp"
 #include "theia/renderer/GiPass.hpp"
 #include "theia/renderer/IblPrecompute.hpp"
@@ -132,15 +133,8 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     IblPrecompute m_ibl;
     std::unique_ptr<Scene> m_scene = std::make_unique<Scene>();
 
-    /// Environment state captured at scene-load for the per-frame GI dispatch.
-    VkImageView m_envView = VK_NULL_HANDLE;
-    VkSampler m_envSampler = VK_NULL_HANDLE;
-    VkBuffer m_envMarginalCdf = VK_NULL_HANDLE;
-    VkBuffer m_envConditionalCdf = VK_NULL_HANDLE;
-    std::uint32_t m_envCdfWidth = 0;
-    std::uint32_t m_envCdfHeight = 0;
-    bool m_hasEnv = false;
-    float m_envNits = 1.0f;
+    /// Environment importance-sampling state captured at scene-load for the per-frame GI dispatch.
+    EnvImportanceResources m_env;
 
     /// Live camera state (updated each frame by CameraController).
     ForwardRenderer::CameraParams m_camera{};

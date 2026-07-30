@@ -300,14 +300,14 @@ bool Application::onSceneLoaded(const SceneLoader::SceneConfig& sceneConfig) {
     // Capture environment state for the per-frame GI dispatch. When no env map is bound,
     // fall back to the (black) IBL specular texture/sampler so the GI descriptor stays
     // valid — the shader gates all env reads on hasEnvMap.
-    m_hasEnv = hasEnv;
-    m_envNits = envNits;
-    m_envView = hasEnv ? envView : m_ibl.resources().specularMipped.view();
-    m_envSampler = hasEnv ? envSampler : m_ibl.resources().envSampler;
-    m_envMarginalCdf = marginalCdf;
-    m_envConditionalCdf = conditionalCdf;
-    m_envCdfWidth = cdfW;
-    m_envCdfHeight = cdfH;
+    m_env.hasEnv = hasEnv;
+    m_env.nits = envNits;
+    m_env.view = hasEnv ? envView : m_ibl.resources().specularMipped.view();
+    m_env.sampler = hasEnv ? envSampler : m_ibl.resources().envSampler;
+    m_env.marginalCdf = marginalCdf;
+    m_env.conditionalCdf = conditionalCdf;
+    m_env.cdfWidth = cdfW;
+    m_env.cdfHeight = cdfH;
     if (hasEnv) {
         m_renderer->setSunShadow(iblProbe()->sunDirection(), iblProbe()->sunStrength());
     } else {
@@ -446,14 +446,7 @@ void Application::submitAsyncCompute(VkCommandBuffer cmd,
 
     GiPass::FrameParams gp{};
     gp.scene = m_scene.get();
-    gp.envMapView = m_envView;
-    gp.envSampler = m_envSampler;
-    gp.envMarginalCdf = m_envMarginalCdf;
-    gp.envConditionalCdf = m_envConditionalCdf;
-    gp.envImportanceWidth = m_envCdfWidth;
-    gp.envImportanceHeight = m_envCdfHeight;
-    gp.hasEnvMap = m_hasEnv;
-    gp.envLuminanceScale = m_envNits;
+    m_env.fill(gp);
     gp.view = view;
     gp.cameraPos = m_camera.position;
     gp.exposure = m_camera.physical.exposure();
@@ -630,14 +623,7 @@ void Application::submitSingleQueueGI(VkCommandBuffer cmd,
 
     GiPass::FrameParams gp{};
     gp.scene = m_scene.get();
-    gp.envMapView = m_envView;
-    gp.envSampler = m_envSampler;
-    gp.envMarginalCdf = m_envMarginalCdf;
-    gp.envConditionalCdf = m_envConditionalCdf;
-    gp.envImportanceWidth = m_envCdfWidth;
-    gp.envImportanceHeight = m_envCdfHeight;
-    gp.hasEnvMap = m_hasEnv;
-    gp.envLuminanceScale = m_envNits;
+    m_env.fill(gp);
     gp.view = view;
     gp.cameraPos = m_camera.position;
     gp.exposure = m_camera.physical.exposure();
