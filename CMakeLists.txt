@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(theia VERSION 0.7.3 LANGUAGES C CXX)
+project(theia VERSION 0.7.4 LANGUAGES C CXX)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
@@ -191,7 +191,8 @@ endif()
 # ── Shared libraries: Aether (file format) + Harmonia (common Vulkan) ─────────
 # Consumed via FetchContent, pinned to published release tags.  For local
 # development against working copies, override FETCHCONTENT_SOURCE_DIR_AETHER /
-# FETCHCONTENT_SOURCE_DIR_HARMONIA.  Aether and Harmonia are pinned v0.7.2.
+# FETCHCONTENT_SOURCE_DIR_HARMONIA.  Aether is pinned v0.7.2; Harmonia is pinned
+# to the latest release.
 FetchContent_Declare(
     aether
     GIT_REPOSITORY https://github.com/McNopper/Aether.git
@@ -200,7 +201,7 @@ FetchContent_Declare(
 FetchContent_Declare(
     harmonia
     GIT_REPOSITORY https://github.com/McNopper/Harmonia.git
-    GIT_TAG v0.7.3
+    GIT_TAG v0.7.4
 )
 FetchContent_MakeAvailable(aether harmonia)
 
