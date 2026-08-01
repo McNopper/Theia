@@ -14,7 +14,6 @@
 #include "theia/renderer/EnvImportanceResources.hpp"
 #include "theia/renderer/ForwardRenderer.hpp"
 #include "theia/renderer/GiPass.hpp"
-#include "theia/renderer/IblPrecompute.hpp"
 #include "theia/renderer/LightCuller.hpp"
 #include "theia/renderer/MotionVectorPass.hpp"
 #include "theia/renderer/TaaPass.hpp"
@@ -105,15 +104,14 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     /// TAA's temporal-reprojection blend — so TAA is never initialized or run in this mode.
     [[nodiscard]] bool isOffscreenCapture() const noexcept { return !config().outputFile.empty(); }
 
-    /// The ray-query GI compute stage runs whenever enabled and initialized.
-    [[nodiscard]] bool giActive() const noexcept { return config().rtGi && m_giPass.isInitialized(); }
+    /// The ray-query GI compute stage is the renderer; it runs whenever initialized.
+    [[nodiscard]] bool giActive() const noexcept { return m_giPass.isInitialized(); }
 
     std::unique_ptr<ForwardRenderer> m_renderer;
     LightCuller m_lightCuller;
     GiPass m_giPass;
     MotionVectorPass m_motionVectorPass;
     TaaPass m_taaPass;
-    IblPrecompute m_ibl;
     std::unique_ptr<Scene> m_scene = std::make_unique<Scene>();
 
     /// Environment importance-sampling state captured at scene-load for the per-frame GI dispatch.

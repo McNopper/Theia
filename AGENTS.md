@@ -59,8 +59,8 @@ build/theia.exe --scene shaderball_base                               # interact
 
 CLI flags: `--scene/-s`, `--output/-o` (headless EXR+PNG), `--width`, `--height`,
 `--offscreen-frames <n>` (accumulation count), `--validation`/`--no-validation`,
-`--rt-gi`/`--no-rt-gi` (GI on/off, default on), `--no-restir-di` (ReSTIR DI off),
-`--taa`/`--no-taa`, `--no-camera-jitter`, `--indirect-ambient <f>`.
+`--no-restir-di` (ReSTIR DI off), `--taa`/`--no-taa`, `--no-camera-jitter`,
+`--indirect-ambient <f>`. RT-GI is always on (it is the renderer — no GI-off path).
 Theia accumulates frames — use `--offscreen-frames` for convergence quality.
 
 ⚠️ No `--offscreen` flag — headless is triggered by `--output`.
@@ -85,11 +85,12 @@ the 320×240 parity resolution.
   renders give byte-identical metrics.
 - **IBL parity reference must be high-spp:** a low-spp Hyperion reference is noisy — render it
   with `hyperion --spp 256` first, or the diff measures noise, not a real discrepancy.
-- **Real-time multi-bounce GI now exists (RT-GI):** Theia runs a HW ray-traced GI pass
+- **Real-time multi-bounce GI (RT-GI):** Theia runs a HW ray-traced GI pass
   (`gi.comp.slang` → shared `path_integrator`) providing path-traced multi-bounce indirect
-  (diffuse + specular + env-NEE) and transmission/refraction, default-on (`--no-rt-gi` to
-  disable). The old "single-bounce IBL + flat ambient, darker than Hyperion" gap is closed for
-  the unified pipeline.
+  (diffuse + specular + env-NEE) and transmission/refraction. RT-GI is always on — it is the
+  renderer's single indirect/reflection/occlusion path (the split-sum IBL fallback was removed).
+  The old "single-bounce IBL + flat ambient, darker than Hyperion" gap is closed for the
+  unified pipeline.
 - **Bulk subsurface + transmission-scatter run the shared volumetric walk in `gi.comp`:** the
   compute loop executes the same chromatic hero-wavelength free-flight/scatter/boundary
   estimator as Hyperion (`runMediumWalk`), on both primary and secondary vertices. `sampleBSDF`
@@ -113,9 +114,6 @@ the 320×240 parity resolution.
   local** reservoirs (bindings 20/21 store local candidates only) — plain unbiased RIS, and
   progressive accumulation already integrates the temporal axis. The DI reservoir's temporal
   merge has the same latent bias, invisible on light-tailed direct lighting.
-- **IBL specular split-sum is the GI-OFF fallback only:** the prefiltered split-sum map
-  (1024x512 / 8-mip, band-limited, can't resolve a sharp HDR sun-disc) is used only on the
-  `--no-rt-gi` debug path. The default unified path gets specular reflections from RT-GI.
 - **New compute shader entry points** MUST be added to `THEIA_ENTRY_SHADERS` in `CMakeLists.txt`
   or the `.spv` is never compiled and the shader fails to load at runtime ("file not found").
 - **GI primary surface = the re-traced closest hit, NOT the rasterized giBuffer materialIdx.**
@@ -194,7 +192,9 @@ path. Both paths share one task-shader entry point (`gid.x = 0..visibleCount-1`)
   requires `maintenance5` + `VMA_ALLOCATOR_CREATE_KHR_MAINTENANCE5_BIT`).
 - Cull→draw barrier on `indirectDrawBuf` covers both `DRAW_INDIRECT` (GD3) and `COMMAND_PREPROCESS`
   (GD6) destination stages so the GPU-written count is fully visible before it is consumed.
-- Three-way dispatch per pass: DGC (preferred) → GD3 indirect → CPU-count fallback.
+- Two-way dispatch per pass: DGC (preferred) → GD3 indirect (`vkCmdDrawMeshTasksIndirectEXT`).
+  The CPU-count direct draw rung was removed — `VK_EXT_mesh_shader` is a hard requirement, so
+  the GD3 indirect draw is always available.
 - Debug A/B toggles: `THEIA_FORCE_GD3` (skip DGC, use indirect draw), `THEIA_SINGLE_PASS`
   (bypass two-pass Hi-Z), `THEIA_DISABLE_HIZ` (draw all meshlets).
 - GD4: Both Hi-Z passes (`cullPhase=1` and `cullPhase=2`) use the same GPU-indirect path;

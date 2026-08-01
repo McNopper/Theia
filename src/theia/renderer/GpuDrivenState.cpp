@@ -81,8 +81,8 @@ void GpuDrivenState::dispatchCull(VkCommandBuffer cmd,
     vkCmdPipelineBarrier2(cmd, &cullDep);
 }
 
-void GpuDrivenState::issueDraw(VkCommandBuffer cmd, VkPipeline pipeline, std::uint32_t instanceCount) {
-    if (gpuCullPass.isInitialized() && dgcLayout != VK_NULL_HANDLE) {
+void GpuDrivenState::issueDraw(VkCommandBuffer cmd, VkPipeline pipeline) {
+    if (dgcLayout != VK_NULL_HANDLE) {
         // GD6 DGC path: one GPU-generated DRAW_MESH_TASKS command via VK_EXT_device_generated_commands.
         const VkGeneratedCommandsPipelineInfoEXT dgcPipelineInfo{
             .sType = VK_STRUCTURE_TYPE_GENERATED_COMMANDS_PIPELINE_INFO_EXT,
@@ -103,11 +103,11 @@ void GpuDrivenState::issueDraw(VkCommandBuffer cmd, VkPipeline pipeline, std::ui
             .maxDrawCount = 1,
         };
         vkCmdExecuteGeneratedCommandsEXT(cmd, VK_FALSE, &dgcInfo);
-    } else if (gpuCullPass.isInitialized() && vkCmdDrawMeshTasksIndirectEXT != nullptr) {
-        // GD3 fallback: single indirect draw; task shader gid.x = visible instance position.
-        vkCmdDrawMeshTasksIndirectEXT(cmd, gpuCullPass.indirectDrawBuffer(), 0, 1, kMeshTaskIndirectCmdSize);
     } else {
-        vkCmdDrawMeshTasksEXT(cmd, instanceCount, 1, 1);
+        // GD3 indirect: VK_EXT_mesh_shader is a required feature (the rasterizer is mesh-shader
+        // based), so vkCmdDrawMeshTasksIndirectEXT is always present. Task shader gid.x indexes
+        // the GPU-written compactInstanceList; the dispatch count comes from indirectDrawBuf.
+        vkCmdDrawMeshTasksIndirectEXT(cmd, gpuCullPass.indirectDrawBuffer(), 0, 1, kMeshTaskIndirectCmdSize);
     }
 }
 

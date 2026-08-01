@@ -553,6 +553,56 @@ RestirCandidate sampleEmissiveCandidate(SurfaceHit surf, inout RngState seed) {
     if (triPdf <= 0.0) { triPdf = 1.0 / float(emissiveTriangleCount); }
 
     GpuEmissiveTriangle tri = emissiveTriangles[triIdx];
+
+    // Tagged-union dispatch: analytic sphere emitters are sampled by uniform solid-angle
+    // (cone) sampling; the stored samplePoint/sampleNormal let evalReservoirSample (which
+    // only reads the emission w-channels + the stored point/normal) re-evaluate them at any
+    // surface unchanged. Mirrors evalEmissiveSphereNEE in the shared path_integrator.
+    if (tri.kind_pad.x == kEmissiveSphere) {
+        float3 center = tri.v0_area.xyz;
+        float  radius = tri.v0_area.w;
+        float3 toC = center - surf.position;
+        float  d   = length(toC);
+        if (d <= radius) { return c; }
+        float3 wc     = toC / d;
+        float  sinMax = min(radius / d, 1.0);
+        float  cosMax = safeSqrt(1.0 - sinMax * sinMax);
+        // (1 - cosθMax) via the exact identity sin²/(1+cos) — the direct subtraction
+        // underflows to 0 for radius/d ≲ 2.4e-4 in fp32 (pdf → +inf, sphere drops out).
+        float  oneMinusCosMax = (sinMax * sinMax) / (1.0 + cosMax);
+        if (oneMinusCosMax <= 0.0) { return c; }
+        float u1               = randFloat(seed);
+        float u2               = randFloat(seed);
+        float oneMinusCosTheta = u1 * oneMinusCosMax;
+        float cosTheta         = 1.0 - oneMinusCosTheta;
+        float sinTheta         = safeSqrt(oneMinusCosTheta * (2.0 - oneMinusCosTheta));
+        float phi              = 2.0 * kPi * u2;
+        float3x3 frame = buildFrameFromZ(wc); // rows: T, B, wc
+        float3 wi      = normalize(frame[0] * (sinTheta * cos(phi))
+                                + frame[1] * (sinTheta * sin(phi))
+                                + wc * cosTheta);
+        // Stable discriminant r² - |oc⊥|²: (oc·wi)² - (oc·oc - r²) cancels to noise for a
+        // small distant sphere. Matches evalEmissiveSphereNEE bit for bit.
+        float3 oc   = surf.position - center;
+        float  hb   = dot(oc, wi);
+        float3 ocT  = oc - hb * wi;
+        float  disc = radius * radius - dot(ocT, ocT);
+        if (disc <= 0.0) { return c; }
+        float t = -hb - sqrt(disc);
+        if (t <= 0.0) { return c; }
+        float3 hp     = surf.position + wi * t;
+        float3 nLight = normalize(hp - center);
+        if (dot(-wi, nLight) <= 0.0 || dot(wi, surf.normal) <= 0.0) { return c; }
+        // Source pdf = P(select this sphere) × uniform-cone solid-angle pdf.
+        float conePdf = 1.0 / (2.0 * kPi * oneMinusCosMax);
+        c.lightIdx    = triIdx;
+        c.samplePoint  = hp;
+        c.sampleNormal = nLight;
+        c.solidPdf     = triPdf * conePdf;
+        c.valid        = c.solidPdf > 0.0;
+        return c;
+    }
+
     float3 v0    = tri.v0_area.xyz;
     float  area  = tri.v0_area.w;
     float3 edge1 = tri.edge1_emitR.xyz;

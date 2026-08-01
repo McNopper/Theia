@@ -17,7 +17,6 @@
 #include "theia/renderer/GpuCullPass.hpp"
 #include "theia/renderer/GpuDrivenState.hpp"
 #include "theia/renderer/HiZPass.hpp"
-#include "theia/renderer/IblPrecompute.hpp"
 #include "theia/renderer/RendererConstants.hpp"
 
 class Scene;
@@ -39,11 +38,6 @@ class ForwardRenderer {
         VkFormat outputFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
         VkImage hdrImage = VK_NULL_HANDLE; ///< externally owned HDR color target
         VkImageView hdrImageView = VK_NULL_HANDLE;
-        VkImageView iblDiffuseView = VK_NULL_HANDLE;
-        VkImageView iblSpecularView = VK_NULL_HANDLE;
-        VkImageView sheenLutView = VK_NULL_HANDLE;
-        VkSampler iblEnvSampler = VK_NULL_HANDLE;
-        VkSampler iblLutSampler = VK_NULL_HANDLE;
     };
 
     /// harmonia::Camera parameters. Uses the shared harmonia::Camera::Params so both
@@ -67,12 +61,16 @@ class ForwardRenderer {
         m_desc.texturesBoundFor = nullptr;
     }
     void setCamera(const CameraParams& cam) { m_camera = cam; }
-    /// Bind IBL textures (set 2 / sky set 0). When a raw environment panorama is
-    /// available it is bound to IBL binding 4 for the sky background and its
-    /// physical scale (env_unit_nits) recorded; pass VK_NULL_HANDLE / 1.0f when the
-    /// scene has no env map (binding 4 falls back to the specular view as a
-    /// harmless placeholder).
-    void setIbl(const IblResources& res, VkImageView rawEnvView = VK_NULL_HANDLE, float envUnitNits = 1.0f);
+    /// Bind the raw environment panorama (set 2: linear sampler at binding 3, raw env at
+    /// binding 4). The RT-GI compute stage supplies all indirect lighting, so the forward
+    /// pass samples only the raw env for the sky background / transparent env path. When no
+    /// env map is present pass VK_NULL_HANDLE — a 1×1 placeholder is bound so the descriptor
+    /// stays valid (sky/GI gate reads on hasEnv).
+    void setEnvironment(VkImageView rawEnvView, float envUnitNits);
+    /// Env sampler / placeholder view owned by the renderer, used to keep the env descriptor
+    /// set valid when a scene has no environment map (sky/GI gate reads on hasEnv).
+    [[nodiscard]] VkSampler envSampler() const noexcept { return m_envSampler; }
+    [[nodiscard]] VkImageView dummyEnvView() const noexcept { return m_dummyEnv.view(); }
     /// Bind env-importance CDF buffers used by transparent-path stochastic env sampling.
     void setEnvImportanceSampling(VkBuffer marginalCdf,
                                   VkBuffer conditionalCdf,
@@ -96,10 +94,6 @@ class ForwardRenderer {
     }
     /// Presentation-only constant indirect ambient term (default off for parity).
     void setIndirectAmbient(float strength) noexcept { m_indirectAmbientStrength = std::max(0.0f, strength); }
-    /// When the ray-query GI compute stage (GiPass) is active it supplies indirect
-    /// lighting, so the forward pass must skip its flat-IBL / ambient approximation.
-    /// Encoded as bit 0 of the `giEnabled` push constant (bit 1 = ReSTIR DI active).
-    void setGiEnabled(bool enabled) noexcept { m_render.giEnabled = (m_render.giEnabled & ~1U) | (enabled ? 1U : 0U); }
     /// A4: when ReSTIR DI owns emissive-triangle direct lighting (in GiPass), the forward
     /// pass must skip its emissive-derived rect/area lights to avoid double-counting.
     /// Encoded as bit 1 of the `giEnabled` push constant. Punctual lights are unaffected.
@@ -159,7 +153,7 @@ class ForwardRenderer {
         std::uint32_t envImportanceWidth = 0;  ///< CDF width; 0 disables env importance sampling
         std::uint32_t envImportanceHeight = 0; ///< CDF height
         std::uint32_t hiZMipCount = 0;         ///< Hi-Z mip levels; 0 disables the occlusion test
-        std::uint32_t giEnabled = 0;           ///< 1 when GiPass supplies indirect; disables forward IBL/ambient
+        std::uint32_t giEnabled = 0;           ///< bit1 set = ReSTIR DI/PT owns emissive direct (skip rect lights)
         sm::float4 sunDirection;               ///< xyz = world dir toward sun, w = shadow strength (0 disables)
         sm::float4 shadowParams;       ///< x = ray tMin, y = sky ambient floor, z = env_unit_nits, w = |proj[0][0]|
         sm::float4 presentationParams; ///< x = indirect ambient, y = pass flag, z = debug ray-hit, w = |proj[1][1]|
@@ -236,7 +230,7 @@ class ForwardRenderer {
     /// Render-state / RNG cohort (extracted, R8/CH9): flags + per-frame state plumbed into
     /// the mesh-shader push constants.
     struct RenderState {
-        std::uint32_t giEnabled = 0;  ///< bit0 = GiPass active, bit1 = ReSTIR DI active
+        std::uint32_t giEnabled = 0;  ///< bit1 = ReSTIR DI/PT owns emissive direct (forward skips rect lights)
         float debugRayHitMode = 0.0f; ///< 0=off, 1=ray-hit albedo, 2=ray-hit radiance
         std::uint32_t transparentMaxDepth = 2;
         std::uint32_t frameSampleIndex = 0;
@@ -261,17 +255,19 @@ class ForwardRenderer {
         harmonia::UniqueDescriptorPool descriptorPool;
     } m_desc;
 
-    VkDescriptorImageInfo m_iblDiffuseInfo{};
-    VkDescriptorImageInfo m_iblSpecularInfo{};
-    VkDescriptorImageInfo m_sheenLutInfo{};
-    VkDescriptorImageInfo m_brdfLutInfo{};
-    VkDescriptorImageInfo m_iblEnvSamplerInfo{};
-    VkDescriptorImageInfo m_iblEnvRawInfo{};
+    VkDescriptorImageInfo m_envSamplerInfo{};
+    VkDescriptorImageInfo m_envRawInfo{};
     VkBuffer m_envMarginalCdf = VK_NULL_HANDLE;
     VkBuffer m_envConditionalCdf = VK_NULL_HANDLE;
     std::uint32_t m_envImportanceWidth = 0;
     std::uint32_t m_envImportanceHeight = 0;
     float m_envUnitNits = 1.0f; ///< env_unit_nits for the raw-env sky background
+
+    /// Env sampler + 1×1 placeholder image keeping the env descriptor set valid when a scene
+    /// has no environment map (sky/GI gate reads on hasEnv, so the placeholder is never sampled).
+    harmonia::UniqueSampler m_envSampler;
+    harmonia::Image m_dummyEnv;
+    bool m_dummyEnvReady = false; ///< one-time UNDEFINED → SHADER_READ_ONLY_OPTIMAL transition
 
     // Tile-based light culling buffers (set by LightCuller before each recordFrame).
     VkBuffer m_tileLightCountsBuf = VK_NULL_HANDLE;

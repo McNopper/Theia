@@ -96,9 +96,9 @@ bool Application::onInitialize() {
     }
 
     // GiPass — ray-query global illumination (multi-bounce indirect via the shared
-    // Harmonia path integrator). This is the single indirect provider for the
-    // unified path; opt out only for debugging via --no-rt-gi.
-    if (config().rtGi) {
+    // Harmonia path integrator). This is the single indirect provider; RT-GI is the
+    // renderer (no GI-off fallback path).
+    {
         const GiPass::Config giCfg{
             .width = swapchain().extent().width,
             .height = swapchain().extent().height,
@@ -112,12 +112,10 @@ bool Application::onInitialize() {
         if (!m_giPass.initialize(deviceContext(), giCfg)) {
             harmonia::Logger::warn("GiPass failed to initialize — ray-query GI disabled");
         }
-        // When GI will run, the forward pass must emit direct+emission only (no IBL/ambient);
-        // the GI compute stage supplies the indirect term.
-        m_renderer->setGiEnabled(giActive());
-        // A4/GI2: when ReSTIR DI OR ReSTIR PT is active, GiPass owns emissive-triangle
-        // direct lighting; tell the forward pass to skip its emissive-derived rect lights
-        // to avoid double-counting. PT and DI are mutually exclusive (PT absorbs DI).
+        // The forward pass emits direct + emission only; GiPass supplies the indirect term.
+        // When ReSTIR DI OR ReSTIR PT is active, GiPass owns emissive-triangle direct
+        // lighting too — tell the forward pass to skip its emissive-derived rect lights to
+        // avoid double-counting. PT and DI are mutually exclusive (PT absorbs DI).
         m_renderer->setRestirDiActive(giActive() && (m_useRestirDi || m_useRestirPt));
 
         // MotionVectorPass: compute per-pixel motion vectors after GiPass
@@ -133,15 +131,13 @@ bool Application::onInitialize() {
                 harmonia::Logger::warn("MotionVectorPass failed to initialize — static history fallback active");
             }
         }
-    } else {
-        m_renderer->setGiEnabled(false);
     }
 
     // TaaPass — temporal anti-aliasing for the interactive window ONLY. Offscreen capture
     // integrates jittered/stochastic samples via progressive accumulation; TAA's temporal
     // reprojection would double-filter that (blur/ghosting), so it is not initialized here
     // in offscreen mode. See isOffscreenCapture() / onUpdate() motion gate.
-    if (config().rtGi && m_motionVectorPass.isInitialized() && m_useTaa && !isOffscreenCapture()) {
+    if (m_motionVectorPass.isInitialized() && m_useTaa && !isOffscreenCapture()) {
         const TaaPass::Config taaCfg{
             .width = swapchain().extent().width,
             .height = swapchain().extent().height,
@@ -221,7 +217,6 @@ bool Application::onInitialize() {
 }
 
 void Application::onSceneUnload() {
-    m_ibl.shutdown();
     if (m_renderer) {
         m_renderer->setScene(nullptr);
     }
@@ -266,44 +261,29 @@ bool Application::onSceneLoaded(const harmonia::SceneLoader::SceneConfig& sceneC
                            m_scene->vertexBuffer().size(),
                            m_scene->indexBuffer().size());
 
-    // IBL: the host loaded the environment probe (if any); precompute the
-    // renderer-specific BRDF LUT / irradiance resources from it.
+    // Environment: the host loaded the environment probe (if any). The raw panorama and
+    // its importance-sampling CDFs feed the sky background and the RT-GI env-NEE path.
+    // Indirect lighting comes from RT-GI, so there is no split-sum IBL precompute.
     const bool hasEnv = iblProbe().has_value() && iblProbe()->isValid();
     const VkImageView envView = hasEnv ? iblProbe()->imageView() : VK_NULL_HANDLE;
     const VkSampler envSampler = hasEnv ? iblProbe()->sampler() : VK_NULL_HANDLE;
     const float envNits = sceneConfig.envUnitNits.value_or(1.0f);
-    // CDF buffers for env importance sampling in the diffuse irradiance precompute.
     const VkBuffer marginalCdf = hasEnv ? iblProbe()->marginalCdfBuffer().handle() : VK_NULL_HANDLE;
     const VkBuffer conditionalCdf = hasEnv ? iblProbe()->conditionalCdfBuffer().handle() : VK_NULL_HANDLE;
     const std::uint32_t cdfW = hasEnv ? iblProbe()->cdfWidth() : 0u;
     const std::uint32_t cdfH = hasEnv ? iblProbe()->cdfHeight() : 0u;
-    const std::uint32_t diffuseRes = std::max(1u, config().iblDiffuseResolution);
-    const VkExtent2D diffuseExtent{diffuseRes, std::max(1u, diffuseRes / 2u)};
 
-    if (!m_ibl.initialize(deviceContext(),
-                          commandPool(),
-                          envView,
-                          envSampler,
-                          envNits,
-                          diffuseExtent,
-                          marginalCdf,
-                          conditionalCdf,
-                          cdfW,
-                          cdfH)) {
-        harmonia::Logger::error("IBL precomputation failed");
-        return false;
-    }
-    m_renderer->setIbl(m_ibl.resources(), envView, envNits);
+    m_renderer->setEnvironment(envView, envNits);
     m_renderer->setEnvImportanceSampling(marginalCdf, conditionalCdf, cdfW, cdfH);
     m_renderer->setHasEnvironment(hasEnv);
 
     // Capture environment state for the per-frame GI dispatch. When no env map is bound,
-    // fall back to the (black) IBL specular texture/sampler so the GI descriptor stays
+    // fall back to the renderer-owned placeholder view/sampler so the GI descriptor stays
     // valid — the shader gates all env reads on hasEnvMap.
     m_env.hasEnv = hasEnv;
     m_env.nits = envNits;
-    m_env.view = hasEnv ? envView : m_ibl.resources().specularMipped.view();
-    m_env.sampler = hasEnv ? envSampler : m_ibl.resources().envSampler;
+    m_env.view = hasEnv ? envView : m_renderer->dummyEnvView();
+    m_env.sampler = hasEnv ? envSampler : m_renderer->envSampler();
     m_env.marginalCdf = marginalCdf;
     m_env.conditionalCdf = conditionalCdf;
     m_env.cdfWidth = cdfW;
@@ -687,7 +667,7 @@ void Application::onResize(VkExtent2D extent) noexcept {
     }
 
     // Reinitialize GiPass with new HDR/GBuffer views from the resized ForwardRenderer.
-    if (config().rtGi) {
+    {
         const GiPass::Config giCfg{
             .width = extent.width,
             .height = extent.height,
@@ -701,7 +681,6 @@ void Application::onResize(VkExtent2D extent) noexcept {
         if (!m_giPass.initialize(deviceContext(), giCfg)) {
             harmonia::Logger::warn("GiPass resize failed — ray-query GI disabled");
         }
-        m_renderer->setGiEnabled(giActive());
         m_renderer->setRestirDiActive(giActive() && (m_useRestirDi || m_useRestirPt));
 
         // Reinitialize MotionVectorPass with the new GBuffer view and extent.
@@ -716,12 +695,10 @@ void Application::onResize(VkExtent2D extent) noexcept {
                 harmonia::Logger::warn("MotionVectorPass resize failed — static history fallback active");
             }
         }
-    } else {
-        m_renderer->setGiEnabled(false);
     }
 
     // Reinitialize TaaPass with new extent and views (interactive window only).
-    if (config().rtGi && m_motionVectorPass.isInitialized() && m_useTaa && !isOffscreenCapture()) {
+    if (m_motionVectorPass.isInitialized() && m_useTaa && !isOffscreenCapture()) {
         const TaaPass::Config taaCfg{
             .width = extent.width,
             .height = extent.height,

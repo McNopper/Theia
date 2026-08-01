@@ -31,7 +31,7 @@ cbuffer ForwardPC {
     uint     envImportanceWidth;    // CDF width; 0 = env importance sampling disabled
     uint     envImportanceHeight;   // CDF height
     uint     _padEnv;
-    uint     giEnabled;             // 1 when the ray-query GI compute stage supplies indirect; disables IBL/ambient here
+    uint     giEnabled;             // bit1 set = ReSTIR DI/PT owns emissive-triangle direct (skip rect lights)
     float4   sunDirection;          // xyz = world dir toward sun, w = shadow strength (0 disables)
     float4   shadowParams;          // x = ray tMin, y = sky ambient floor, z = env_unit_nits
     float4   presentationParams;    // x = indirect ambient strength (presentation-only), yzw reserved
@@ -56,14 +56,12 @@ cbuffer ForwardPC {
 // Per-instance object→world transforms (one float4x4 per instance, row-major).
 [[vk::binding(11, 0)]] StructuredBuffer<float4x4>   instanceTransforms;
 
-// Set 2: IBL textures
-// Bindings: 0=diffuse irradiance, 1=specular prefilter (mipped), 2=sheen LUT, 3=sampler, 4=raw env, 5=GGX BRDF LUT
-[[vk::binding(0, 2)]] Texture2D<float4> t_iblDiffuse;
-[[vk::binding(1, 2)]] Texture2D<float4> t_iblSpecular;
-[[vk::binding(2, 2)]] Texture2D<float>  t_sheenLut;
+// Set 2: environment resources. Indirect lighting is supplied entirely by the RT-GI
+// compute stage (gi.comp); the forward pass keeps only the raw equirectangular env
+// panorama (sky background / transparent env sampling) and the env-importance CDFs.
+// Bindings: 3=linear sampler, 4=raw env panorama, 6/7=env importance-sampling CDFs.
 [[vk::binding(3, 2)]] SamplerState      s_iblLinear;
 [[vk::binding(4, 2)]] Texture2D<float4> t_envRaw;
-[[vk::binding(5, 2)]] Texture2D<float2> t_brdfLut;
 [[vk::binding(6, 2)]] StructuredBuffer<float> envMarginalCdf;
 [[vk::binding(7, 2)]] StructuredBuffer<float> envConditionalCdf;
 
@@ -130,195 +128,6 @@ float3 clampFirefliesDisplay(float3 exposureWeightedLo) {
 
 bool isFiniteDir(float3 v) {
     return all(isfinite(v)) && dot(v, v) > 1.0e-12;
-}
-
-float3 computeTransmissionTint(GpuMaterial mat) {
-    // OpenPBR/MaterialX (C5): with transmission_depth == 0 the BTDF is tinted by
-    // transmission_color directly; with depth > 0 the interface is white and the color
-    // comes from interior Beer-Lambert absorption (σ_t = -ln(color)/depth) — at the
-    // nominal thickness t = depth the transmittance is exp(-σ_t·depth) = transmission_color
-    // exactly. The raster path has no interior path length, so transmission_color is the
-    // correct single-sample approximation in BOTH regimes. (transmission_scatter has no
-    // effect at depth == 0 per the MaterialX VDF gating; the RT-GI path handles it.)
-    return saturate3(mat.transmissionColorWeight.xyz);
-}
-
-/// Roughness → mip level for the prefiltered specular map (8 mip levels, linear distribution).
-float roughnessToLod(float roughness) {
-    return roughness * 7.0; // mip 0 = roughness 0, mip 7 = roughness 1
-}
-
-float3 sampleSpecularEnv(float3 dir, float roughness, float gain) {
-    const float2 uv = dirToLatlong(dir);
-    return gain * t_iblSpecular.SampleLevel(s_iblLinear, uv, roughnessToLod(roughness)).xyz;
-}
-
-/// IBL evaluation per OpenPBR layer, matching MaterialX split-sum:
-///   Lo_indirect ≈ LD(L, alpha) * FG(NdotV, alpha, Fresnel)
-///
-/// Coat layer attenuation follows MaterialX mx_layer_bsdf:
-///   final = coat_IBL + base_IBL * coat_throughput
-///   coat_throughput = 1 - coat_weight * coat_dirAlbedo
-///
-/// Ref: MaterialX libraries/pbrlib/genglsl/lib/mx_environment_prefilter.glsl
-///      MaterialX libraries/pbrlib/genglsl/mx_layer_bsdf.glsl
-float3 evalIBL(GpuMaterial mat, float3 wo, float3 N, float3 T, float3 B)
-{
-    float NoV = saturate(dot(N, wo));
-    if (NoV <= 0.0) {
-        return 0.0.xxx;
-    }
-
-    float diffuseWeight;
-    float subsurfaceWeight;
-    float specularWeight;
-    float metalWeight;
-    float transmissionWeight;
-    float coatWeight;
-    float fuzzWeight;
-    float diffuseTransWeight;
-    bool mirrorMode;
-    bool glassMode;
-    computeLobeWeights(mat,
-                       diffuseWeight,
-                       subsurfaceWeight,
-                       specularWeight,
-                       metalWeight,
-                       transmissionWeight,
-                       coatWeight,
-                       fuzzWeight,
-                       diffuseTransWeight,
-                       mirrorMode,
-                       glassMode);
-
-    float opacity = saturate(mat.opacityFlagsPad.x);
-    float ssAniso = clamp(mat.opacityFlagsPad.z, -1.0, 1.0);
-    float baseRough = saturate(mat.specularRoughAnisoIor.x);
-    float coatRough = saturate(mat.coatRoughAnisoIorDark.x);
-    float eta = max(mat.specularRoughAnisoIor.z, 1.01);
-    float coatEta = max(mat.coatRoughAnisoIorDark.z, 1.01);
-    float coatDark = saturate(mat.coatRoughAnisoIorDark.w);
-    float metalness = saturate(mat.baseMetalnessDiffRough.x);
-    float diffuseRough = saturate(mat.baseMetalnessDiffRough.y);
-
-    float3 baseColor = saturate3(mat.baseColorWeight.xyz);
-    float3 specColor = saturate3(mat.specularColorWeight.xyz);
-    float3 subsurfaceColor = saturate3(mat.subsurfaceColorWeight.xyz);
-    float3 coatColor = saturate3(mat.coatColorWeight.xyz);
-    float3 fuzzColor = saturate3(mat.fuzzColorWeight.xyz);
-
-    float baseLayerScale = opacity * rcp(lerp(1.0, coatEta * coatEta, coatWeight * coatDark));
-    baseLayerScale *= 1.0 - 0.35 * fuzzWeight;
-
-    float3 diffuseIrradiance = t_iblDiffuse.SampleLevel(s_iblLinear, dirToLatlong(N), 0.0).xyz;
-    float3 R = reflect(-wo, N);
-    // Anisotropic specular IBL: bend the base reflection vector toward the bitangent
-    // so the prefiltered highlight elongates along the tangent, approximating the
-    // anisotropic GGX lobe under environment lighting (Filament getReflectedVector /
-    // MaterialX real-time). Matches the BSDF's computeAlpha convention where positive
-    // specular_anisotropy widens roughness along the tangent (alphaX > alphaY).
-    float baseAniso = saturate(mat.specularRoughAnisoIor.y);
-    float3 Rbase = R;
-    if (baseAniso > 0.0) {
-        float3 anisoTangent = cross(B, wo);
-        float3 anisoNormal  = cross(anisoTangent, B);
-        float  bend         = baseAniso * saturate(5.0 * baseRough);
-        Rbase = reflect(-wo, normalize(lerp(N, anisoNormal, bend)));
-    }
-    // Compensation for split-sum under-energy vs path-traced multi-bounce specular.
-    // Stronger for smooth lobes (where missing high-frequency env energy is most visible),
-    // tapering toward rough surfaces.
-    const float iblSpecularGainBase = lerp(1.70, 1.00, saturate(baseRough * 1.35));
-    const float iblSpecularGainCoat = lerp(1.55, 1.00, saturate(coatRough * 1.35));
-    float3 prefilteredBase = sampleSpecularEnv(Rbase, baseRough, iblSpecularGainBase);
-    float3 prefilteredCoat = sampleSpecularEnv(R, coatRough, iblSpecularGainCoat);
-
-    // Base layer IBL: specular computed first so its directional albedo (FG) can
-    // mask the diffuse — matching MaterialX mx_layer_bsdf energy conservation.
-    // Diffuse irradiance map stores E = integral(Li*cos(theta) dw); the OpenPBR
-    // Fujii BRDF has Lo_diffuse = kInvPi * E * diffuseColorDirAlbedo(NoV, rough, color),
-    // which reduces to the Lambertian kInvPi*E*color when roughness = 0.
-    float3 baseLo = 0.0.xxx;
-    float3 specularFG = 0.0.xxx;
-    if (specularWeight > 0.0 || metalWeight > 0.0) {
-        float3 glossyF0 = lerp(iorToF0(eta) * specColor, baseColor, metalness);
-        glossyF0 = thinFilmTint(glossyF0, NoV, mat.thinFilmParams.x, max(mat.thinFilmParams.y, 1.0), mat.thinFilmParams.z);
-        // F90 = specColor for metallic workflow; 1 for pure dielectric
-        float3 specF90 = lerp(1.0.xxx, specColor, metalness);
-        float2 AB = t_brdfLut.SampleLevel(s_iblLinear, float2(saturate(NoV), baseRough), 0.0);
-        specularFG = (specularWeight + metalWeight) * (glossyF0 * AB.x + specF90 * AB.y);
-        baseLo += baseLayerScale * prefilteredBase * specularFG;
-    }
-    // Energy transmitted through the specular layer reaches the diffuse sublayer.
-    float3 diffuseMask = saturate(1.0.xxx - specularFG);
-    if (diffuseWeight > 0.0) {
-        baseLo += baseLayerScale * diffuseWeight * kInvPi * diffuseIrradiance * diffuseColorDirAlbedo(NoV, diffuseRough, baseColor) * diffuseMask;
-    }
-    if (subsurfaceWeight > 0.0) {
-        float ssScale = max(mat.subsurfaceRadiusScale.w, 0.001);
-        float3 ssTint = subsurfaceColor * (1.0 / (1.0 + ssScale *
-            (mat.subsurfaceRadiusScale.x + mat.subsurfaceRadiusScale.y + mat.subsurfaceRadiusScale.z)));
-        float ssReflScale = (mat.opacityFlagsPad.w > 0.5) ? 1.0 : saturate(1.0 - ssAniso);
-        baseLo += baseLayerScale * subsurfaceWeight * ssReflScale * kInvPi * diffuseIrradiance * diffuseColorDirAlbedo(NoV, saturate(0.25 + 0.5 * diffuseRough), ssTint) * diffuseMask;
-    }
-    // Thin-walled diffuse transmission (translucent base): diffuse light from the
-    // BACK hemisphere transmitted through the sheet, tinted by subsurface_color.
-    // IBL analogue of bsdf.slang's evalDiffuse on the flipped
-    // hemisphere — the back-side irradiance is the cosine-prefiltered diffuse map
-    // sampled along -N. Lets thin curtains/leaves/paper glow when lit from behind.
-    if (diffuseTransWeight > 0.0) {
-        float3 backIrradiance = t_iblDiffuse.SampleLevel(s_iblLinear, dirToLatlong(-N), 0.0).xyz;
-        baseLo += baseLayerScale * diffuseTransWeight * kInvPi * backIrradiance * diffuseColorDirAlbedo(NoV, diffuseRough, subsurfaceColor) * diffuseMask;
-    }
-    if (fuzzWeight > 0.0) {
-        // The Disney retroreflective sheen model (evalSheen in bsdf.slang) integrates
-        // to approximately Lambertian energy.  Use the diffuse irradiance for a
-        // split-sum approximation that matches the path-tracer's energy budget.
-        baseLo += fuzzWeight * fuzzColor * kInvPi * diffuseIrradiance;
-    }
-    // Transmission (glass/dielectric): approximate refraction by sampling the
-    // environment in the refracted direction, blended against the Fresnel
-    // reflection of the prefiltered base lobe.  This replaces the black glass
-    // produced when only the (energy-zero) opaque lobes are evaluated, giving a
-    // believable see-through dielectric for env-lit scenes.
-    if (transmissionWeight > 0.0) {
-        // OpenPBR transmission tint per MaterialX semantics (see computeTransmissionTint):
-        // transmission_color at depth==0, and the nominal-thickness Beer transmittance
-        // (= transmission_color again) for depth>0.
-        float3 transTint = computeTransmissionTint(mat);
-        float Fr = fresnelDielectric(NoV, eta);
-        float3 refrDir = refract(-wo, N, 1.0 / eta);
-        float3 refracted;
-        if (dot(refrDir, refrDir) < 1e-6) {
-            // Total internal reflection -> mirror the reflection lobe.
-            refracted = prefilteredBase;
-        } else {
-            // IBL refraction: sample the prefiltered environment radiance in the
-            // refracted direction at the transmission roughness (MaterialX
-            // mx_environment_prefilter convention for the transmission lobe).
-            refracted = sampleSpecularEnv(normalize(refrDir), baseRough, iblSpecularGainBase);
-        }
-        float3 glass = Fr * prefilteredBase + (1.0 - Fr) * refracted * transTint;
-        baseLo += baseLayerScale * transmissionWeight * glass;
-    }
-
-    // Coat IBL + throughput (MaterialX mx_layer_bsdf):
-    //   final = coat_IBL + base_IBL * coat_throughput
-    float3 Lo = baseLo;
-    if (coatWeight > 0.0) {
-        float3 coatF0 = thinFilmTint(iorToF0(coatEta) * max(coatColor, 0.04.xxx),
-                                     NoV,
-                                     mat.thinFilmParams.x,
-                                     max(mat.thinFilmParams.y, 1.0),
-                                     mat.thinFilmParams.z);
-        float2 coatAB = t_brdfLut.SampleLevel(s_iblLinear, float2(saturate(NoV), coatRough), 0.0);
-        float3 coatFG = coatF0 * coatAB.x + 1.0.xxx * coatAB.y; // F90=1 for dielectric coat
-        float3 coatIBL = coatWeight * prefilteredCoat * coatFG;
-        float3 coatThroughput = 1.0.xxx - coatWeight * coatFG;
-        Lo = coatIBL + baseLo * coatThroughput;
-    }
-
-    return max(Lo, 0.0.xxx);
 }
 
 /// Trace a shadow ray against the scene TLAS using inline ray query.
@@ -566,17 +375,9 @@ float3 shadeHitRadianceWithWo(RayHitData hit, float3 wo, float shadowBias) {
         directLo += shadeOneLight(lights[i], mat, hit.worldPos, wo, N, Ng, T, B, shadowOrigin, shadowBias);
     }
 
-    float iblShadow = 1.0;
-    const float sunStrength = sunDirection.w;
-    if (sunStrength > 0.0) {
-        const float3 sunDir = normalize(sunDirection.xyz);
-        if (dot(N, sunDir) > 0.0) {
-            const float sunVis = traceShadowTerminator(shadowOrigin, sunDir, shadowBias, 1e16, N, Ng);
-            const float skyFloor = shadowParams.y;
-            iblShadow = lerp(1.0, lerp(skyFloor, 1.0, sunVis), sunStrength);
-        }
-    }
-    const float3 indirectLo = ((giEnabled & 1u) == 0u ? evalIBL(mat, wo, N, T, B) : 0.0.xxx) * iblShadow;
+    // Indirect lighting is supplied by the RT-GI compute stage; the forward pass emits
+    // direct + emission only.
+    const float3 indirectLo = 0.0.xxx;
     const float3 emission = mat.emissionColorLum.xyz * mat.emissionColorLum.w;
     return directLo + indirectLo + emission;
 }
@@ -703,8 +504,7 @@ FS_OUT main(FS_IN input, bool isFrontFace : SV_IsFrontFace) {
     // (world position + material index) but not depth, so the GI stage path-traces every visible
     // transparent surface (smooth-dielectric delta refraction, TIR, Beer–Lambert, stacked glass)
     // exactly like Hyperion's ground truth, instead of the previous bespoke raster Fresnel-walk.
-    // When GI is disabled (--no-rt-gi) the fall-through evalIBL provides the split-sum glass
-    // approximation. geometry_opacity coverage is handled by the path integrator's stochastic
+    // geometry_opacity coverage is handled by the path integrator's stochastic
     // pass-through gate at the primary vertex (gi.comp.slang).
 
     // Match Hyperion emissive-hit behavior: emissive triangles are one-sided and
@@ -756,32 +556,8 @@ FS_OUT main(FS_IN input, bool isFrontFace : SV_IsFrontFace) {
                 directLo += shadeOneLight(lights[i], mat, input.worldPos, wo, N, Ng, T, B, shadowOrigin, shadowBias);
             }
         }
-
-        // IBL with ray-traced directional ("sun") shadow.  The brightest region of the
-        // environment is treated as a dominant light; points it cannot see keep only a
-        // `skyFloor` fraction of indirect light (residual sky), giving Hyperion-style
-        // cast shadows on IBL-lit scenes.  `sunDirection.w` scales the effect by how
-        // concentrated the dominant light is (0 → no shadow, e.g. overcast skies).
-        float iblShadow = 1.0;
-        const float sunStrength = sunDirection.w;
-        if (sunStrength > 0.0) {
-            const float3 sunDir = normalize(sunDirection.xyz);
-            if (dot(N, sunDir) > 0.0) {
-                const float sunVis = traceShadowTerminator(shadowOrigin, sunDir, shadowBias, 1e16, N, Ng);
-                const float skyFloor = shadowParams.y;
-                iblShadow = 1.0 - sunStrength * (1.0 - skyFloor) * (1.0 - sunVis);
-            }
-        }
-        if ((giEnabled & 1u) == 0u) {
-            indirectLo += evalIBL(mat, wo, N, T, B) * iblShadow;
-
-            const float indirectAmbient = presentationParams.x;
-            if (indirectAmbient > 0.0) {
-                // Presentation-only fallback for scenes that would otherwise look too
-                // contrasty without bounce lighting. Keep disabled for parity runs.
-                indirectLo += mat.baseColorWeight.xyz * mat.baseColorWeight.w * indirectAmbient;
-            }
-        }
+        // Indirect lighting (diffuse/specular/env bounce) is supplied entirely by the
+        // RT-GI compute stage; the forward pass emits direct + emission only.
     }
     // Emission (self-luminous surfaces, e.g. Cornell box ceiling lamp geometry).
     float3 Lo = directLo + indirectLo + emission;

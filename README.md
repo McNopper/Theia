@@ -64,11 +64,11 @@ It implements the [OpenPBR Surface v1.1.1](https://academysoftwarefoundation.git
 - **Vulkan 1.4 dynamic rendering** — `vkCmdBeginRendering` (no render passes; modern efficient rendering)
 - **GPU-driven forward rendering with VK_EXT_device_generated_commands (GD6)** — `GpuCullPass` compute shader frustum-culls instances each frame; outputs `compactInstanceList[]` + `indirectDrawBuf{visibleCount,1,1}`; `vkCmdExecuteGeneratedCommandsEXT` issues a single GPU-generated draw whose command is the GPU-written `indirectDrawBuf`, dispatching `visibleCount` task workgroups; task shader uses `compactInstanceList[gid.x]` — shared entry point with the `vkCmdDrawMeshTasksIndirectEXT` (GD3) fallback — CPU records only, no readback
 - **Direct lighting** — 1-2 directional lights + Forward+ tile-based point light culling (16×16 px tiles, up to 128 lights/tile)
-- **Image-based lighting (IBL)** — equirectangular HDR panorama; diffuse irradiance pre-convolution + per-roughness GGX prefiltered specular map; MaterialX analytic GGX directional albedo (no BRDF LUT)
-- **Ray-traced global illumination (RT-GI)** *(enabled by default; disable with `--no-rt-gi`)* — inline `VK_KHR_ray_query` compute stage; shared unidirectional path-integrator core (NEE + MIS + Russian Roulette) in Harmonia; output feeds the accumulation → denoiser chain for convergence to Hyperion ground truth. This is the single indirect/reflection/occlusion path
+- **Environment lighting** — equirectangular HDR panorama sampled raw for the sky background and env-NEE (importance-sampled via a marginal/conditional CDF); specular reflections and all indirect lighting come from RT-GI (no split-sum IBL prefilter)
+- **Ray-traced global illumination (RT-GI)** — inline `VK_KHR_ray_query` compute stage; shared unidirectional path-integrator core (NEE + MIS + Russian Roulette) in Harmonia; output feeds the accumulation → denoiser chain for convergence to Hyperion ground truth. RT-GI is always on — the single indirect/reflection/occlusion path (there is no GI-off fallback)
 - **ReSTIR DI** — spatiotemporal reservoir resampling for direct illumination: 8-candidate RIS via power-weighted emissive CDF, temporal reuse (M-cap=20, motion-vector reprojection, normal+depth validation), unbiased W = w_sum/(M·p̂), single shadow ray per pixel; feature-gated (`--no-restir-di`); bias audit: `cornell_classic` mean_diff 2.0 vs Hyperion ground truth
 - **Temporal Anti-Aliasing (TAA)** — cross-vendor YCoCg 3×3 neighbourhood AABB clamping + 90/10 history blend; motion-vector reprojection from A1b; `vkCmdCopyImage` ping-pong history; runs after MotionVectorPass, before denoiser; `--no-taa` opt-out
-- **A-SVGF denoiser + frame accumulation** — spatiotemporal variance-guided denoise feeding progressive accumulation (64/256 frames) that resolves to the Hyperion ground truth
+- **A-SVGF denoiser (interactive presentation only)** — fixed-radius à-trous wavelet filter that stabilizes the low-spp interactive window. It is **not** a converging stage (its effect scales with resolution, not sample count), so it is forced off for `--output`/`--no-postfx` — an offscreen capture is the raw scene-referred estimator result. Pipeline order is GI → MotionVector → TAA → Accumulation → Denoiser → ToneMap, so the denoiser runs *after* accumulation and never feeds it; parity/convergence to Hyperion comes from accumulation alone
 - **Sub-pixel camera jitter (Halton 2,3)** — deterministic raster AA sampling for accumulation-friendly opaque edge anti-aliasing
 - **Interactive camera control** — WASD movement, mouse look, EV100 physical exposure adjustment
 
@@ -220,7 +220,6 @@ build/theia.exe --scene cornell_classic --output out.exr
 | `--validation` / `--no-validation` | disabled | Enable / disable Vulkan validation layers |
 | `--taa` / `--no-taa` | on | Interactive-window temporal anti-aliasing during camera motion. `--taa` is **incompatible with `--output`** (offscreen uses progressive accumulation); the two must not be combined |
 | `--no-restir-di` | off (ReSTIR DI on) | Disable ReSTIR direct-light importance resampling (debug/baseline) |
-| `--rt-gi` / `--no-rt-gi` | on | Enable / disable the ray-query GI compute stage (use `--no-rt-gi` for debugging baselines) |
 | `--indirect-ambient <x>` | `0.0` | Presentation-only indirect ambient boost (scene-referred linear) |
 | `--no-camera-jitter` | off | Disable sub-pixel camera jitter (debug/baseline comparison only) |
 
@@ -230,10 +229,9 @@ Theia uses a **staged pipeline** for indirect lighting:
 
 | Stage | Status | Notes |
 |-------|--------|-------|
-| **RT-GI compute stage** | Default-on | `VK_KHR_ray_query` multibounce; shared integrator core with Hyperion; also drives transmission/refraction; feeds accumulation → denoiser. Disable with `--no-rt-gi` for debugging baselines |
-| Split-sum `evalIBL` | Fallback | First-hit IBL used only on the `--no-rt-gi` debug path |
+| **RT-GI compute stage** | Always on | `VK_KHR_ray_query` multibounce; shared integrator core with Hyperion; also drives transmission/refraction; feeds accumulation → denoiser. The single indirect/reflection/occlusion path |
 
-RT-GI is the single unified indirect + transmission provider and drives both the parity and interactive paths.
+RT-GI is the single unified indirect + transmission provider and drives both the parity and interactive paths (the split-sum IBL fallback was removed — RT-GI is the renderer).
 
 ---
 

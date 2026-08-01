@@ -30,7 +30,6 @@ class GpuDrivenState {
     // indirect draw command; ForwardRenderer consumes it via vkCmdDrawMeshTasksIndirectEXT
     // (GD3) or vkCmdExecuteGeneratedCommandsEXT (GD6 DGC path).
     GpuCullPass gpuCullPass;
-    harmonia::Buffer identityInstanceList;            ///< [0,1,...,kMaxInstances-1] binding-10 fallback
     harmonia::UniqueIndirectCommandsLayout dgcLayout; ///< DRAW_MESH_TASKS_EXT token, stride=12
     VkBuffer dgcPreprocessBuf = VK_NULL_HANDLE;       ///< vkCmdExecuteGeneratedCommandsEXT scratch
     VmaAllocation dgcPreprocessAlloc = VK_NULL_HANDLE;
@@ -52,9 +51,9 @@ class GpuDrivenState {
     /// Run the GPU frustum cull + the post-cull barrier (compactInstanceList + indirectDrawBuf).
     void
     dispatchCull(VkCommandBuffer cmd, const Scene& scene, std::uint32_t instanceCount, const sm::float4x4& viewProj);
-    /// Issue the mesh-task draw: DGC (GD6) when available, else indirect (GD3), else CPU-count.
+    /// Issue the mesh-task draw: DGC (GD6) when available, else indirect (GD3).
     /// The caller must have already bound the pipeline, descriptor sets, and push constants.
-    void issueDraw(VkCommandBuffer cmd, VkPipeline pipeline, std::uint32_t instanceCount);
+    void issueDraw(VkCommandBuffer cmd, VkPipeline pipeline);
 };
 
 } // namespace theia

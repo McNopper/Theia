@@ -63,7 +63,10 @@ int main(int argc, char* const argv[]) {
             taaForcedOn = true;
             continue;
         }
-        static_cast<void>(harmonia::CliParser::applyCommonArg(config, i, argc, argv));
+        if (!harmonia::CliParser::applyCommonArg(config, i, argc, argv)) {
+            harmonia::Logger::error("Unknown argument: '{}'", argv[i]);
+            return 2;
+        }
     }
 
     // Reject incompatible flag combinations rather than silently degrading the output.
@@ -74,8 +77,15 @@ int main(int argc, char* const argv[]) {
     if (taaForcedOn && !config.outputFile.empty()) {
         harmonia::Logger::error("--taa is incompatible with offscreen capture (--output): offscreen rendering uses "
                                 "progressive accumulation for anti-aliasing, and TAA would double-filter it. Drop "
-                                "--taa for offscreen capture, or omit --output for interactive TAA.");
+                                 "--taa for offscreen capture, or omit --output for interactive TAA.");
         return 2;
+    }
+
+    // --no-postfx forces off every post-processing stage: the shared A-SVGF denoiser
+    // (gated in App::applySceneStageConfig) and TAA here. It wins over --taa so the
+    // interactive window shows the raw estimator result.
+    if (config.noPostfx) {
+        taaEnabled = false;
     }
 
     theia::Application app;

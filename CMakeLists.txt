@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(theia VERSION 0.7.4 LANGUAGES C CXX)
+project(theia VERSION 0.7.5 LANGUAGES C CXX)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
@@ -201,7 +201,7 @@ FetchContent_Declare(
 FetchContent_Declare(
     harmonia
     GIT_REPOSITORY https://github.com/McNopper/Harmonia.git
-    GIT_TAG v0.7.4
+    GIT_TAG v0.7.5
 )
 FetchContent_MakeAvailable(aether harmonia)
 
@@ -214,10 +214,6 @@ set(THEIA_ENTRY_SHADERS
     forward_render.frag.slang
     sky.vert.slang
     sky.frag.slang
-    ibl_brdf_lut.comp.slang
-    ibl_sheen_lut.comp.slang
-    ibl_diffuse.comp.slang
-    ibl_specular.comp.slang
     light_cull.comp.slang
     forward_cull.comp.slang
     gi.comp.slang
@@ -232,7 +228,6 @@ set(THEIA_LIBRARY_SOURCES
     # Theia forward rendering
     src/theia/renderer/ForwardRenderer.cpp
     src/theia/renderer/GpuCullPass.cpp
-    src/theia/renderer/IblPrecompute.cpp
     src/theia/renderer/LightCuller.cpp
     src/theia/renderer/GiPass.cpp
     src/theia/renderer/MotionVectorPass.cpp

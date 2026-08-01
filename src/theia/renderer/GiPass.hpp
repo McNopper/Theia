@@ -23,10 +23,12 @@ namespace theia {
 /// 1..maxDepth path segments through the scene TLAS (inline VK_KHR_ray_query),
 /// evaluating the shared Harmonia `integrateSurface` estimator at each secondary
 /// vertex. The resulting indirect (bounce) radiance is additively composited into
-/// the HDR render target, replacing the forward pass's flat-IBL approximation.
+/// the HDR render target — RT-GI is the renderer's single indirect provider (there
+/// is no split-sum IBL fallback path).
 ///
-/// Toggleable and distinct from the forward raster stage: when active, the forward
-/// pass emits direct + emission only (giEnabled push-constant disables IBL/ambient).
+/// Always recorded after the forward geometry pass, which therefore emits direct +
+/// emission only (the `giEnabled` push-constant bit 1 also tells the forward pass to
+/// skip its emissive-derived rect lights when ReSTIR DI/PT owns that term).
 class GiPass {
   public:
     struct Config {

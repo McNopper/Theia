@@ -2,8 +2,7 @@
 // Samples the RAW equirectangular environment panorama along the world-space view
 // ray, in the same lat-long convention as Hyperion's env.slang sampleEnvMap().
 // This matches Hyperion's primary-ray background exactly (evalEnvironment =
-// envLuminanceScale * rawEnv(dir)); it deliberately does NOT sample the GGX
-// prefiltered specular map, which is lower-resolution and redistributes energy.
+// envLuminanceScale * rawEnv(dir)).
 // Output is scaled by env_unit_nits and camera exposure so the background matches
 // lit geometry.
 

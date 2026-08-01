@@ -8,7 +8,6 @@
 #include <harmonia/core/Barrier.hpp>
 #include <harmonia/core/Logger.hpp>
 #include <harmonia/core/ShaderModule.hpp>
-#include <numeric>
 #include <slang-math/slang-math.hpp>
 #include <theia/renderer/CameraJitter.hpp>
 #include <theia/renderer/ShaderPath.hpp>
@@ -45,10 +44,12 @@ bool ForwardRenderer::initialize(const harmonia::DeviceContext& ctx, const Confi
         return false;
     }
 
-    // GPU-driven frustum cull pass (GD2/GD3). Non-fatal on failure: renderer falls back to
-    // vkCmdDrawMeshTasksEXT with the CPU-known instance count.
+    // GPU-driven frustum cull pass (GD2/GD3/GD6). VK_EXT_mesh_shader is a hard requirement
+    // (the rasterizer is mesh-shader based), so the indirect draw (GD3) is always available
+    // and the cull pass must succeed — there is no CPU-count draw to fall back to.
     if (!m_gpu.gpuCullPass.initialize(ctx)) {
-        harmonia::Logger::warn("GpuCullPass: initialization failed — falling back to CPU-count draw");
+        harmonia::Logger::error("GpuCullPass: initialization failed");
+        return false;
     }
 
     // Debug/A-B toggle: set THEIA_FORCE_GD3 to skip DGC layout creation and force the
@@ -200,28 +201,51 @@ bool ForwardRenderer::initialize(const harmonia::DeviceContext& ctx, const Confi
         m_dummyTileIndices = std::move(*dummyIndices);
     }
 
-    // Identity instance list [0,1,...,kMaxInstances-1] for binding 10 fallback when
-    // GpuCullPass fails to initialize. Written once; GPU reads it as a pass-through index map.
-    {
-        const std::uint32_t kIdCount = GpuCullPass::kMaxInstances;
-        std::vector<std::uint32_t> identity(kIdCount);
-        std::iota(identity.begin(), identity.end(), 0u);
-        auto identBuf = harmonia::Buffer::create(ctx,
-                                                 static_cast<VkDeviceSize>(kIdCount) * sizeof(std::uint32_t),
-                                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                                 VMA_MEMORY_USAGE_CPU_TO_GPU,
-                                                 "theia.identityInstanceList");
-        if (identBuf) {
-            identBuf->uploadData(identity.data(), static_cast<VkDeviceSize>(kIdCount) * sizeof(std::uint32_t), 0);
-            m_gpu.identityInstanceList = std::move(*identBuf);
-        }
+    // Env sampler (linear, U-repeat / V-clamp, mip-linear) for the raw equirectangular
+    // panorama bound at set 2 binding 3 (sky background + transparent env path).
+    const VkSamplerCreateInfo envSamplerInfo{
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .magFilter = VK_FILTER_LINEAR,
+        .minFilter = VK_FILTER_LINEAR,
+        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+        .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .mipLodBias = 0.0f,
+        .anisotropyEnable = VK_FALSE,
+        .maxAnisotropy = 1.0f,
+        .compareEnable = VK_FALSE,
+        .compareOp = VK_COMPARE_OP_ALWAYS,
+        .minLod = 0.0f,
+        .maxLod = VK_LOD_CLAMP_NONE,
+        .borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK,
+        .unnormalizedCoordinates = VK_FALSE,
+    };
+    VkSampler envSampler = VK_NULL_HANDLE;
+    if (vkCreateSampler(ctx.device, &envSamplerInfo, nullptr, &envSampler) != VK_SUCCESS) {
+        harmonia::Logger::error("ForwardRenderer: failed to create env sampler");
+        return false;
     }
+    m_envSampler = harmonia::UniqueSampler{ctx.device, envSampler};
+
+    // 1×1 placeholder SAMPLED_IMAGE for set 2 binding 4 when a scene has no environment
+    // map. The sky/GI stages gate reads on hasEnv, so it is never sampled; it only keeps
+    // the descriptor valid.
+    auto dummyEnv = harmonia::Image::create(ctx,
+                                            {1U, 1U},
+                                            VK_FORMAT_R16G16B16A16_SFLOAT,
+                                            VK_IMAGE_USAGE_SAMPLED_BIT,
+                                            VK_IMAGE_ASPECT_COLOR_BIT,
+                                            "theia.dummyEnv");
+    if (!dummyEnv) {
+        harmonia::Logger::error("ForwardRenderer: failed to create dummy env image");
+        return false;
+    }
+    m_dummyEnv = std::move(*dummyEnv);
 
     m_initialized = true;
     m_hdrFirstUse = true;
-    const char* drawPath = m_gpu.dgcLayout != VK_NULL_HANDLE   ? "DGC"
-                           : m_gpu.gpuCullPass.isInitialized() ? "indirect"
-                                                               : "CPU-count";
+    const char* drawPath = m_gpu.dgcLayout != VK_NULL_HANDLE ? "DGC" : "indirect";
     harmonia::Logger::info(
         "GPU-driven forward renderer initialized ({}x{}) [{}]", config.width, config.height, drawPath);
     return true;
@@ -245,12 +269,11 @@ void ForwardRenderer::shutdown() {
     m_desc.textureSetLayout.reset();
     m_desc.descriptorPool.reset();
 
-    m_iblDiffuseInfo = {};
-    m_iblSpecularInfo = {};
-    m_sheenLutInfo = {};
-    m_brdfLutInfo = {};
-    m_iblEnvSamplerInfo = {};
-    m_iblEnvRawInfo = {};
+    m_envSamplerInfo = {};
+    m_envRawInfo = {};
+    m_envSampler.reset();
+    m_dummyEnv = {};
+    m_dummyEnvReady = false;
     m_envMarginalCdf = VK_NULL_HANDLE;
     m_envConditionalCdf = VK_NULL_HANDLE;
     m_envImportanceWidth = 0;
@@ -258,7 +281,6 @@ void ForwardRenderer::shutdown() {
 
     m_dummyTileCounts = {};
     m_dummyTileIndices = {};
-    m_gpu.identityInstanceList = {};
 
     if (m_gpu.dgcPreprocessBuf != VK_NULL_HANDLE) {
         vmaDestroyBuffer(m_ctx->allocator, m_gpu.dgcPreprocessBuf, m_gpu.dgcPreprocessAlloc);
@@ -321,66 +343,20 @@ void ForwardRenderer::setTileBuffers(VkBuffer tileLightCounts,
     m_tilesY = tilesY;
 }
 
-void ForwardRenderer::setIbl(const IblResources& res, VkImageView rawEnvView, float envUnitNits) {
+void ForwardRenderer::setEnvironment(VkImageView rawEnvView, float envUnitNits) {
     if (!m_ctx || m_desc.iblSet == VK_NULL_HANDLE) {
         return;
     }
 
-    m_iblDiffuseInfo =
-        VkDescriptorImageInfo{VK_NULL_HANDLE, res.diffuseIrrad.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    m_iblSpecularInfo =
-        VkDescriptorImageInfo{VK_NULL_HANDLE, res.specularMipped.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    m_sheenLutInfo =
-        VkDescriptorImageInfo{VK_NULL_HANDLE, res.sheenLut.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    m_brdfLutInfo = VkDescriptorImageInfo{VK_NULL_HANDLE, res.brdfLut.view(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    m_iblEnvSamplerInfo = VkDescriptorImageInfo{res.envSampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
-    // Raw env panorama for the sky background. Fall back to the specular view (a valid
-    // SAMPLED_IMAGE) when no raw env is supplied, so the descriptor stays valid.
-    const VkImageView envView = (rawEnvView != VK_NULL_HANDLE) ? rawEnvView : res.specularMipped.view();
-    m_iblEnvRawInfo = VkDescriptorImageInfo{VK_NULL_HANDLE, envView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    m_envSamplerInfo = VkDescriptorImageInfo{m_envSampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
+    // Raw env panorama for the sky background / transparent env path. Fall back to the
+    // 1×1 placeholder when no env is supplied, so the descriptor stays valid (sky/GI gate
+    // reads on hasEnv).
+    const VkImageView envView = (rawEnvView != VK_NULL_HANDLE) ? rawEnvView : m_dummyEnv.view();
+    m_envRawInfo = VkDescriptorImageInfo{VK_NULL_HANDLE, envView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
     m_envUnitNits = envUnitNits;
 
-    const std::array<VkWriteDescriptorSet, 6> writes{
-        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                             nullptr,
-                             m_desc.iblSet,
-                             0,
-                             0,
-                             1,
-                             VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-                             &m_iblDiffuseInfo,
-                             nullptr,
-                             nullptr},
-        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                             nullptr,
-                             m_desc.iblSet,
-                             1,
-                             0,
-                             1,
-                             VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-                             &m_iblSpecularInfo,
-                             nullptr,
-                             nullptr},
-        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                             nullptr,
-                             m_desc.iblSet,
-                             2,
-                             0,
-                             1,
-                             VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-                             &m_sheenLutInfo,
-                             nullptr,
-                             nullptr},
-        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                             nullptr,
-                             m_desc.iblSet,
-                             5,
-                             0,
-                             1,
-                             VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-                             &m_brdfLutInfo,
-                             nullptr,
-                             nullptr},
+    const std::array<VkWriteDescriptorSet, 2> writes{
         VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
                              nullptr,
                              m_desc.iblSet,
@@ -388,7 +364,7 @@ void ForwardRenderer::setIbl(const IblResources& res, VkImageView rawEnvView, fl
                              0,
                              1,
                              VK_DESCRIPTOR_TYPE_SAMPLER,
-                             &m_iblEnvSamplerInfo,
+                             &m_envSamplerInfo,
                              nullptr,
                              nullptr},
         VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -398,7 +374,7 @@ void ForwardRenderer::setIbl(const IblResources& res, VkImageView rawEnvView, fl
                              0,
                              1,
                              VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-                             &m_iblEnvRawInfo,
+                             &m_envRawInfo,
                              nullptr,
                              nullptr},
     };
@@ -471,9 +447,9 @@ void ForwardRenderer::drawOpaque(VkCommandBuffer cmd,
                        m_pipelineLayout,
                        VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0,
-                       sizeof(MeshPushConstants),
-                       &pc);
-    m_gpu.issueDraw(cmd, m_graphicsPipeline, instanceCount);
+                        sizeof(MeshPushConstants),
+                        &pc);
+    m_gpu.issueDraw(cmd, m_graphicsPipeline);
 }
 
 VkShaderModule ForwardRenderer::loadShaderModule(const char* filename) {
@@ -624,17 +600,16 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
     }
     m_desc.matSetLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, matSetLayout};
 
-    const std::array<VkDescriptorSetLayoutBinding, 8> iblBindings{
-        VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
-        VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
-        VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+    // Set 2: environment resources. Indirect lighting is supplied by the RT-GI compute
+    // stage; the forward pass keeps only the linear sampler (3), the raw env panorama (4)
+    // and the env-importance CDFs (6/7) for the sky background / transparent env path.
+    const std::array<VkDescriptorSetLayoutBinding, 4> iblBindings{
         VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
-        VkDescriptorSetLayoutBinding{5, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
     };
-    const std::array<VkDescriptorBindingFlags, 8> iblBindingFlags{kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB};
+    const std::array<VkDescriptorBindingFlags, 4> iblBindingFlags{kUAB, kUAB, kUAB, kUAB};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo iblBindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = static_cast<std::uint32_t>(iblBindingFlags.size()),
@@ -684,7 +659,7 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
 
     const std::array<VkDescriptorPoolSize, 5> poolSizes{
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 18},
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 6},
+        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 2},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLER, 1},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures},
         VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
@@ -1017,6 +992,19 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
 
     // Ensure the two-pass Hi-Z visibility buffers exist for the current scene.
     const bool visReady = m_scene != nullptr && m_gpu.ensureVisibilityBuffers(*m_ctx, *m_scene);
+
+    // One-time layout transition for the 1×1 dummy env placeholder: it is never written,
+    // but setEnvironment binds it as SHADER_READ_ONLY_OPTIMAL, so move it out of UNDEFINED once.
+    if (!m_dummyEnvReady && m_dummyEnv.isValid()) {
+        m_dummyEnv.transition(cmd,
+                              VK_IMAGE_LAYOUT_UNDEFINED,
+                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                              VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
+                              VK_ACCESS_2_NONE,
+                              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                              VK_ACCESS_2_SHADER_READ_BIT);
+        m_dummyEnvReady = true;
+    }
 
     prepareAttachments(cmd);
 
@@ -1382,10 +1370,7 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
     };
 
-    const VkBuffer identFallback =
-        m_gpu.identityInstanceList.isValid() ? m_gpu.identityInstanceList.handle() : m_scene->instanceBuffer().handle();
-    const VkBuffer compactInstBuf =
-        m_gpu.gpuCullPass.isInitialized() ? m_gpu.gpuCullPass.compactInstanceListBuffer() : identFallback;
+    const VkBuffer compactInstBuf = m_gpu.gpuCullPass.compactInstanceListBuffer();
     VkDescriptorBufferInfo compactInstInfo{compactInstBuf, 0, VK_WHOLE_SIZE};
 
     std::array<VkWriteDescriptorSet, 20> writes{
@@ -1669,10 +1654,9 @@ void ForwardRenderer::recordTransparent(VkCommandBuffer cmd, const MeshPushConst
                        m_pipelineLayout,
                        VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0,
-                       sizeof(MeshPushConstants),
-                       &pc);
-    const std::uint32_t instCnt = m_scene->instanceCount();
-    m_gpu.issueDraw(cmd, m_graphicsPipelineTransparent, instCnt);
+                        sizeof(MeshPushConstants),
+                        &pc);
+    m_gpu.issueDraw(cmd, m_graphicsPipelineTransparent);
 }
 
 void ForwardRenderer::recordOpaquePass(VkCommandBuffer cmd, const MeshPushConstants& pcBase) {
