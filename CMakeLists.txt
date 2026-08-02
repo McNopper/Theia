@@ -201,7 +201,7 @@ FetchContent_Declare(
 FetchContent_Declare(
     harmonia
     GIT_REPOSITORY https://github.com/McNopper/Harmonia.git
-    GIT_TAG v0.7.5
+    GIT_TAG v0.7.6
 )
 FetchContent_MakeAvailable(aether harmonia)
 
