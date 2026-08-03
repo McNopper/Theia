@@ -24,20 +24,7 @@
 #include "harmonia/scene/Geometry.hpp"
 #include "harmonia/scene/ProceduralGeometry.hpp"
 
-namespace {
-
-/// World-space instance bounding sphere from a mesh's object-space bounds + the
-/// instance transform (centre transformed by the matrix, radius scaled by the
-/// largest axis scale — conservative under non-uniform scale).
-GpuInstanceBounds worldBounds(const Scene::MeshGpu& mesh, const harmonia::Xform& xform) {
-    const sm::float4x4 m = xform.matrix();
-    const sm::float3 c =
-        static_cast<sm::float3>(m * sm::float4(mesh.boundsCenterX, mesh.boundsCenterY, mesh.boundsCenterZ, 1.0f));
-    const float maxScale = std::max({std::abs(xform.scale.x), std::abs(xform.scale.y), std::abs(xform.scale.z)});
-    return GpuInstanceBounds{c.x, c.y, c.z, mesh.boundsRadius * maxScale};
-}
-
-} // namespace
+namespace {} // namespace
 
 std::uint32_t Scene::addSphereMesh(const harmonia::DeviceContext& ctx,
                                    const harmonia::CommandPool& pool,
@@ -223,28 +210,6 @@ void Scene::buildMeshlets(std::vector<harmonia::GpuVertex>& vertices,
                 .radius = bounds.radius,
             });
         }
-
-        const float invN = 1.0f / std::max<float>(static_cast<float>(vertCount), 1.0f);
-        float cx = 0.0f, cy = 0.0f, cz = 0.0f;
-        for (const auto& v : meshVerts) {
-            cx += v.position.x;
-            cy += v.position.y;
-            cz += v.position.z;
-        }
-        cx *= invN;
-        cy *= invN;
-        cz *= invN;
-        float bs = 0.0f;
-        for (const auto& v : meshVerts) {
-            const float dx = v.position.x - cx;
-            const float dy = v.position.y - cy;
-            const float dz = v.position.z - cz;
-            bs = std::max(bs, std::sqrt(dx * dx + dy * dy + dz * dz));
-        }
-        gpu.boundsCenterX = cx;
-        gpu.boundsCenterY = cy;
-        gpu.boundsCenterZ = cz;
-        gpu.boundsRadius = bs;
     }
 
     if (vertices.empty()) {
@@ -283,7 +248,18 @@ void Scene::buildGpuInstances() {
             .geometryKind = gpu.geometryKind,
             .sphereRadius = gpu.sphereRadius,
         });
-        m_instanceBounds.push_back(worldBounds(gpu, inst.xform));
+        m_instanceBounds.push_back([&] {
+            const harmonia::Aabb object = m_meshes[inst.meshIndex]->objectAabb();
+            const harmonia::Aabb world = harmonia::worldAabbFromInstance(object, inst.xform);
+            return GpuInstanceBounds{
+                .minX = world.min.x,
+                .minY = world.min.y,
+                .minZ = world.min.z,
+                .maxX = world.max.x,
+                .maxY = world.max.y,
+                .maxZ = world.max.z,
+            };
+        }());
     }
     m_instanceBounds.resize(m_instances.size(), GpuInstanceBounds{});
 }

@@ -38,18 +38,21 @@ struct GpuInstance {
 static_assert(std::is_trivially_copyable_v<GpuInstance>);
 static_assert(sizeof(GpuInstance) == 36);
 
-/// Per-instance bounding sphere for GPU-driven frustum culling (GpuCullPass).
+/// Per-instance world-space AABB for GPU-driven frustum culling (GpuCullPass).
 /// Separate from GpuInstance so culling reads a compact, cache-friendly layout.
-/// std430, 16 bytes — stored world-space (computed from the mesh's object-space
-/// bounds transformed by the instance transform).
+/// std430, 24 bytes — derived per instance from the mesh's object-space AABB
+/// (`Geometry::objectAabb()`) transformed to world space (`worldAabbFromInstance`).
+/// Tighter than the bounding sphere it replaces (authorable via `MeshDesc::bounds`).
 struct GpuInstanceBounds {
-    float centerX = 0.0f; ///< world-space bounding sphere centre x
-    float centerY = 0.0f; ///< world-space bounding sphere centre y
-    float centerZ = 0.0f; ///< world-space bounding sphere centre z
-    float radius = 0.0f;  ///< bounding sphere radius; 0 = empty / never drawn
+    float minX = 0.0f; ///< world-space AABB min corner x
+    float minY = 0.0f; ///< world-space AABB min corner y
+    float minZ = 0.0f; ///< world-space AABB min corner z
+    float maxX = 0.0f; ///< world-space AABB max corner x
+    float maxY = 0.0f; ///< world-space AABB max corner y
+    float maxZ = 0.0f; ///< world-space AABB max corner z
 };
 static_assert(std::is_trivially_copyable_v<GpuInstanceBounds>);
-static_assert(sizeof(GpuInstanceBounds) == 16);
+static_assert(sizeof(GpuInstanceBounds) == 24);
 
 /// Per-meshlet descriptor uploaded to GPU (std430, 32 bytes). Bounds are stored in the
 /// mesh's OBJECT space; the mesh shader transforms them by the instance matrix for Hi-Z.
@@ -106,7 +109,7 @@ class Scene : public harmonia::SceneBase {
     [[nodiscard]] std::uint32_t lightCount() const noexcept { return m_lightCount; }
     [[nodiscard]] std::uint32_t emissiveTriangleCount() const noexcept { return m_emissiveTriangleCount; }
 
-    /// Per-mesh GPU layout + object-space bounds, computed in buildSceneBuffers.
+    /// Per-mesh GPU layout, computed in buildSceneBuffers.
     struct MeshGpu {
         std::uint32_t vertexOffset = 0;
         std::uint32_t indexOffset = 0;
@@ -115,10 +118,6 @@ class Scene : public harmonia::SceneBase {
         std::uint32_t meshletCount = 0;
         std::uint32_t geometryKind = 0;
         float sphereRadius = 0.0f;
-        float boundsCenterX = 0.0f; ///< object-space bounding sphere
-        float boundsCenterY = 0.0f;
-        float boundsCenterZ = 0.0f;
-        float boundsRadius = 0.0f;
     };
 
   private:

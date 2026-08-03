@@ -1,6 +1,6 @@
 // Per-instance GPU-driven frustum cull compute shader.
 // One thread per scene instance. Each thread frustum-culls its instance's world-space
-// bounding sphere against the view frustum (4 side planes + near plane).
+// AABB against the view frustum (4 side planes + near plane) via the p-vertex test.
 // Visible instances are compacted into compactInstanceList and the visible count
 // accumulated atomically into indirectDrawBuf.groupCountX.
 //
@@ -16,6 +16,11 @@
 //   Left:   M[3] + M[0]   Right:  M[3] - M[0]
 //   Bottom: M[3] + M[1]   Top:    M[3] - M[1]
 //   Near:   M[2]                              (Vulkan depth in [0,1]; near at z/w=0)
+//
+// AABB/plane test (p-vertex): for each plane, the AABB corner furthest along the plane
+// normal is tested; if that corner is behind the plane, the whole AABB is outside → cull.
+// Tighter than the bounding-sphere test this replaces (an authored AABB via MeshDesc::bounds
+// avoids the sphere's conservative radius). Equivalent cost (a few MADs per plane).
 //
 // Ref: Gribb & Hartmann — "Fast Extraction of Viewing Frustum Planes from the
 //      World-View-Projection Matrix" (2001)
@@ -40,10 +45,12 @@ struct GpuInstance {
 };
 
 struct GpuInstanceBounds {
-    float centerX;
-    float centerY;
-    float centerZ;
-    float radius;
+    float minX;
+    float minY;
+    float minZ;
+    float maxX;
+    float maxY;
+    float maxZ;
 };
 
 [[vk::binding(0, 0)]] StructuredBuffer<GpuInstance>       instances;
@@ -59,23 +66,29 @@ float4 normalizePlane(float4 p) {
     return p / max(length(p.xyz), 1e-6f);
 }
 
-/// Returns true if the bounding sphere (center, radius) overlaps the view frustum.
-/// Uses 5 planes: left, right, bottom, top, near. Far plane omitted (conservative).
-bool frustumCull(float3 center, float radius) {
-    // Gribb-Hartmann extraction from row-major VP matrix.
-    // viewProj[r] = r-th row as float4 (Slang row-major indexing matches slang-math).
+/// Returns true if the AABB is entirely behind @p plane (p-vertex test). The
+/// p-vertex is the corner furthest along the plane normal; dot(n, p-vertex) is
+/// computed branchlessly as dot(max(n,0), aabbMax) + dot(min(n,0), aabbMin).
+bool aabbOutsidePlane(float4 plane, float3 aabbMin, float3 aabbMax) {
+    const float3 n = plane.xyz;
+    const float pVertexDist = dot(max(n, float3(0.0f, 0.0f, 0.0f)), aabbMax) +
+                              dot(min(n, float3(0.0f, 0.0f, 0.0f)), aabbMin);
+    return pVertexDist + plane.w < 0.0f;
+}
+
+/// Returns true if the AABB overlaps the view frustum (5 planes: L/R/B/T/N).
+bool frustumCull(float3 aabbMin, float3 aabbMax) {
     const float4 pLeft   = normalizePlane(viewProj[3] + viewProj[0]);
     const float4 pRight  = normalizePlane(viewProj[3] - viewProj[0]);
     const float4 pBottom = normalizePlane(viewProj[3] + viewProj[1]);
     const float4 pTop    = normalizePlane(viewProj[3] - viewProj[1]);
-    const float4 pNear   = normalizePlane(viewProj[2]);              // near: z/w >= 0
+    const float4 pNear   = normalizePlane(viewProj[2]);
 
-    // Sphere outside plane if signed distance of centre from plane < -radius.
-    if (dot(pLeft.xyz,   center) + pLeft.w   < -radius) return false;
-    if (dot(pRight.xyz,  center) + pRight.w  < -radius) return false;
-    if (dot(pBottom.xyz, center) + pBottom.w < -radius) return false;
-    if (dot(pTop.xyz,    center) + pTop.w    < -radius) return false;
-    if (dot(pNear.xyz,   center) + pNear.w   < -radius) return false;
+    if (aabbOutsidePlane(pLeft,   aabbMin, aabbMax)) return false;
+    if (aabbOutsidePlane(pRight,  aabbMin, aabbMax)) return false;
+    if (aabbOutsidePlane(pBottom, aabbMin, aabbMax)) return false;
+    if (aabbOutsidePlane(pTop,    aabbMin, aabbMax)) return false;
+    if (aabbOutsidePlane(pNear,   aabbMin, aabbMax)) return false;
     return true;
 }
 
@@ -99,8 +112,9 @@ void main(uint3 dtid : SV_DispatchThreadID) {
 
     const GpuInstanceBounds bounds = instanceBounds[instIdx];
 
-    // Frustum test: skip instances whose bounding sphere is outside the view frustum.
-    if (bounds.radius >= 0.0f && !frustumCull(float3(bounds.centerX, bounds.centerY, bounds.centerZ), bounds.radius))
+    // Frustum test: skip instances whose world-space AABB is outside the view frustum.
+    if (!frustumCull(float3(bounds.minX, bounds.minY, bounds.minZ),
+                     float3(bounds.maxX, bounds.maxY, bounds.maxZ)))
         return;
 
     // Visible: atomically claim a slot in the compact list and increment the indirect
