@@ -77,7 +77,7 @@ int main(int argc, char* const argv[]) {
     if (taaForcedOn && !config.outputFile.empty()) {
         harmonia::Logger::error("--taa is incompatible with offscreen capture (--output): offscreen rendering uses "
                                 "progressive accumulation for anti-aliasing, and TAA would double-filter it. Drop "
-                                 "--taa for offscreen capture, or omit --output for interactive TAA.");
+                                "--taa for offscreen capture, or omit --output for interactive TAA.");
         return 2;
     }
 

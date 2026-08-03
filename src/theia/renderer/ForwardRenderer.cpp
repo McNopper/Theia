@@ -447,8 +447,8 @@ void ForwardRenderer::drawOpaque(VkCommandBuffer cmd,
                        m_pipelineLayout,
                        VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0,
-                        sizeof(MeshPushConstants),
-                        &pc);
+                       sizeof(MeshPushConstants),
+                       &pc);
     m_gpu.issueDraw(cmd, m_graphicsPipeline);
 }
 
@@ -1654,8 +1654,8 @@ void ForwardRenderer::recordTransparent(VkCommandBuffer cmd, const MeshPushConst
                        m_pipelineLayout,
                        VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0,
-                        sizeof(MeshPushConstants),
-                        &pc);
+                       sizeof(MeshPushConstants),
+                       &pc);
     m_gpu.issueDraw(cmd, m_graphicsPipelineTransparent);
 }
 
