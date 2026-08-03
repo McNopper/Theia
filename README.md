@@ -14,7 +14,7 @@ It implements the [OpenPBR Surface v1.1.1](https://academysoftwarefoundation.git
 
 ## Screenshots
 
-*Same 29 test scenes as [Hyperion](https://github.com/McNopper/Hyperion) — converged to visual parity through accumulation.* Theia at **256 frames**, 1280×720.
+*Same 30 test scenes as [Hyperion](https://github.com/McNopper/Hyperion) — converged to visual parity through accumulation.* Theia at **256 frames**, 1280×720.
 
 | cornell_classic | cornell_classic_rec709 | cornell_empty |
 |:---:|:---:|:---:|
@@ -48,13 +48,13 @@ It implements the [OpenPBR Surface v1.1.1](https://academysoftwarefoundation.git
 |:---:|:---:|:---:|
 | ![shaderball_thinfilm](screenshots/shaderball_thinfilm.png) | ![shaderball_transmission](screenshots/shaderball_transmission.png) | ![shaderball_emission](screenshots/shaderball_emission.png) |
 
-| shader_ball | bunny_shaderball | camera_suzanne |
+| shaderball_checker | shader_ball | bunny_shaderball |
 |:---:|:---:|:---:|
-| ![shader_ball](screenshots/shader_ball.png) | ![bunny_shaderball](screenshots/bunny_shaderball.png) | ![camera_suzanne](screenshots/camera_suzanne.png) |
+| ![shaderball_checker](screenshots/shaderball_checker.png) | ![shader_ball](screenshots/shader_ball.png) | ![bunny_shaderball](screenshots/bunny_shaderball.png) |
 
-| ABeautifulGame | dragon_teapot |
-|:---:|:---:|
-| ![ABeautifulGame](screenshots/ABeautifulGame.png) | ![dragon_teapot](screenshots/dragon_teapot.png) |
+| camera_suzanne | ABeautifulGame | dragon_teapot |
+|:---:|:---:|:---:|
+| ![camera_suzanne](screenshots/camera_suzanne.png) | ![ABeautifulGame](screenshots/ABeautifulGame.png) | ![dragon_teapot](screenshots/dragon_teapot.png) |
 
 ---
 
@@ -85,7 +85,7 @@ All parameters follow the [OpenPBR spec](https://academysoftwarefoundation.githu
 | Thin-film | `thin_film_weight`, `thin_film_thickness`, `thin_film_ior` | ✅ |
 | Transmission | `transmission_weight`, `transmission_color`, `transmission_depth` | ✅ |
 | Subsurface | `subsurface_weight`, `subsurface_color`, `subsurface_radius`, `subsurface_radius_scale`, `subsurface_scatter_anisotropy` | ✅ real volumetric random walk (shared with Hyperion, run in the RT-GI compute stage) |
-| Geometry | `geometry_opacity` | ⚠️ BRDF weight reduction (not alpha-blended transparency) |
+| Geometry | `geometry_opacity`, `map_opacity` | ✅ true presence weight (`mix(ambient-medium, surface, α)`, spec §Opacity/Transparency), not a BRDF-weight approximation — the rasterizer draws a stochastic coverage sample per fragment (discarding with probability 1-α) and the RT-GI/shadow paths resolve the identical α through the shared estimator's pass-through gate + `∏(1-α)` shadow transmittance. `VK_EXT_opacity_micromap` accelerates a textured mask's RT traversal (`shaderball_checker`) without changing the result |
 
 Conductor reflectance uses the OpenPBR generalized-Schlick **F82-tint** model (`base_color` = F0, `specular_color` = 82° tint). Specular and coat microfacets use GGX with the spec's anisotropy remapping plus Turquin/Kulla-Conty multiple-scattering compensation.
 

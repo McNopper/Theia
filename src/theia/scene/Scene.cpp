@@ -34,7 +34,7 @@ std::uint32_t Scene::addSphereMesh(const harmonia::DeviceContext& ctx,
     // be drawn directly — it is tessellated into a triangle mesh (object space,
     // centred at the origin) and placed by the instance transform.
     harmonia::MeshData mesh = harmonia::ProceduralGeometry::makeSphere(sm::float3{0.0f, 0.0f, 0.0f}, radius);
-    return addMesh(ctx, pool, std::move(mesh), name.empty() ? "sphere" : name);
+    return addMesh(ctx, pool, std::move(mesh), harmonia::MeshOpacity{}, name.empty() ? "sphere" : name);
 }
 
 VkResult Scene::buildSceneBuffers(const harmonia::DeviceContext& ctx, const harmonia::CommandPool& pool) {

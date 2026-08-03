@@ -265,22 +265,6 @@ static const float kFireflyClampDisplay = 100.0;
 // 1 and giAdaptiveMaxSamples. Matches the magnitude the A3(b) clamp uses (variance * 20).
 static const float kAdaptiveVarianceScale = 20.0;
 
-/// Inline-ray-query shadow tracer satisfying the shared estimator's ITracer interface.
-struct TheiaTracer : ITracer {
-    bool traceOccluded(float3 origin, float3 direction, float tMax) {
-        RayDesc ray;
-        ray.Origin = origin;
-        ray.Direction = direction;
-        ray.TMin = 0.0;
-        ray.TMax = tMax;
-        RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
-        q.TraceRayInline(t_tlas, RAY_FLAG_NONE, kInstanceMaskAll, ray);
-        q.Proceed();
-        // Returns true when the segment is UNOCCLUDED (no committed triangle hit).
-        return q.CommittedStatus() != COMMITTED_TRIANGLE_HIT;
-    }
-};
-
 struct GiHit {
     bool   hit;
     uint   materialIdx;
@@ -318,7 +302,16 @@ GiHit traceClosestHit(float3 origin, float3 dir, float maxDist, float tMin) {
 
     RayQuery<RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
     q.TraceRayInline(t_tlas, RAY_FLAG_NONE, kInstanceMaskAll, ray);
-    while (q.Proceed()) {}
+    // Cut-out geometry is non-opaque, so its hits arrive as candidates. Commit them
+    // all: for camera/indirect rays the OpenPBR opacity mix is resolved by the shared
+    // estimator's stochastic pass-through gate at the surface, exactly as it is for
+    // opaque geometry. (An opacity micromap still culls provably-transparent
+    // microtriangles before they ever become candidates — the same answer, less work.)
+    while (q.Proceed()) {
+        if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
+            q.CommitNonOpaqueTriangleHit();
+        }
+    }
     if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) {
         return hit;
     }
@@ -413,12 +406,77 @@ void runMediumWalk(inout PathState state, inout float3 origin, inout float3 dir)
     if (state.insideMedium) { state.terminated = true; }
 }
 
+/// Hard cap on OpenPBR opacity pass-throughs (null interactions) a single path may
+/// take. They consume no bounce budget by design, so this is what guarantees
+/// termination — the same role kMaxMediumWalk plays for volumetric segments.
+static const uint kMaxNullInteractions = 256u;
+
 /// Bindless-texture fetcher for the shared surface-frame populator. Compute shaders have no
 /// screen-space quad, so implicit-LOD .Sample() (which needs SPV_KHR_compute_shader_derivatives)
 /// is both unsupported here and meaningless for a secondary ray hit — mip 0 only.
 struct TheiaTextureSampler : ISurfaceTextureSampler {
     float4 sampleTex(uint idx, float2 uv) {
         return t_bindless[NonUniformResourceIndex(idx)].SampleLevel(uv, 0.0);
+    }
+};
+
+/// Interpolated UV of a triangle, from its BLAS primitive index within an instance.
+/// Only the UV is reconstructed — the opacity test needs nothing else.
+float2 triangleUv(uint instIdx, uint tri, float2 bary) {
+    const GpuInstance inst = instances[instIdx];
+    const uint base = inst.indexOffset + tri * 3u;
+    if (base + 2u >= inst.indexOffset + inst.indexCount) {
+        return 0.0.xx;
+    }
+    const float b1 = bary.x;
+    const float b2 = bary.y;
+    const float b0 = 1.0 - b1 - b2;
+    return vertices[indices[base + 0u]].uv * b0
+         + vertices[indices[base + 1u]].uv * b1
+         + vertices[indices[base + 2u]].uv * b2;
+}
+
+/// OpenPBR presence weight α at a triangle hit — the RayQuery counterpart of
+/// Hyperion's shadow any-hit (anyhit.slang). Same shared `evalGeometryOpacity`,
+/// so the cutout cannot drift between the two renderers.
+float triangleOpacity(uint instIdx, uint tri, float2 bary) {
+    TheiaTextureSampler tex;
+    return evalGeometryOpacity(materials[instances[instIdx].materialIndex], tex,
+                               triangleUv(instIdx, tri, bary));
+}
+
+/// Inline-ray-query shadow tracer satisfying the shared estimator's ITracer interface.
+///
+/// Cut-out geometry is built non-opaque (Harmonia `MeshOpacity::alphaTested`), so its
+/// hits arrive as candidates instead of being committed by traversal. That is exactly
+/// where the OpenPBR transmittance ∏(1-α) is accumulated — mirroring Hyperion's shadow
+/// any-hit — and where an opacity micromap saves the work by resolving uniform
+/// microtriangles before a candidate is ever produced. Fully-present surfaces commit,
+/// which under ACCEPT_FIRST_HIT ends the traversal exactly as opaque geometry does.
+struct TheiaTracer : ITracer {
+    float traceTransmittance(float3 origin, float3 direction, float tMax) {
+        RayDesc ray;
+        ray.Origin = origin;
+        ray.Direction = direction;
+        ray.TMin = 0.0;
+        ray.TMax = tMax;
+        float transmittance = 1.0;
+        RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
+        q.TraceRayInline(t_tlas, RAY_FLAG_NONE, kInstanceMaskAll, ray);
+        while (q.Proceed()) {
+            if (q.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) {
+                continue;
+            }
+            const float alpha = triangleOpacity(q.CandidateInstanceID(),
+                                                q.CandidatePrimitiveIndex(),
+                                                q.CandidateTriangleBarycentrics());
+            if (alpha >= 1.0) {
+                q.CommitNonOpaqueTriangleHit();
+            } else {
+                transmittance *= (1.0 - alpha);
+            }
+        }
+        return (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) ? 0.0 : saturate(transmittance);
     }
 };
 
@@ -859,8 +917,9 @@ float4 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
             } else {
                 shadowTMax = max(fe.dist - kRayEpsilon * (1.0 + dot(primary.geoNormal, fe.wi)), 0.0);
             }
-            if (tracer.traceOccluded(shadowOrigin, fe.wi, shadowTMax)) {
-                contribution = fe.Le * fe.bsdfCos * r.W * fTerm * misW;
+            const float visibility = tracer.traceTransmittance(shadowOrigin, fe.wi, shadowTMax);
+            if (visibility > 0.0) {
+                contribution = fe.Le * fe.bsdfCos * r.W * fTerm * misW * visibility;
             }
         }
     } else {
@@ -895,6 +954,7 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
     state.terminated = false;
     state.specularBounce = false;
     state.lastBsdfPdf = 0.0;
+    state.passedThrough = false;
     state.insideMedium = false;
     state.mediumSigmaT = 0.0.xxx;
     state.mediumAlbedo = 0.0.xxx;
@@ -907,8 +967,11 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
     float3 origin = 0.0.xxx;
     float3 dir = 0.0.xxx;
 
-    // Primary-vertex stochastic geometry_opacity pass-through gate (shared-integrator contract):
-    // with probability (1-opacity), continue the camera ray unchanged with delta semantics.
+    // Primary-vertex opacity gate — this pass's half of mix(ambient-medium, surface, α).
+    // The two passes gate DIFFERENT terms, so they compose rather than double-count: the
+    // forward pass discards its fragment with probability (1-α), which weights the DIRECT
+    // term by α; here the same draw decides whether this pixel's INDIRECT term comes from
+    // the surface (α) or from continuing the camera ray into the background (1-α).
     const float primaryOpacity = saturate(primary.mat.opacityFlagsPad.x);
     const bool primaryPassThrough = randFloat(state.seed) < (1.0 - primaryOpacity);
 
@@ -969,11 +1032,16 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
         origin = primary.position + primary.geoNormal * (dot(bs.direction, primary.geoNormal) >= 0.0 ? kRayEpsilon : -kRayEpsilon);
         dir = normalize(bs.direction);
     } else {
+        // Null interaction: resume the SAME camera ray with the continuation epsilon (a
+        // scattering-sized offset would step over coincident geometry — kNullInteractionEpsilon).
         const float3 fwd = -primary.wo;
         state.specularBounce = true;
         state.lastBsdfPdf = 1.0e30; // delta pass-through for downstream MIS weighting
-        origin = primary.position + primary.geoNormal * (dot(fwd, primary.geoNormal) >= 0.0 ? kRayEpsilon : -kRayEpsilon);
+        origin = primary.position
+               + primary.geoNormal * (dot(fwd, primary.geoNormal) >= 0.0 ? kNullInteractionEpsilon
+                                                                          : -kNullInteractionEpsilon);
         dir = normalize(fwd);
+        state.passedThrough = true;
     }
 
     // G9/G10: if the primary continuation entered a medium, walk it before the surface loop.
@@ -981,9 +1049,20 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
         runMediumWalk(state, origin, dir);
     }
 
+    // An OpenPBR opacity pass-through selects the ambient-medium side of
+    // mix(ambient, surface, geometry_opacity): no surface interaction happened, so it must
+    // NOT consume a bounce (charging it blacks out cut-out geometry wherever a ray grazes
+    // several crossings). `iter` is the separate termination guard, mirroring Hyperion's
+    // raygen loop and the medium walk's own budget.
     const uint bounces = max(maxDepth, 1u);
-    for (uint bounce = 0u; bounce < bounces && !state.terminated; ++bounce) {
-        GiHit h = traceClosestHit(origin, dir, kInf, kRayEpsilon);
+    const uint maxIters = bounces + kMaxNullInteractions;
+    uint bounce = 0u;
+    for (uint iter = 0u; bounce < bounces && !state.terminated && iter < maxIters; ++iter) {
+        // A null interaction (opacity pass-through) RESUMES the ray instead of scattering it,
+        // so it uses the small continuation epsilon — the scattering guard would skip every
+        // surface within 1 mm of the cut-out (see kNullInteractionEpsilon).
+        GiHit h = traceClosestHit(origin, dir, kInf,
+                                  state.passedThrough ? kNullInteractionEpsilon : kRayEpsilon);
         if (!h.hit) {
             if (envEnabled) {
                 const float3 Le = sampleEnvMapLatLong(t_envMap, s_env, dir) * envLuminanceScale;
@@ -1046,6 +1125,10 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
         }
         origin = state.nextOrigin;
         dir = state.nextDirection;
+        if (state.passedThrough) {
+            continue; // null interaction: same ray, same bounce index
+        }
+        ++bounce;
 
         // G9/G10: if the BSDF sample entered a bulk subsurface / transmission-scatter medium,
         // run the shared volumetric random walk here (its own bounded budget) before resuming

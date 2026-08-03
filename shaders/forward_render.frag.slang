@@ -130,9 +130,43 @@ bool isFiniteDir(float3 v) {
     return all(isfinite(v)) && dot(v, v) > 1.0e-12;
 }
 
+/// Interpolated UV of a triangle, from its BLAS primitive index within an instance.
+float2 triangleUv(uint instIdx, uint tri, float2 bary) {
+    const GpuInstance inst = instances[instIdx];
+    const uint base = inst.indexOffset + tri * 3u;
+    if (base + 2u >= inst.indexOffset + inst.indexCount) {
+        return 0.0.xx;
+    }
+    const float b1 = bary.x;
+    const float b2 = bary.y;
+    const float b0 = 1.0 - b1 - b2;
+    return vertices[indices[base + 0u]].uv * b0
+         + vertices[indices[base + 1u]].uv * b1
+         + vertices[indices[base + 2u]].uv * b2;
+}
+
+/// OpenPBR presence weight α at a triangle hit (`geometry_opacity × map_opacity`).
+/// The fragment stage has no shared-surface sampler struct, so the map is fetched
+/// at mip 0 exactly as `evalGeometryOpacity` does for the RT paths.
+float triangleOpacity(uint instIdx, uint tri, float2 bary) {
+    const GpuMaterial mat = materials[instances[instIdx].materialIndex];
+    float alpha = saturate(mat.opacityFlagsPad.x);
+    const uint opacityTex = mat.textureIndices2.w;
+    if (opacityTex != kNoTexture) {
+        alpha *= saturate(t_bindless[NonUniformResourceIndex(opacityTex)]
+                              .SampleLevel(triangleUv(instIdx, tri, bary), 0.0)
+                              .w);
+    }
+    return alpha;
+}
+
 /// Trace a shadow ray against the scene TLAS using inline ray query.
-/// Returns 1.0 if the ray reaches `tMax` unobstructed (lit), 0.0 if occluded.
-/// The scene BLASes are opaque triangle geometry, so a single Proceed() suffices.
+/// Returns the transmittance along the segment: 1.0 unobstructed, 0.0 fully
+/// occluded, and in between the OpenPBR ∏(1-α) of the cut-out surfaces crossed
+/// (spec §Opacity/Transparency) — the same product the GI pass and Hyperion's
+/// shadow any-hit accumulate, so a cutout casts one consistent shadow.
+/// Cut-out geometry is built non-opaque, so it arrives here as a candidate;
+/// fully-present geometry commits on the first hit exactly as before.
 float traceShadow(float3 origin, float3 dir, float tMin, float tMax) {
     RayDesc ray;
     ray.Origin    = origin;
@@ -140,10 +174,23 @@ float traceShadow(float3 origin, float3 dir, float tMin, float tMax) {
     ray.TMin      = tMin;
     ray.TMax      = tMax;
 
+    float transmittance = 1.0;
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
     q.TraceRayInline(t_tlas, RAY_FLAG_NONE, kInstanceMaskNonEmissive, ray);
-    q.Proceed();
-    return (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) ? 0.0 : 1.0;
+    while (q.Proceed()) {
+        if (q.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) {
+            continue;
+        }
+        const float alpha = triangleOpacity(q.CandidateInstanceID(),
+                                            q.CandidatePrimitiveIndex(),
+                                            q.CandidateTriangleBarycentrics());
+        if (alpha >= 1.0) {
+            q.CommitNonOpaqueTriangleHit();
+        } else {
+            transmittance *= (1.0 - alpha);
+        }
+    }
+    return (q.CommittedStatus() == COMMITTED_TRIANGLE_HIT) ? 0.0 : saturate(transmittance);
 }
 
 /// Shadow visibility with Chiang 2019 terminator handling (same factor as the
@@ -308,7 +355,14 @@ RayHitData traceClosestHit(float3 originWs, float3 dirWs, float tMin, uint insta
 
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
     q.TraceRayInline(t_tlas, RAY_FLAG_NONE, instanceMask, ray);
-    while (q.Proceed()) {}
+    // Cut-out geometry is non-opaque; commit its candidates so the reflection ray
+    // sees the surface, then resolve the cutout on the committed hit below (the
+    // same order the GI closest-hit query uses).
+    while (q.Proceed()) {
+        if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
+            q.CommitNonOpaqueTriangleHit();
+        }
+    }
     if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) {
         return hit;
     }
@@ -491,6 +545,36 @@ FS_OUT main(FS_IN input, bool isFrontFace : SV_IsFrontFace) {
                 T = normalize(rawTn);
             }
             B = normalize(cross(N, T) * input.bitangentSign);
+        }
+    }
+
+    // OpenPBR opacity, textured (map_opacity, slot [7]). Fold it into the material's
+    // presence weight so the rest of this shader — and the mask test right below —
+    // read one resolved α, exactly as the shared surface module does for the RT paths.
+    const uint opacityTex = mat.textureIndices2.w;
+    if (opacityTex != kNoTexture) {
+        mat.opacityFlagsPad.x *=
+            saturate(t_bindless[NonUniformResourceIndex(opacityTex)].Sample(input.uv).w);
+    }
+    // The rasterizer's share of `mix(S_ambient-medium, M_surface, α)`: with probability
+    // (1-α) this fragment's surface is simply not there, so it is discarded and the
+    // background shows through. Drawing a *stochastic* sample of the coverage rather
+    // than thresholding at a fixed cut-off keeps it the same estimator the path
+    // integrator runs (Hyperion's gate, and this pass's own GI counterpart in
+    // gi.comp.slang) — accumulation converges to the identical α-weighted image, and
+    // no second, renderer-private definition of "present" can drift from OpenPBR's.
+    // Only a textured mask reaches this test; a fully-present surface (α = 1) never
+    // discards, so opaque geometry is untouched.
+    // Each depth layer draws its own sample (the seed mixes the fragment's instance
+    // and depth), so a stack of cut-out surfaces composites like the path tracer's
+    // successive independent gates rather than vanishing together.
+    const float presence = saturate(mat.opacityFlagsPad.x);
+    if (presence < 1.0) {
+        const uint layerKey =
+            hashCombine(rngHash(input.instanceIdx), asuint(input.pos.z));
+        RngState opacitySeed = composePixelSeed(input.pos, layerKey);
+        if (randFloat(opacitySeed) >= presence) {
+            discard;
         }
     }
 

@@ -18,7 +18,8 @@ TEST_F(RtFixture, Scene_BuildWithMeshAndSphere) {
     const std::uint32_t matMetal = scene.addMaterial(harmonia::Material::metal(sm::float3(0.9F, 0.3F, 0.2F), 0.15F));
 
     harmonia::MeshData floor = harmonia::ProceduralGeometry::makeBox(sm::float3(2.0F, 0.1F, 2.0F)); // object space
-    const std::uint32_t floorMesh = scene.addMesh(deviceCtx(), commandPool(), std::move(floor), "test.floor");
+    const std::uint32_t floorMesh =
+        scene.addMesh(deviceCtx(), commandPool(), std::move(floor), harmonia::MeshOpacity{}, "test.floor");
     ASSERT_NE(floorMesh, std::numeric_limits<std::uint32_t>::max());
 
     const std::uint32_t sphereMesh = scene.addSphereMesh(deviceCtx(), commandPool(), 0.5F, "test.sphere");
@@ -44,7 +45,8 @@ TEST_F(RtFixture, Scene_SynthesizesLightFromEmissiveMesh) {
     const std::uint32_t matEmitter = scene.addMaterial(harmonia::Material::emissive(sm::float3(1.0F), 1000.0F));
 
     harmonia::MeshData quad = harmonia::ProceduralGeometry::makeBox(sm::float3(1.0F, 0.01F, 1.0F));
-    const std::uint32_t emitterMesh = scene.addMesh(deviceCtx(), commandPool(), std::move(quad), "test.emitter");
+    const std::uint32_t emitterMesh =
+        scene.addMesh(deviceCtx(), commandPool(), std::move(quad), harmonia::MeshOpacity{}, "test.emitter");
     ASSERT_NE(emitterMesh, std::numeric_limits<std::uint32_t>::max());
     ASSERT_NE(scene.addInstance(emitterMesh, harmonia::Xform{}, matEmitter), std::numeric_limits<std::uint32_t>::max());
 
@@ -66,7 +68,8 @@ TEST_F(RtFixture, Scene_DoesNotSynthesizeLightsForNonEmissiveGeometry) {
     const std::uint32_t matDiffuse = scene.addMaterial(harmonia::Material::diffuse(sm::float3(0.7F), 1.0F));
 
     harmonia::MeshData floor = harmonia::ProceduralGeometry::makeBox(sm::float3(1.0F, 0.1F, 1.0F));
-    const std::uint32_t floorMesh = scene.addMesh(deviceCtx(), commandPool(), std::move(floor), "test.floor");
+    const std::uint32_t floorMesh =
+        scene.addMesh(deviceCtx(), commandPool(), std::move(floor), harmonia::MeshOpacity{}, "test.floor");
     ASSERT_NE(floorMesh, std::numeric_limits<std::uint32_t>::max());
     ASSERT_NE(scene.addInstance(floorMesh, harmonia::Xform{}, matDiffuse), std::numeric_limits<std::uint32_t>::max());
 
@@ -83,7 +86,8 @@ TEST_F(RtFixture, Scene_BuildWithMultipleInstancesOfOneMesh) {
     const std::uint32_t mat = scene.addMaterial(harmonia::Material::diffuse(sm::float3(0.7F), 1.0F));
 
     harmonia::MeshData box = harmonia::ProceduralGeometry::makeBox(sm::float3(0.8F)); // one unique mesh
-    const std::uint32_t mesh = scene.addMesh(deviceCtx(), commandPool(), std::move(box), "test.shared");
+    const std::uint32_t mesh =
+        scene.addMesh(deviceCtx(), commandPool(), std::move(box), harmonia::MeshOpacity{}, "test.shared");
     ASSERT_NE(mesh, std::numeric_limits<std::uint32_t>::max());
 
     for (std::size_t i = 0; i < 4; ++i) {
