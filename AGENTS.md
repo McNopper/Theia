@@ -2,6 +2,9 @@
 
 Quick-start context for AI agents so basic facts don't have to be rediscovered each session.
 
+**Outstanding work, governance (definition of done + guardrails) and release history: see
+[`PLAN.md`](PLAN.md).**
+
 ## What this repo is
 
 **Theia** is a **lean accumulation path-traced renderer**: a GPU-driven Vulkan renderer that
@@ -18,7 +21,9 @@ Pipeline (dependency direction):
 
 ```mermaid
 flowchart LR
-    A["Aether<br/>file format"] --> H["Harmonia<br/>shared Vulkan lib"]
+    SM["slang-math<br/>math"] --> A["Aether<br/>file format"]
+    SM --> H
+    A --> H["Harmonia<br/>shared Vulkan lib"]
     H --> Hy["Hyperion<br/>path tracer · ground truth"]
     H --> T["<b>Theia</b><br/>accumulation renderer (this repo)"]
 ```
@@ -69,8 +74,11 @@ Theia accumulates frames — use `--offscreen-frames` for convergence quality.
 
 Parity vs Hyperion and showcase screenshots use the unified accumulation RT path.
 
-Compare with `Harmonia/tools/compare_renders.py ref.exr cand.exr` (pass = mean_diff <= 4.0,
-pre-tonemap EXR, same color space).
+Compare with `Harmonia/tools/compare_renders.py ref.exr cand.exr` (pre-tonemap EXR, same
+color space). The gate is a **strict-AND metric set** (mean_diff ≤ 4.0, rel_mse, SSIM ≥ 0.98,
+luminance-histogram corr ≥ 0.999) over the 14 scenes in
+`Harmonia/tools/validation_manifest.toml` — full methodology in Harmonia's `AGENTS.md` /
+`PLAN.md`.
 
 **Screenshot gallery** (`screenshots/`, 1280×720 PNG): Theia renders 256 frames. The matching
 Hyperion screenshots use **64 spp** (fireflies acceptable — 256 spp is too slow for the full
@@ -80,7 +88,7 @@ the 320×240 parity resolution.
 ## Gotchas (each has cost a debug cycle)
 
 - **Assets come from `build/_deps/aether-src/assets/`** (FetchContent clone), NOT the working
-  Aether tree. Editing `C:\Development\GitHub\Aether\assets` does nothing unless you update the
+  Aether tree. Editing the Aether working tree's `assets/` does nothing unless you update the
   `_deps` copy or build with `-DFETCHCONTENT_SOURCE_DIR_AETHER=...`. Symptom: two "different"
   renders give byte-identical metrics.
 - **IBL parity reference must be high-spp:** a low-spp Hyperion reference is noisy — render it

@@ -66,7 +66,7 @@ It implements the [OpenPBR Surface v1.1.1](https://academysoftwarefoundation.git
 - **Direct lighting** — 1-2 directional lights + Forward+ tile-based point light culling (16×16 px tiles, up to 128 lights/tile)
 - **Environment lighting** — equirectangular HDR panorama sampled raw for the sky background and env-NEE (importance-sampled via a marginal/conditional CDF); specular reflections and all indirect lighting come from RT-GI (no split-sum IBL prefilter)
 - **Ray-traced global illumination (RT-GI)** — inline `VK_KHR_ray_query` compute stage; shared unidirectional path-integrator core (NEE + MIS + Russian Roulette) in Harmonia; output feeds the accumulation → denoiser chain for convergence to Hyperion ground truth. RT-GI is always on — the single indirect/reflection/occlusion path (there is no GI-off fallback)
-- **ReSTIR DI** — spatiotemporal reservoir resampling for direct illumination: 8-candidate RIS via power-weighted emissive CDF, temporal reuse (M-cap=20, motion-vector reprojection, normal+depth validation), unbiased W = w_sum/(M·p̂), single shadow ray per pixel; feature-gated (`--no-restir-di`); bias audit: `cornell_classic` mean_diff 2.0 vs Hyperion ground truth
+- **ReSTIR PT** — one unified reservoir driven by the shared path integrator: the direct-light candidates (emissive triangles / env NEE) live inside that same reservoir, and a multi-bounce path reservoir covers the indirect term (GRIS random-replay shift, spatial reuse only — **no temporal merge**, see `AGENTS.md`). ReSTIR PT absorbs the former standalone ReSTIR DI path — `--no-restir-di` is forced off while PT is on
 - **Temporal Anti-Aliasing (TAA)** — cross-vendor YCoCg 3×3 neighbourhood AABB clamping + 90/10 history blend; motion-vector reprojection from A1b; `vkCmdCopyImage` ping-pong history; runs after MotionVectorPass, before denoiser; `--no-taa` opt-out
 - **A-SVGF denoiser (interactive presentation only)** — fixed-radius à-trous wavelet filter that stabilizes the low-spp interactive window. It is **not** a converging stage (its effect scales with resolution, not sample count), so it is forced off for `--output`/`--no-postfx` — an offscreen capture is the raw scene-referred estimator result. Pipeline order is GI → MotionVector → TAA → Accumulation → Denoiser → ToneMap, so the denoiser runs *after* accumulation and never feeds it; parity/convergence to Hyperion comes from accumulation alone
 - **Sub-pixel camera jitter (Halton 2,3)** — deterministic raster AA sampling for accumulation-friendly opaque edge anti-aliasing
@@ -87,13 +87,16 @@ All parameters follow the [OpenPBR spec](https://academysoftwarefoundation.githu
 | Subsurface | `subsurface_weight`, `subsurface_color`, `subsurface_radius`, `subsurface_radius_scale`, `subsurface_scatter_anisotropy` | ✅ real volumetric random walk (shared with Hyperion, run in the RT-GI compute stage) |
 | Geometry | `geometry_opacity`, `map_opacity` | ✅ true presence weight (`mix(ambient-medium, surface, α)`, spec §Opacity/Transparency), not a BRDF-weight approximation — the rasterizer draws a stochastic coverage sample per fragment (discarding with probability 1-α) and the RT-GI/shadow paths resolve the identical α through the shared estimator's pass-through gate + `∏(1-α)` shadow transmittance. `VK_EXT_opacity_micromap` accelerates a textured mask's RT traversal (`shaderball_checker`) without changing the result |
 
-Conductor reflectance uses the OpenPBR generalized-Schlick **F82-tint** model (`base_color` = F0, `specular_color` = 82° tint). Specular and coat microfacets use GGX with the spec's anisotropy remapping plus Turquin/Kulla-Conty multiple-scattering compensation.
-
-**Thin-film iridescence** uses the spec model — a faithful port of MaterialX `mx_fresnel_airy` (Belcour & Barla 2017): a full s/p-polarized Airy summation with the spectral Gaussian sensitivity. Metals use the true **complex-IOR conductor phase** (`(n,k)` recovered from `base_color` + `specular_color` via Gulbrandsen 2014), so anodized metals show vivid, physically-correct interference colour, blended with the dielectric Schlick interface by `base_metalness`. The shared BSDF lives in Harmonia, so this renders **identically to Hyperion**.
-
-**Fuzz/sheen** is the OpenPBR spec model — a faithful port of MaterialX's Zeltner et al. 2022 "Practical Multiple-Scattering Sheen Using Linearly Transformed Cosines" (analytic LTC + directional-albedo fits, no lookup table). The sheen directional albedo also drives the physically-correct, view-dependent darkening of the layers beneath the fuzz. Shared Harmonia BSDF → **identical to Hyperion**.
-
-**Subsurface** (bulk, non-thin-walled) runs the **same chromatic volumetric random walk as Hyperion** — routed through the unified RT-GI compute stage (`gi.comp` executes the shared hero-wavelength free-flight/scatter/boundary estimator on both primary and secondary vertices). Light refracts through the dielectric interface (Fresnel-gated), takes Henyey-Greenstein scattering steps with per-channel extinction derived from `subsurface_radius` × `subsurface_radius_scale` (single-scatter albedo = `subsurface_color`), and exits through the interface. Thin-walled subsurface keeps the diffuse-sheet approximation. **Transmission scattering** (`transmission_scatter`) reuses the same walk, so both match Hyperion's transport model, not just its parameters.
+Conductor reflectance (F82), thin-film iridescence (`mx_fresnel_airy`), fuzz/sheen (LTC),
+and the chromatic volumetric subsurface/transmission random walk are implemented once in
+the shared Harmonia `bsdf_shared.slang` and run **identically to Hyperion** by construction —
+see [Harmonia README — Material model](../Harmonia/README.md#material-model--openpbr-surface-v111)
+for the canonical description. Theia executes the same estimator (including the volumetric
+walk) in its RT-GI compute stage. Renderer-specific notes: the rasterizer resolves cutout
+opacity as a stochastic coverage draw per fragment (discard with probability 1−α, same
+per-pixel RNG stream as everything else), and the forward shadow ray + GI `RayQuery` paths
+resolve non-opaque candidates (`CANDIDATE_NON_OPAQUE_TRIANGLE`) with the matching ∏(1−α)
+transmittance.
 
 ### Color pipeline
 - Scene-referred rendering in a selectable **working color space**: linear **Rec.2020**
@@ -150,7 +153,9 @@ Theia is the **accumulation path-traced** renderer in a family of four repositor
 
 ```mermaid
 flowchart LR
-    A["Aether<br/>file format"] --> H["Harmonia<br/>shared Vulkan lib"]
+    SM["slang-math<br/>math"] --> A["Aether<br/>file format"]
+    SM --> H
+    A --> H["Harmonia<br/>shared Vulkan lib"]
     H --> Hy["Hyperion<br/>path tracer · ground truth"]
     H --> T["<b>Theia</b><br/>accumulation renderer"]
 ```
@@ -219,7 +224,7 @@ build/theia.exe --scene cornell_classic --output out.exr
 | `--height <n>` | 768 | Render height in pixels |
 | `--validation` / `--no-validation` | disabled | Enable / disable Vulkan validation layers |
 | `--taa` / `--no-taa` | on | Interactive-window temporal anti-aliasing during camera motion. `--taa` is **incompatible with `--output`** (offscreen uses progressive accumulation); the two must not be combined |
-| `--no-restir-di` | off (ReSTIR DI on) | Disable ReSTIR direct-light importance resampling (debug/baseline) |
+| `--no-restir-di` | off | Disable the legacy ReSTIR DI candidate path (debug; forced off when ReSTIR PT is on — the unified PT reservoir already contains the DI candidates) |
 | `--indirect-ambient <x>` | `0.0` | Presentation-only indirect ambient boost (scene-referred linear) |
 | `--no-camera-jitter` | off | Disable sub-pixel camera jitter (debug/baseline comparison only) |
 
@@ -229,7 +234,7 @@ Theia uses a **staged pipeline** for indirect lighting:
 
 | Stage | Status | Notes |
 |-------|--------|-------|
-| **RT-GI compute stage** | Always on | `VK_KHR_ray_query` multibounce; shared integrator core with Hyperion; also drives transmission/refraction; feeds accumulation → denoiser. The single indirect/reflection/occlusion path |
+| **RT-GI compute stage** | Always on | `VK_KHR_ray_query` multibounce; shared integrator core with Hyperion; also drives transmission/refraction; ReSTIR PT unified reservoir (incl. the DI candidates) resamples on top; feeds accumulation → denoiser. The single indirect/reflection/occlusion path |
 
 RT-GI is the single unified indirect + transmission provider and drives both the parity and interactive paths (the split-sum IBL fallback was removed — RT-GI is the renderer).
 
