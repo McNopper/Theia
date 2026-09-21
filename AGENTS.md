@@ -82,7 +82,7 @@ luminance-histogram corr ≥ 0.999) over the 14 scenes in
 
 **Screenshot gallery** (`screenshots/`, 1280×720 PNG): Theia renders 256 frames. The matching
 Hyperion screenshots use **64 spp** (fireflies acceptable — 256 spp is too slow for the full
-29-scene set); a parity *reference* is distinct and uses a clean Hyperion **256 spp** EXR at
+30-scene set); a parity *reference* is distinct and uses a clean Hyperion **256 spp** EXR at
 the 320×240 parity resolution.
 
 ## Gotchas (each has cost a debug cycle)

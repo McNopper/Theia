@@ -33,12 +33,13 @@ Harmonia; this file tracks what Theia owns or consumes. Sibling plans: `Harmonia
 
 **Shipped GI state (orientation):** Theia's interactive GI runs **ReSTIR PT** — one unified
 reservoir driven by the shared path integrator, which **absorbs DI** (`useRestirDi` is forced
-false whenever PT is on, `src/demo/Application.cpp:460`; the DI candidate path lives inside
-the same reservoir, `GiPass.cpp:780`) — plus spatial-only path reuse (see the no-temporal-merge
-guardrail) and A-SVGF as an interactive-only presentation stage (identity for offscreen
-capture). Stage order is **GI → MotionVector → TAA → Accumulation → Denoiser → ToneMap**
-(`src/demo/Application.cpp:641-657`, `Harmonia/src/harmonia/app/App.cpp:256-292`) — deliberate;
-do not reorder.
+false whenever PT is on, `src/demo/Application.cpp:440` and `:617`; the DI candidate path lives
+inside the same reservoir, `GiPass.cpp:776-780`) — plus spatial-only path reuse (see the
+no-temporal-merge guardrail) and A-SVGF as an interactive-only presentation stage (identity
+for offscreen capture). Stage order is **GI → MotionVector → TAA → Accumulation → Denoiser →
+ToneMap** (renderer-side record order in `src/demo/Application.cpp` — GI `:549`/`:621`,
+MotionVector `:629`/`:875`, TAA `:632`/`:882`; the shared Accumulation/Denoiser/ToneMap stages
+in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reorder.
 
 ## At a glance
 
@@ -59,7 +60,7 @@ do not reorder.
 | I6 | **Configurable frames-per-flip** (Theia window): render **N** accumulation frames per one swapchain present (**default N = 1** = current behaviour). N > 1 converges the *displayed* image faster per flip on a static/slow camera (each presented frame is the accumulation of N jittered sub-frames) at the cost of flip rate and input latency; accumulation still resets on camera move (as today). The interactive-window analogue of the headless `--offscreen-frames` path, distinct from TAA (which reprojects+blends rather than pure-accumulates). CLI flag `--frames-per-flip <N>` (default 1); validate against the convergence gate. Self-contained — VK6 present pacing is later polish, not a prerequisite. **Add the flag to the shared parser** (`Harmonia/src/harmonia/app/CliParser.cpp`), not to Theia's silent-swallow arg loop (that loop was the B5 bug — unknown args must hard-error). | — | **next** |
 | ANI3 | **Object motion vectors** — extend the MotionVectorPass beyond camera motion to animated instances (per-node velocity → TAA + ReSTIR temporal reuse). The plumbing is already in place but unused: `prevInstanceTransforms` is bound at `shaders/motion_vector.comp.slang:34` while the shader hardcodes the static-scene model (`:76`). | ANI1 (Aether) | backlog |
 | MOD4 | **Swapchain recreate on resize → `VK_KHR_swapchain_maintenance1`** — `VkSwapchainPresentScalingCreateInfoEXT` lets the driver scale to extent changes without the full teardown/rebuild in `Swapchain::recreate` (`handleResize`). A behavior decision (render-at-fixed-extent + scale vs current exact-match recreate), so recreate-on-resize is kept for now; the present-pacing half shipped as VK6 (v0.7.6). | — | backlog |
-| SM6-Theia | **slang-math v0.3.0 migration slice** — replace hand-rolled sites (`src/theia/.../Scene.cpp:530` saturate; per-component trig in `CameraController.hpp`, `IblProbe.cpp`, `Light.cpp` → SM2 functions); bump the FetchContent pin in this repo's release commit. Track origin: slang-math/PLAN.md SM6. | slang-math v0.3.0 tag | backlog |
+| SM6-Theia | **slang-math v0.3.0 migration slice** — replace hand-rolled sites (`src/theia/scene/Scene.cpp:530` saturate; per-component trig in `src/theia/renderer/CameraController.hpp:36,78` → SM2 functions); bump the FetchContent pin in this repo's release commit. Track origin: slang-math/PLAN.md SM6. | slang-math v0.3.0 tag | backlog |
 
 ### ReSTIR-PT refinements (optional, not blockers)
 
@@ -82,7 +83,7 @@ shared with Harmonia:
   **DN1** (RaNAD neural denoiser for the low-spp window; unblocked by VK1 cooperative matrix),
   **C11** (ReSTIR SSS — brings Theia's realtime SSS onto the shared random-walk model
   Hyperion already runs → SSS parity), **C9/C12** (BSDF), **PERF5/PERF4** (wavefront — Theia
-  is the harder wire: `gi.comp.slang` ~1242 lines fuses ReSTIR PT + medium walk + path trace)
+  is the harder wire: `gi.comp.slang` ~1519 lines fuses ReSTIR PT + medium walk + path trace)
   — all owned by `Harmonia/PLAN.md`.
 - **VK4** (subgroup rotate/reconvergence → faster reservoir merging/compaction) and **VK5**
   (pipeline binaries → cuts Theia's cold start: 5 pipelines at init — opaque/transparent/sky/
@@ -117,7 +118,7 @@ low-spp reference).
   *ReSTIR-PT refinements* above.
 - **The denoiser is a presentation stage, never part of the estimator (v0.7.4 contract):**
   A-SVGF is forced off for offscreen capture (`--output`) in both renderers
-  (`Harmonia/src/harmonia/app/App.cpp:325`); a capture is the raw scene-referred estimator
+  (`Harmonia/src/harmonia/app/App.cpp:372`); a capture is the raw scene-referred estimator
   result. The à-trous kernel has a fixed pixel radius — its effect scales with resolution and
   never vanishes with samples. Do not re-enable it on the capture path, do not describe it as
   converging. (DEN2 makes this a test; DN3 in Harmonia/PLAN.md aims to remove the need for
@@ -129,8 +130,8 @@ low-spp reference).
   rejected outright (see Harmonia/PLAN.md *Research triage*).
 - Shared-BSDF contracts owned by Harmonia apply here verbatim (`Harmonia/PLAN.md`
   guardrails): dielectric sidedness (raw outward `GiHit.geoNormal`), the Chiang 2019
-  terminator factor at every NEE/continuation site (Theia-side: `gi.comp.slang:791,904`,
-  `forward_render.frag.slang:352`), object-space position-fetch vertices, MaterialX
+  terminator factor at every NEE/continuation site (Theia-side: `gi.comp.slang:899,1017`,
+  `forward_render.frag.slang:302,328`), object-space position-fetch vertices, MaterialX
   transmission-tint semantics, exact Beer–Lambert for pure absorbers, device-only AS builds.
 - **Vulkan policy: latest + KHR/EXT, modern over legacy, no fallbacks** (probe→enable pattern
   for optional capabilities; absent-branch must be image-identical and free).
