@@ -70,6 +70,11 @@ Theia accumulates frames — use `--offscreen-frames` for convergence quality.
 
 ⚠️ No `--offscreen` flag — headless is triggered by `--output`.
 
+**Startup/resize black frames are expected, not a hang:** the window stays black while the
+scene uploads and the pipelines build (meshlet processing, BLAS/TLAS builds, RT pipelines —
+several seconds on heavy scenes like `ABeautifulGame`), and every window resize
+re-initializes the pipeline at the new resolution and restarts accumulation.
+
 ## Parity & screenshots: unified RT path
 
 Parity vs Hyperion and showcase screenshots use the unified accumulation RT path.
@@ -146,7 +151,7 @@ cmake --build build
 cd build; ctest --output-on-failure
 ```
 
-SDL3, slangc and volk come from the Vulkan SDK (not vcpkg). vcpkg provides openexr, stb.
+SDL3, slangc and volk come from the Vulkan SDK (not vcpkg). vcpkg provides tomlplusplus, OpenImageIO and meshoptimizer.
 
 ## Conventions
 
