@@ -1,0 +1,28 @@
+{
+  "version": 8,
+  "configurePresets": [
+    {
+      "name": "win",
+      "displayName": "Windows (Ninja + clang-cl + vcpkg)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "clang-cl",
+        "CMAKE_CXX_COMPILER": "clang-cl"
+      },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "win", "configurePreset": "win" }
+  ],
+  "testPresets": [
+    {
+      "name": "win",
+      "configurePreset": "win",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(theia VERSION 0.7.7 LANGUAGES C CXX)
+project(theia VERSION 0.7.8 LANGUAGES C CXX)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
@@ -61,6 +61,17 @@ if(PROJECT_IS_TOP_LEVEL)
     option(ENABLE_CLANG_FORMAT "Enable clang-format targets" ON)
     option(ENABLE_CPPCHECK "Enable cppcheck static analysis target" ON)
     option(ENABLE_CPPCHECK_IN_BUILD "Run cppcheck alongside the compiler" OFF)
+
+    # Sanitizer lane (Clang/GCC only):
+    #   cmake -DTHEIA_SANITIZER=address|undefined|thread ...
+    set(THEIA_SANITIZER "" CACHE STRING "Sanitizer: address, undefined, or thread (Clang/GCC only)")
+    if(THEIA_SANITIZER)
+        if(MSVC)
+            message(FATAL_ERROR "THEIA_SANITIZER requires Clang/GCC (use a Ninja+clang or WSL configure)")
+        endif()
+        add_compile_options("-fsanitize=${THEIA_SANITIZER}" -fno-omit-frame-pointer)
+        add_link_options("-fsanitize=${THEIA_SANITIZER}")
+    endif()
 
     # All first-party C/C++ sources (clang-format); compiled translation units
     # only (clang-tidy) — headers are analysed transitively via HeaderFilterRegex.
@@ -196,12 +207,12 @@ endif()
 FetchContent_Declare(
     aether
     GIT_REPOSITORY https://github.com/McNopper/Aether.git
-    GIT_TAG v0.7.3
+    GIT_TAG v0.7.4
 )
 FetchContent_Declare(
     harmonia
     GIT_REPOSITORY https://github.com/McNopper/Harmonia.git
-    GIT_TAG v0.7.7
+    GIT_TAG v0.7.8
 )
 FetchContent_MakeAvailable(aether harmonia)
 
@@ -333,5 +344,17 @@ target_link_libraries(theia PRIVATE theia_demo)
 
 if(BUILD_TESTING)
     add_subdirectory(tests)
+endif()
+
+# Static-analysis ctest lane: parallel clang-tidy over
+# build/compile_commands.json, classified per the .clang-tidy WarningsAsErrors
+# contract. Skips (77) when clang-tidy / Python3 / the database is unavailable.
+if(PROJECT_IS_TOP_LEVEL)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME test_tidy
+                 COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_tidy.py)
+        set_tests_properties(test_tidy PROPERTIES SKIP_RETURN_CODE 77 LABELS analysis)
+    endif()
 endif()
 

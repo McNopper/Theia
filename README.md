@@ -226,7 +226,7 @@ build/theia.exe --scene cornell_classic --output out.exr
 | `--taa` / `--no-taa` | on | Interactive-window temporal anti-aliasing during camera motion. `--taa` is **incompatible with `--output`** (offscreen uses progressive accumulation); the two must not be combined |
 | `--no-restir-di` | off | Disable the legacy ReSTIR DI candidate path (debug; forced off when ReSTIR PT is on — the unified PT reservoir already contains the DI candidates) |
 | `--indirect-ambient <x>` | `0.0` | Presentation-only indirect ambient boost (scene-referred linear) |
-| `--no-camera-jitter` | off | Disable sub-pixel camera jitter (debug/baseline comparison only) |
+| `--no-camera-jitter` | off | Disable sub-pixel camera jitter (interactive debug only; ignored in `--output` capture — jitter is forced on for parity sampling) |
 
 ### Indirect lighting and GI architecture
 

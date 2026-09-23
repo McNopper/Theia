@@ -18,6 +18,7 @@ function(theia_configure_target target)
             /W4
             /WX
             /permissive-
+            /fp:strict
             /Zc:__cplusplus
             # /Zc:preprocessor is MSVC-only; clang-cl (COMPILER_ID=Clang, simulates MSVC)
             # does not support it and will error with -Wunused-command-line-argument.
@@ -31,6 +32,10 @@ function(theia_configure_target target)
             -Werror
             -Wpedantic
             -Wno-unused-parameter
+            # Deterministic host-side FP: no contraction / fast-math reassociation
+            # (supports the bit-identical deterministic-replay guardrail).
+            -ffp-contract=off
+            -fno-fast-math
         )
     else()
         message(FATAL_ERROR "Unsupported compiler: ${CMAKE_CXX_COMPILER_ID}")

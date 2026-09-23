@@ -43,10 +43,11 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
 
 ## At a glance
 
-- **Release:** v0.7.7 — lockstep with Harmonia/Hyperion (slang-math v0.2.1, Aether v0.7.3;
+- **Release:** v0.7.8 — lockstep with Harmonia/Hyperion (slang-math v0.2.1, Aether v0.7.4;
   all tag-synced with GitHub).
-- **Last shipped (v0.7.7):** C14/VK2 — real OpenPBR `geometry_opacity` cutout; Theia's slice
-  was the stochastic coverage draw + RayQuery non-opaque candidate resolution (see Baseline).
+- **Last shipped (v0.7.8):** **estimator-pure capture** — the extended two-tier contract
+  (firefly clamps + A3(a) regularization off, camera jitter forced on for `--output`);
+  parity re-baselined with bias removed — see Baseline.
 - **Next owned item:** **I6** (configurable frames-per-flip) — below. The shared-estimator
   next-up items (GI-SMS, C9, DN3, LS2, PERF5/PERF4, C11, C12) are owned by
   `Harmonia/PLAN.md` and wire into `gi.comp.slang` when they land.
@@ -62,20 +63,39 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
 | MOD4 | **Swapchain recreate on resize → `VK_KHR_swapchain_maintenance1`** — `VkSwapchainPresentScalingCreateInfoEXT` lets the driver scale to extent changes without the full teardown/rebuild in `Swapchain::recreate` (`handleResize`). A behavior decision (render-at-fixed-extent + scale vs current exact-match recreate), so recreate-on-resize is kept for now; the present-pacing half shipped as VK6 (v0.7.6). | — | backlog |
 | SM6-Theia | **slang-math v0.3.0 migration slice** — replace hand-rolled sites (`src/theia/scene/Scene.cpp:530` saturate; per-component trig in `src/theia/renderer/CameraController.hpp:36,78` → SM2 functions); bump the FetchContent pin in this repo's release commit. Track origin: slang-math/PLAN.md SM6. | slang-math v0.3.0 tag | backlog |
 
-### ReSTIR-PT refinements (optional, not blockers)
+### ReSTIR-PT refinements (GI-ENH — active)
 
 Owned here (the reservoir lives in `gi.comp.slang`); the estimator half of either item is
-shared with Harmonia:
+shared with Harmonia. Primary source: *ReSTIR PT Enhanced* (Lin, Kettunen, Wyman —
+I3D/PACMCGIT 2026, Best Paper, [doi:10.1145/3804494](https://doi.org/10.1145/3804494))
+on top of Lin 2022 GRIS:
 
-- **Reconnection shift for the path reservoir** (Lin 2022 GRIS §5): replay-only reuse is
-  unbiased but discards path-suffix correlation; reconnection (re-route the primary vertex,
-  keep suffix vertices 1+) with the shift Jacobian would raise reuse quality on glossy
-  surfaces. Needs path-vertex storage in the reservoir (~256B stride) — paper-grade.
+- **Reconnection shift for the path reservoir, with footprint-based criteria** (GRIS §5 +
+  Enhanced §4): replay-only reuse is unbiased but discards path-suffix correlation;
+  reconnection (re-route the primary vertex, keep suffix vertices 1+) with the shift Jacobian
+  raises reuse quality on glossy surfaces. Reconnect at the first vertex satisfying the dual
+  ray-footprint test `min(1/(pˣ_{k−1}·G), 1/(pˣ_k·G_rev)) ≥ (c/100)·R_pri²` (c=0.02,
+  `R_pri² = ‖x₀−x₁‖²·⟨n₁,ω₁⟩/(4π)` — scene-scale-independent, replaces scene-tuned
+  distance/roughness thresholds) plus the single-vertex roughness guard α_{k−1} ≥ 0.2;
+  skip the inverse test when x_k is diffuse/emissive. Needs path-vertex storage in the
+  reservoir (~256B stride) — paper-grade.
+- **Vector-valued resampling weights** (Enhanced §6.3): accumulate the spatial candidates'
+  RGB weights `Σ m_i·F(Y_i)·W_i` for shading instead of the scalar-selected sample's
+  `F(Y)·W` — kills chroma noise at zero extra cost (F was already evaluated for p̂).
+- **Gaussian paired-neighbor selection** (Enhanced §3): self-inverse offset textures
+  (σ=16 ≙ R=30 disk, per-frame flip/mirror/transpose/offset) replace uniform-square draws.
+  NB: the paper's 2× spatial-cost win assumes pairwise MIS's two shifts per neighbor; our
+  seed-space plain-RIS scheme already pays one, so this is a *quality* change here.
+- **Dual motion vectors** (Enhanced §6.4 / Zeng 2021): applies to the A-SVGF/TAA
+  reprojection (presentation stages), not to the reservoir.
 - **Temporal reuse without recursion bias:** an unbiased temporal form (e.g. GRIS pairwise
   MIS with canonical-sample accounting) could restore temporal memory for the interactive
   (non-accumulated) path, where frame accumulation isn't available. Would also fix the DI
   reservoir's latent recursion bias. **Read the no-temporal-merge guardrail first** — the
   naive streamed merge is prohibited, and this item is the only sanctioned way back in.
+  (Enhanced §5's duplication-map→temporal-cCap modulation presupposes a temporal merge and
+  is N/A while spatial-only; our per-pass hash dedup (GI2.5) already covers the spatial
+  duplicate case.)
 
 ### Consumed items (owned elsewhere — pointers)
 
@@ -123,6 +143,16 @@ low-spp reference).
   never vanishes with samples. Do not re-enable it on the capture path, do not describe it as
   converging. (DEN2 makes this a test; DN3 in Harmonia/PLAN.md aims to remove the need for
   the special case.)
+- **Capture is estimator-pure (extended contract):** `--output` additionally disables Theia's
+  remaining presentation aids — the firefly clamps (`forward_render.frag.slang`,
+  `gi.comp.slang`; `fireflyClampEnabled` = rngFlags bit2 / GiPC field) and the A3(a)
+  secondary-bounce roughness regularization (`useA3Regularization`) — and forces camera
+  jitter **on** (`--no-camera-jitter` is ignored), so the capture integrates the same pixel
+  footprint as Hyperion's per-sample jitter and converges to the unclamped ground truth
+  (`src/demo/Application.cpp`, `m_pureEstimatorCapture`). The interactive window keeps all
+  presentation aids. Consequence: capture renders now show unclamped firefly *variance* on
+  HDR content — that is the estimator's true noise floor, not a bug (see
+  `Harmonia/PLAN.md` §7 bias-vs-noise method).
 - **Convergence-to-Hyperion litmus:** a technique is acceptable on the converging path only
   if its contribution → 0 as samples/frames → ∞, OR it lives in a real-time-only layer
   (denoise, TAA, culling) bypassed in reference/accumulation mode. Irreducible bias is
@@ -149,7 +179,20 @@ low-spp reference).
 
 ## Baseline
 
-- **v0.7.7** (current): **C14/VK2 — real OpenPBR `geometry_opacity` cutout.** The
+- **v0.7.8** (current): **estimator-pure capture — the extended two-tier contract.**
+  `--output` now disables every presentation aid — A-SVGF/TAA (v0.7.4), the firefly clamps
+  (`forward_render.frag.slang` + `gi.comp.slang`; `fireflyClampEnabled` = rngFlags bit2 /
+  GiPC field) and the A3(a) secondary-bounce roughness regularization — and forces camera
+  jitter ON (`--no-camera-jitter` is ignored), so a capture integrates the same pixel
+  footprint as Hyperion's per-sample jitter and converges to the unclamped ground truth
+  (`Application.cpp` `m_pureEstimatorCapture`). **Parity re-baselined** (14-scene strict-AND
+  @ 320×240 / 256f vs 256 spp): the clamp/jitter bias is gone (global mean ratio —
+  cornell_classic 0.97→0.998, openpbr_metals 0.85→0.97); the gate is now variance-dominated
+  (residual per-frame grain + HDR firefly speckle) — attacked by GI-ENH variance work
+  (*ReSTIR-PT refinements*), never by re-tuning presentation aids. Tooling (presets /
+  check_tidy.py + test_tidy / THEIA_SANITIZER / deterministic FP). 18 ctest green;
+  30-scene gallery regenerated.
+- **v0.7.7**: **C14/VK2 — real OpenPBR `geometry_opacity` cutout.** The
   rasterizer's alpha-test became a stochastic coverage draw (discard with probability 1-α,
   same per-pixel RNG stream as everything else) instead of a fixed cutoff against a dropped,
   non-OpenPBR `geometry_opacity_cutoff` parameter; both the forward shadow ray and the GI
