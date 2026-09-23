@@ -100,6 +100,12 @@ class GiPass {
         /// walk with RIS over replayable path candidates (local + temporal + spatial).
         /// Only meaningful with useRestirPt; the application gates it accordingly.
         bool useRestirPtPath = true;
+        /// Two-tier output contract (extended): the firefly clamps are a
+        /// presentation-stability aid for the interactive window. In an offscreen
+        /// capture (--output) they are DISABLED so the capture is the unclamped
+        /// scene-referred estimator result (parity with Hyperion, which has no
+        /// render-path clamp by guardrail).
+        bool fireflyClampEnabled = true;
         /// A4: screen-space motion vectors (R32G32F, pixel-space dx/dy) for temporal
         /// reprojection. VK_NULL_HANDLE → a 1×1 zero dummy is bound (static-history
         /// reuse: previous reservoir read at the same pixel).
@@ -153,8 +159,9 @@ class GiPass {
         std::uint32_t restirPtEnabled =
             0; ///< GI2: 1 = ReSTIR PT (path integrator owns primary emissive NEE); 0 = legacy DI path
         std::uint32_t restirPtPathEnabled = 0; ///< GI2 full PT: 1 = multi-bounce path reservoir owns the indirect walk
+        std::uint32_t fireflyClampEnabled = 1; ///< 1 = presentation clamp (default); 0 = estimator-pure capture
     };
-    static_assert(sizeof(GiPushConstants) == 224);
+    static_assert(sizeof(GiPushConstants) == 228);
 
     [[nodiscard]] bool createDescriptors();
     [[nodiscard]] bool createPipeline(const char* giSpv);

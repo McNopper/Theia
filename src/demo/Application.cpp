@@ -77,6 +77,25 @@ bool Application::onInitialize() {
         harmonia::Logger::info("harmonia::Camera jitter disabled (--no-camera-jitter)");
     }
 
+    // Two-tier output contract (extended): an offscreen capture (--output) is the
+    // scene-referred estimator result. Presentation-stability aids go off for capture —
+    // firefly clamps (the capture converges to the unclamped ground truth; Hyperion's
+    // render path is unclamped by guardrail) and the A3(a) secondary-bounce roughness
+    // regularization (a Theia-only presentation bias) — and camera jitter is forced ON so
+    // the accumulation integrates the same pixel footprint as Hyperion's per-sample jitter.
+    // Interactive rendering is unchanged.
+    m_pureEstimatorCapture = !config().outputFile.empty();
+    if (m_pureEstimatorCapture) {
+        if (!m_cameraJitterEnabled) {
+            harmonia::Logger::info("harmonia::Camera jitter forced ON for capture (--output): parity pixel sampling");
+        }
+        m_cameraJitterEnabled = true;
+        m_renderer->setCameraJitterEnabled(true);
+        m_renderer->setFireflyClampEnabled(false);
+        harmonia::Logger::info("harmonia::Estimator-pure capture (--output): firefly clamps off, A3(a) regularization "
+                               "off, camera jitter on");
+    }
+
     // Progressive accumulation in the interactive window: a stationary camera
     // converges the per-frame stochastic samples (camera jitter, stochastic
     // transparency/env sampling, RT-GI) into a stable image instead of showing
@@ -434,12 +453,13 @@ void Application::submitAsyncCompute(VkCommandBuffer cmd,
     gp.frameSampleIndex = frameIndex();
     gp.rngBaseSeed = config().rngSeed;
     gp.maxDepth = m_sceneMaxDepth;
-    gp.useA3Regularization = true;
+    gp.useA3Regularization = !m_pureEstimatorCapture;
     gp.gradientVarianceView = denoiserGradientImageView();
     gp.adaptiveMaxSamples = 4;
     gp.useRestirDi = m_useRestirDi && !m_useRestirPt;
     gp.useRestirPt = m_useRestirPt;
     gp.useRestirPtPath = m_useRestirPtPath && m_useRestirPt;
+    gp.fireflyClampEnabled = !m_pureEstimatorCapture;
     gp.motionVectorView = VK_NULL_HANDLE;
     m_pendingMvp.curViewProj = curViewProj;
     m_pendingMvp.prevViewProj = m_prevViewProjValid ? m_prevViewProj : curViewProj;
@@ -611,12 +631,13 @@ void Application::submitSingleQueueGI(VkCommandBuffer cmd,
     gp.frameSampleIndex = frameIndex();
     gp.rngBaseSeed = config().rngSeed;
     gp.maxDepth = m_sceneMaxDepth;
-    gp.useA3Regularization = true;
+    gp.useA3Regularization = !m_pureEstimatorCapture;
     gp.gradientVarianceView = denoiserGradientImageView();
     gp.adaptiveMaxSamples = 4;
     gp.useRestirDi = m_useRestirDi && !m_useRestirPt;
     gp.useRestirPt = m_useRestirPt;
     gp.useRestirPtPath = m_useRestirPtPath && m_useRestirPt;
+    gp.fireflyClampEnabled = !m_pureEstimatorCapture;
     gp.motionVectorView = VK_NULL_HANDLE;
     m_giPass.record(cmd, gp);
 

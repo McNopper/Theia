@@ -49,6 +49,8 @@ cbuffer GiPC {
     uint     restirHasMotion;              // A4: 1 = t_motionVectors is a real motion image; 0 = dummy (skip reprojection)
     uint     restirPtEnabled;              // GI2: 1 = ReSTIR PT — path integrator owns primary emissive NEE; 0 = legacy DI path
     uint     restirPtPathEnabled;          // GI2 full PT: 1 = multi-bounce path reservoir owns the indirect walk
+    uint     fireflyClampEnabled;          // 1 = presentation firefly clamp (interactive default);
+                                           // 0 = estimator-pure capture (--output): no clamp, NaN/Inf guard only
 };
 
 // ── A4: ReSTIR DI reservoir type ──────────────────────────────────────────────
@@ -1152,13 +1154,16 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
         return false;
     }
     indirect = max(indirect, 0.0.xxx);
-    // Hard ceiling on top of the per-sample firefly suppression below.
-    indirect = clamp(indirect, 0.0.xxx, (adaptiveClamp * 3.0).xxx);
-    // Per-sample firefly suppression (averaged across accumulated frames + adaptive samples).
-    const float avg = (indirect.x + indirect.y + indirect.z) * (1.0 / 3.0);
-    if (avg > adaptiveClamp) {
-        indirect *= adaptiveClamp / avg;
+    if (fireflyClampEnabled != 0u) {
+        // Hard ceiling on top of the per-sample firefly suppression below.
+        indirect = clamp(indirect, 0.0.xxx, (adaptiveClamp * 3.0).xxx);
+        // Per-sample firefly suppression (averaged across accumulated frames + adaptive samples).
+        const float avg = (indirect.x + indirect.y + indirect.z) * (1.0 / 3.0);
+        if (avg > adaptiveClamp) {
+            indirect *= adaptiveClamp / avg;
+        }
     }
+    // else: estimator-pure capture (--output) — unclamped, converges to the unclamped ground truth.
 
     outIndirect = indirect;
     outEnvNee = indirectPrimaryEnvNee;
@@ -1315,8 +1320,10 @@ float4 restirPtIndirect(SurfaceHit primary, uint2 px, float adaptiveClamp, inout
     if (!all(isfinite(contribution)) || any(isnan(contribution))) {
         contribution = 0.0.xxx;
     }
-    // Hard firefly ceiling matching the DI reservoir / indirect path.
-    contribution = clamp(contribution, 0.0.xxx, (adaptiveClamp * 3.0).xxx);
+    if (fireflyClampEnabled != 0u) {
+        // Hard firefly ceiling matching the DI reservoir / indirect path.
+        contribution = clamp(contribution, 0.0.xxx, (adaptiveClamp * 3.0).xxx);
+    }
 
     return float4(contribution, float(r.M));
 }
@@ -1465,7 +1472,9 @@ void main(uint3 tid : SV_DispatchThreadID) {
             restirDirect = 0.0.xxx;
         }
         // Hard firefly ceiling matching the indirect path (adaptiveClamp*3).
-        restirDirect = clamp(restirDirect, 0.0.xxx, (adaptiveClamp * 3.0).xxx);
+        if (fireflyClampEnabled != 0u) {
+            restirDirect = clamp(restirDirect, 0.0.xxx, (adaptiveClamp * 3.0).xxx);
+        }
     }
 
     // GI2 full PT: multi-bounce path reservoir owns the indirect walk. Replaces the

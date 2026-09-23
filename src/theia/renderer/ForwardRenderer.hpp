@@ -109,6 +109,8 @@ class ForwardRenderer {
         m_render.deterministicReplay = deterministicReplay;
     }
     void setCameraJitterEnabled(bool enabled) noexcept { m_render.cameraJitterEnabled = enabled; }
+    /// Two-tier output contract: OFF in estimator-pure capture (--output); ON interactively.
+    void setFireflyClampEnabled(bool enabled) noexcept { m_render.fireflyClampEnabled = enabled; }
     void setRngDebug(bool enabled) noexcept { m_render.rngDebug = enabled ? 1U : 0U; }
 
     /// Enable/disable the Hi-Z occlusion test for the NEXT frame. Disabled on a camera cut
@@ -148,7 +150,8 @@ class ForwardRenderer {
         std::uint32_t transparentMaxDepth = 2; ///< transparent gather depth
         std::uint32_t frameSampleIndex = 0;    ///< per-frame sample counter for stochastic stages
         std::uint32_t rngBaseSeed = 0;         ///< base seed for composeRngSeed(pixel, frame, bounce, seed)
-        std::uint32_t rngFlags = 0;            ///< bit0 = deterministic replay, bit1 = RNG debug view
+        std::uint32_t rngFlags = 0;            ///< bit0 = deterministic replay, bit1 = RNG debug view,
+                                               ///< bit2 = firefly clamp enabled (0 = estimator-pure capture)
         std::uint32_t cullPhase = 0;           ///< Hi-Z pass: 0 = draw all, 1 = prev-visible, 2 = remaining + Hi-Z
         std::uint32_t envImportanceWidth = 0;  ///< CDF width; 0 disables env importance sampling
         std::uint32_t envImportanceHeight = 0; ///< CDF height
@@ -237,6 +240,7 @@ class ForwardRenderer {
         std::uint32_t rngBaseSeed = 0x12345678U;
         bool deterministicReplay = false;
         bool cameraJitterEnabled = true;
+        bool fireflyClampEnabled = true; ///< 0 in estimator-pure capture (two-tier contract)
         std::uint32_t rngDebug = 0;
     } m_render;
 

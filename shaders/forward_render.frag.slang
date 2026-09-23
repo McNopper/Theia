@@ -26,7 +26,8 @@ cbuffer ForwardPC {
     uint     transparentMaxDepth;   // transparent gather depth (from scene max_depth)
     uint     frameSampleIndex;      // per-frame sample counter for stochastic stages
     uint     rngBaseSeed;           // base seed used by composeRngSeed()
-    uint     rngFlags;              // bit0 = deterministic replay, bit1 = RNG debug visualization
+    uint     rngFlags;              // bit0 = deterministic replay, bit1 = RNG debug visualization,
+                                    // bit2 = firefly clamp enabled (0 = estimator-pure capture)
     uint     _padRng;
     uint     envImportanceWidth;    // CDF width; 0 = env importance sampling disabled
     uint     envImportanceHeight;   // CDF height
@@ -89,7 +90,10 @@ struct FS_OUT {
     float4 giBuffer : SV_Target2; // xyz = world-space primary hit position, w = asfloat(instanceIdx + 1) (0 = background)
 };
 
-// Keep in sync with Hyperion firefly suppression threshold (display-referred units after exposure).
+// Presentation-stability firefly clamp (display-referred units after exposure), interactive
+// window only. In estimator-pure capture (--output, rngFlags bit2 = 0) no clamp applies: the
+// capture converges to the unclamped ground truth (two-tier output contract; Hyperion's
+// render path is unclamped by guardrail — its only clamp lives in the tonemap display path).
 static const float kFireflyClampDisplay = 100.0;
 
 RngState composePixelSeed(float4 pixelPos, uint bounceIndex) {
@@ -119,6 +123,9 @@ float3 safe3(float3 v) {
 
 float3 clampFirefliesDisplay(float3 exposureWeightedLo) {
     float3 v = max(safe3(exposureWeightedLo), 0.0.xxx);
+    if ((rngFlags & 0x4u) == 0u) {
+        return v; // estimator-pure capture (--output): NaN/Inf-guarded, never clamped
+    }
     const float avg = (v.x + v.y + v.z) * (1.0 / 3.0);
     if (avg > kFireflyClampDisplay) {
         v *= kFireflyClampDisplay / avg;

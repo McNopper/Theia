@@ -134,6 +134,12 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     /// Gated by m_useRestirPt at the GiPass wiring (legacy DI mode has no path reservoir).
     bool m_useRestirPtPath = true;
     bool m_useTaa = true;
+    /// Two-tier output contract (extended): true when running an offscreen capture
+    /// (--output). Presentation-stability aids are then disabled so the capture is the
+    /// scene-referred estimator result: firefly clamps off, A3(a) secondary-bounce
+    /// roughness regularization off (both are Theia-only presentation biases), camera
+    /// jitter forced on (same pixel-footprint integral as Hyperion's per-sample jitter).
+    bool m_pureEstimatorCapture = false;
     std::uint32_t m_sceneMaxDepth = 3u;
 
     /// Previous frame's row-major view-projection matrix for motion vector computation.

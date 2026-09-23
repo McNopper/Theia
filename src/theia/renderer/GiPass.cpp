@@ -785,6 +785,7 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         // useRestirPt at this level (the application gates it), but requires the
         // path reservoir buffers.
         .restirPtPathEnabled = (params.useRestirPtPath && m_pathReservoirBuf[0].isValid()) ? 1u : 0u,
+        .fireflyClampEnabled = params.fireflyClampEnabled ? 1u : 0u,
     };
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
