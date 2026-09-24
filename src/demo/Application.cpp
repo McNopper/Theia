@@ -85,6 +85,19 @@ bool Application::onInitialize() {
     // the accumulation integrates the same pixel footprint as Hyperion's per-sample jitter.
     // Interactive rendering is unchanged.
     m_pureEstimatorCapture = !config().outputFile.empty();
+    // Debug/A-B toggle: set THEIA_NO_RECONNECTION to disable the GI-ENH (a) reconnection
+    // shift (replay-only fallback) for A/B measurement.
+    {
+        char* noReconnectRaw = nullptr;
+        std::size_t noReconnectLen = 0;
+        if (_dupenv_s(&noReconnectRaw, &noReconnectLen, "THEIA_NO_RECONNECTION") == 0 && noReconnectRaw != nullptr) {
+            m_reconnectShiftEnabled = !(noReconnectRaw[0] != '\0' && noReconnectRaw[0] != '0');
+            std::free(noReconnectRaw);
+            if (!m_reconnectShiftEnabled) {
+                harmonia::Logger::info("THEIA_NO_RECONNECTION set — reconnection shift disabled (replay-only)");
+            }
+        }
+    }
     if (m_pureEstimatorCapture) {
         if (!m_cameraJitterEnabled) {
             harmonia::Logger::info("harmonia::Camera jitter forced ON for capture (--output): parity pixel sampling");
@@ -460,6 +473,7 @@ void Application::submitAsyncCompute(VkCommandBuffer cmd,
     gp.useRestirPt = m_useRestirPt;
     gp.useRestirPtPath = m_useRestirPtPath && m_useRestirPt;
     gp.fireflyClampEnabled = !m_pureEstimatorCapture;
+    gp.reconnectShiftEnabled = m_reconnectShiftEnabled;
     gp.motionVectorView = VK_NULL_HANDLE;
     m_pendingMvp.curViewProj = curViewProj;
     m_pendingMvp.prevViewProj = m_prevViewProjValid ? m_prevViewProj : curViewProj;
@@ -638,6 +652,7 @@ void Application::submitSingleQueueGI(VkCommandBuffer cmd,
     gp.useRestirPt = m_useRestirPt;
     gp.useRestirPtPath = m_useRestirPtPath && m_useRestirPt;
     gp.fireflyClampEnabled = !m_pureEstimatorCapture;
+    gp.reconnectShiftEnabled = m_reconnectShiftEnabled;
     gp.motionVectorView = VK_NULL_HANDLE;
     m_giPass.record(cmd, gp);
 

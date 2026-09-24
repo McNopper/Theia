@@ -13,7 +13,7 @@ global illumination â€” diffuse, specular, environment NEE, transmission an
 **hardware ray-traced** through Harmonia's shared OpenPBR `path_integrator`, the same estimator
 and BSDF Hyperion uses. **ReSTIR PT** provides reservoir resampling: a direct-light reservoir
 (emissive triangles / env NEE by scene type) plus a **multi-bounce path reservoir** for the
-indirect term (GRIS random-replay shift â€” spatial reuse only, no temporal merge; see gotchas).
+indirect term (GRIS hybrid shift - cached-suffix reconnection with footprint-based criteria and replay fallback; spatial reuse only, no temporal merge; see gotchas).
 An **A-SVGF denoiser** and **TAA** stabilize the image, and progressive accumulation resolves
 it to the reference.
 
@@ -227,7 +227,8 @@ path. Both paths share one task-shader entry point (`gid.x = 0..visibleCount-1`)
   The CPU-count direct draw rung was removed â€” `VK_EXT_mesh_shader` is a hard requirement, so
   the GD3 indirect draw is always available.
 - Debug A/B toggles: `THEIA_FORCE_GD3` (skip DGC, use indirect draw), `THEIA_SINGLE_PASS`
-  (bypass two-pass Hi-Z), `THEIA_DISABLE_HIZ` (draw all meshlets).
+  (bypass two-pass Hi-Z), `THEIA_DISABLE_HIZ` (draw all meshlets), `THEIA_NO_RECONNECTION`
+  (GI-ENH (a) reconnection shift off — replay-only, for A/B measurement).
 - GD4: Both Hi-Z passes (`cullPhase=1` and `cullPhase=2`) use the same GPU-indirect path;
   per-meshlet Hi-Z occlusion is handled by the mesh shader using `cullPhase` push constant.
 

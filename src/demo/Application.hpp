@@ -140,6 +140,8 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     /// roughness regularization off (both are Theia-only presentation biases), camera
     /// jitter forced on (same pixel-footprint integral as Hyperion's per-sample jitter).
     bool m_pureEstimatorCapture = false;
+    /// GI-ENH (a): reconnection shift enabled (THEIA_NO_RECONNECTION=1 disables — A/B only).
+    bool m_reconnectShiftEnabled = true;
     std::uint32_t m_sceneMaxDepth = 3u;
 
     /// Previous frame's row-major view-projection matrix for motion vector computation.

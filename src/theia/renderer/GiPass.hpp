@@ -110,6 +110,9 @@ class GiPass {
         /// A4: screen-space motion vectors (R32G32F, pixel-space dx/dy) for temporal
         /// reprojection. VK_NULL_HANDLE → a 1×1 zero dummy is bound (static-history
         /// reuse: previous reservoir read at the same pixel).
+        /// GI-ENH (a): reconnection shift before replay fallback (THEIA_NO_RECONNECTION
+        /// disables it for A/B measurement).
+        bool reconnectShiftEnabled = true;
         VkImageView motionVectorView = VK_NULL_HANDLE;
     };
 
@@ -166,14 +169,17 @@ class GiPass {
         std::uint32_t pairingPerm0 = 0;        ///< GI-ENH pairing-texture 0 per-frame transform (19 packed bits)
         std::uint32_t pairingPerm1 = 0;
         std::uint32_t pairingPerm2 = 0;
-        std::uint32_t pairingEnabled = 0; ///< 1 = Gaussian paired neighbours in path-reservoir spatial reuse
+        std::uint32_t pairingEnabled = 0;        ///< 1 = Gaussian paired neighbours in path-reservoir spatial reuse
+        std::uint32_t reconnectShiftEnabled = 1; ///< GI-ENH (a): reconnection shift before replay (A/B toggle)
     };
-    static_assert(sizeof(GiPushConstants) == 244);
+    static_assert(sizeof(GiPushConstants) == 248);
 
     [[nodiscard]] bool createDescriptors();
     [[nodiscard]] bool createPipeline(const char* giSpv);
     void updateDescriptors(const FrameParams& params);
-    void updateRestirDescriptors(const FrameParams& params); ///< A4: per-frame bindings 16/17/18 (ping-pong + motion)
+    void
+    updateRestirDescriptors(const FrameParams& params,
+                            std::uint32_t slot); ///< A4: per-frame bindings 16/17/18 (ping-pong + motion), per-slot set
     [[nodiscard]] bool descriptorsDirty(const FrameParams& params) const;
 
     const harmonia::DeviceContext* m_ctx = nullptr;
@@ -181,6 +187,13 @@ class GiPass {
 
     harmonia::UniqueDescriptorSetLayout m_setLayout;
     harmonia::UniqueDescriptorPool m_pool;
+    /// One descriptor set PER FRAME SLOT (== harmonia::FrameSync::kFrameSlots): frames run
+    /// pipelined, so a single mutable set would let frame N+1's per-frame Cur/Prev rebinding
+    /// race frame N's in-flight dispatch (UPDATE_AFTER_BIND makes that a silent data race —
+    /// the run-to-run nondeterminism root-caused 2026-09). `m_set` is the per-call write
+    /// target; `m_sets[slot]` is what record() binds.
+    static constexpr std::uint32_t kDescriptorSlots = 2;
+    VkDescriptorSet m_sets[kDescriptorSlots]{};
     VkDescriptorSet m_set = VK_NULL_HANDLE;
     harmonia::UniquePipelineLayout m_pipelineLayout;
     harmonia::UniquePipeline m_pipeline;
@@ -209,7 +222,10 @@ class GiPass {
     std::uint32_t m_reservoirPingPong = 0; ///< index of the buffer written THIS frame
     bool m_reservoirsCleared = false;      ///< one-time zero-fill of both reservoir buffers
     /// GI2 full PT: path reservoir ping-pong buffers (bindings 20 = cur, 21 = prev).
-    static constexpr VkDeviceSize kPathReservoirStride = 64; ///< >= Slang PathReservoir stride
+    /// 384 B covers the Slang PathReservoir (40 B core + the GI-ENH (a) reconnection record:
+    /// ~288 B with Slang's 16-byte float3 alignment — the CPU never indexes the contents, so
+    /// generous over-allocation is the policy; too small = out-of-bounds struct reads).
+    static constexpr VkDeviceSize kPathReservoirStride = 384;
     harmonia::Buffer m_pathReservoirBuf[2]{};
     std::uint32_t m_pathReservoirPingPong = 0;
     bool m_pathReservoirsCleared = false;

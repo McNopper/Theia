@@ -63,31 +63,29 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
 | MOD4 | **Swapchain recreate on resize → `VK_KHR_swapchain_maintenance1`** — `VkSwapchainPresentScalingCreateInfoEXT` lets the driver scale to extent changes without the full teardown/rebuild in `Swapchain::recreate` (`handleResize`). A behavior decision (render-at-fixed-extent + scale vs current exact-match recreate), so recreate-on-resize is kept for now; the present-pacing half shipped as VK6 (v0.7.6). **Hardware now verified present** (2026-09 vulkaninfo); the decision is behavioral only. | — | backlog |
 | SM6-Theia | **slang-math v0.3.0 migration slice** — replace hand-rolled sites (`src/theia/scene/Scene.cpp:530` saturate; per-component trig in `src/theia/renderer/CameraController.hpp:36,78` → SM2 functions); bump the FetchContent pin in this repo's release commit. Track origin: slang-math/PLAN.md SM6. | slang-math v0.3.0 tag | backlog |
 
-### ReSTIR-PT refinements (GI-ENH — (a) remains)
+### ReSTIR-PT refinements (GI-ENH — core landed; exploitation remains)
 
-Owned here (the reservoir lives in `gi.comp.slang`); the estimator half of either item is
-shared with Harmonia. Primary source: *ReSTIR PT Enhanced* (Lin, Kettunen, Wyman —
-I3D/PACMCGIT 2026, Best Paper, [doi:10.1145/3804494](https://doi.org/10.1145/3804494))
-on top of Lin 2022 GRIS. *(Landed: vector-valued resampling weights (§6.3) and Gaussian
-paired-neighbor selection (§3) — expectation-identical by construction: `p̂·s ≡ u` makes
-the marginalised shade share the selected form's per-set luma exactly, so only per-candidate
-color allocation changes; bias floors measured invariant.)*
+**Landed (2026-09, uncommitted):** (b) vector-valued resampling weights (§6.3 — provably
+expectation-identical: `p̂·s ≡ u` makes the marginalised shade share the selected form's
+per-set luma exactly), (c) Gaussian paired-neighbor self-inverse maps (§3,
+`PairingTextures.cpp`), and (a) the **primary-vertex reconnection shift** (k = 2,
+`tryReconnectionShift` in `gi.comp.slang`): Eq. 5 footprint criteria (c = 0.02, α_min = 0.2,
+inverse-test skipped for diffuse/emissive x_k), opacity-gate mixture with replay fallback,
+GRIS k = 2 Jacobian, exact `SurfaceHit` rebuild from the cached raw identity —
+**bias-floor-proven unbiased** (cornell 1.826 vs 1.830 replay-only; metals unchanged within
+reference noise). Multi-frame captures are run-to-run pixel-reproducible again (see
+guardrails). Remaining exploitation — the paper's 2–3× cost/quality win:
 
-- **Reconnection shift for the path reservoir, with footprint-based criteria** (GRIS §5 +
-  Enhanced §4): replay-only reuse is unbiased but discards path-suffix correlation;
-  reconnection (re-route the primary vertex, keep suffix vertices 1+) with the shift Jacobian
-  raises reuse quality on glossy surfaces AND replaces the per-neighbour full replay with a
-  cached-suffix evaluation (1 shadow ray + BSDF re-evals instead of a multi-bounce walk).
-  Reconnect at the first vertex satisfying the dual
-  ray-footprint test `min(1/(pˣ_{k−1}·G), 1/(pˣ_k·G_rev)) ≥ (c/100)·R_pri²` (c=0.02,
-  `R_pri² = ‖x₀−x₁‖²·⟨n₁,ω₁⟩/(4π)` — scene-scale-independent, replaces scene-tuned
-  distance/roughness thresholds) plus the single-vertex roughness guard α_{k−1} ≥ 0.2;
-  skip the inverse test when x_k is diffuse/emissive. Needs path-vertex storage in the
-  reservoir (the paper's compact (instance, primitive, barycentrics) reconnection record +
-  incident radiance + cached Jacobian product — stride 64→128 B) — paper-grade.
-- **Vector-valued resampling weights** *(landed)* (Enhanced §6.3) and **Gaussian
-  paired-neighbor selection** *(landed)* (Enhanced §3, self-inverse maps in
-  `PairingTextures.cpp`) — see the note above.
+- **k ≥ 3 hybrid extension**: replay the prefix deeper before reconnecting. Today's
+  conservative k = 2 eligibility (roughness guard at the primary, opaque-only x_k,
+  non-delta edges, no medium entries) falls back to replay for most neighbours — measured
+  variance-neutral at ~3% cost. Needs multi-vertex records (or per-bounce re-capture) and
+  the criteria evaluated at each replayed vertex.
+- **Forced NEE reconnection** (paper §6.2.3): reconnect to NEE-sampled light vertices
+  during replay — removes light sampling from the replay path entirely.
+- **Paired shift-sharing** on the (c) self-inverse maps: each ordered shift computed once,
+  consumed by both endpoints — halves shift work once pairwise MIS lands.
+- **Stream compaction** over pixel–neighbour pairs (paper §6.2.2) for replay divergence.
 - **Dual motion vectors** (Enhanced §6.4 / Zeng 2021): applies to the A-SVGF/TAA
   reprojection (presentation stages), not to the reservoir.
 - **Temporal reuse without recursion bias:** an unbiased temporal form (e.g. GRIS pairwise
@@ -155,6 +153,13 @@ low-spp reference).
   presentation aids. Consequence: capture renders now show unclamped firefly *variance* on
   HDR content — that is the estimator's true noise floor, not a bug (see
   `Harmonia/PLAN.md` §7 bias-vs-noise method).
+- **Multi-frame captures are run-to-run pixel-reproducible — keep them that way.** Two sync
+  bugs were fixed to guarantee it (2026-09): the reservoir ping-pong needs its per-frame
+  buffer barrier in `GiPass::record` (frame N's `Cur` writes → frame N+1's `Prev` reads had
+  no dependency at all), and the GiPass descriptor set must be **per frame slot** — a single
+  mutable set rebound every frame races in-flight frames under UPDATE_AFTER_BIND (the
+  run-to-run nondeterminism root cause; the pool must be sized for ALL slots). Do not
+  regress either; reproducible captures are the parity workflow's debugging foundation.
 - **Convergence-to-Hyperion litmus:** a technique is acceptable on the converging path only
   if its contribution → 0 as samples/frames → ∞, OR it lives in a real-time-only layer
   (denoise, TAA, culling) bypassed in reference/accumulation mode. Irreducible bias is
