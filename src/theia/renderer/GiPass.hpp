@@ -8,6 +8,7 @@
 
 #include "harmonia/DeviceContext.hpp"
 #include "harmonia/core/Buffer.hpp"
+#include "harmonia/core/CommandPool.hpp"
 #include "harmonia/core/Image.hpp"
 #include "harmonia/core/VulkanHandle.hpp"
 #include "theia/renderer/RendererConstants.hpp"
@@ -117,8 +118,10 @@ class GiPass {
     GiPass(const GiPass&) = delete;
     GiPass& operator=(const GiPass&) = delete;
 
-    [[nodiscard]] bool
-    initialize(const harmonia::DeviceContext& ctx, const Config& cfg, const char* giSpv = "gi.comp.spv");
+    [[nodiscard]] bool initialize(const harmonia::DeviceContext& ctx,
+                                  const Config& cfg,
+                                  const harmonia::CommandPool& uploadPool,
+                                  const char* giSpv = "gi.comp.spv");
     void shutdown();
 
     /// Dispatch the GI accumulation pass. Call AFTER ForwardRenderer::recordFrame()
@@ -160,8 +163,12 @@ class GiPass {
             0; ///< GI2: 1 = ReSTIR PT (path integrator owns primary emissive NEE); 0 = legacy DI path
         std::uint32_t restirPtPathEnabled = 0; ///< GI2 full PT: 1 = multi-bounce path reservoir owns the indirect walk
         std::uint32_t fireflyClampEnabled = 1; ///< 1 = presentation clamp (default); 0 = estimator-pure capture
+        std::uint32_t pairingPerm0 = 0;        ///< GI-ENH pairing-texture 0 per-frame transform (19 packed bits)
+        std::uint32_t pairingPerm1 = 0;
+        std::uint32_t pairingPerm2 = 0;
+        std::uint32_t pairingEnabled = 0; ///< 1 = Gaussian paired neighbours in path-reservoir spatial reuse
     };
-    static_assert(sizeof(GiPushConstants) == 228);
+    static_assert(sizeof(GiPushConstants) == 244);
 
     [[nodiscard]] bool createDescriptors();
     [[nodiscard]] bool createPipeline(const char* giSpv);
@@ -206,6 +213,8 @@ class GiPass {
     harmonia::Buffer m_pathReservoirBuf[2]{};
     std::uint32_t m_pathReservoirPingPong = 0;
     bool m_pathReservoirsCleared = false;
+    /// GI-ENH: Gaussian paired-neighbor pairing maps (binding 22, static after init).
+    harmonia::Buffer m_pairingOffsetBuf{};
     harmonia::Image m_dummyMotionVectors{}; ///< 1×1 R32G32F zero placeholder for binding 18
     bool m_dummyMotionReady = false;
     VkImageView m_boundMotionVectorView = VK_NULL_HANDLE;

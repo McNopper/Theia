@@ -241,6 +241,7 @@ set(THEIA_LIBRARY_SOURCES
     src/theia/renderer/GpuCullPass.cpp
     src/theia/renderer/LightCuller.cpp
     src/theia/renderer/GiPass.cpp
+src/theia/renderer/PairingTextures.cpp
     src/theia/renderer/MotionVectorPass.cpp
     src/theia/renderer/TaaPass.cpp
     src/theia/renderer/HiZPass.cpp

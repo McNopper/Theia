@@ -60,32 +60,34 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
 |----|------|------|--------|
 | I6 | **Configurable frames-per-flip** (Theia window): render **N** accumulation frames per one swapchain present (**default N = 1** = current behaviour). N > 1 converges the *displayed* image faster per flip on a static/slow camera (each presented frame is the accumulation of N jittered sub-frames) at the cost of flip rate and input latency; accumulation still resets on camera move (as today). The interactive-window analogue of the headless `--offscreen-frames` path, distinct from TAA (which reprojects+blends rather than pure-accumulates). CLI flag `--frames-per-flip <N>` (default 1); validate against the convergence gate. Self-contained — VK6 present pacing is later polish, not a prerequisite. **Add the flag to the shared parser** (`Harmonia/src/harmonia/app/CliParser.cpp`), not to Theia's silent-swallow arg loop (that loop was the B5 bug — unknown args must hard-error). | — | **next** |
 | ANI3 | **Object motion vectors** — extend the MotionVectorPass beyond camera motion to animated instances (per-node velocity → TAA + ReSTIR temporal reuse). The plumbing is already in place but unused: `prevInstanceTransforms` is bound at `shaders/motion_vector.comp.slang:34` while the shader hardcodes the static-scene model (`:76`). | ANI1 (Aether) | backlog |
-| MOD4 | **Swapchain recreate on resize → `VK_KHR_swapchain_maintenance1`** — `VkSwapchainPresentScalingCreateInfoEXT` lets the driver scale to extent changes without the full teardown/rebuild in `Swapchain::recreate` (`handleResize`). A behavior decision (render-at-fixed-extent + scale vs current exact-match recreate), so recreate-on-resize is kept for now; the present-pacing half shipped as VK6 (v0.7.6). | — | backlog |
+| MOD4 | **Swapchain recreate on resize → `VK_KHR_swapchain_maintenance1`** — `VkSwapchainPresentScalingCreateInfoEXT` lets the driver scale to extent changes without the full teardown/rebuild in `Swapchain::recreate` (`handleResize`). A behavior decision (render-at-fixed-extent + scale vs current exact-match recreate), so recreate-on-resize is kept for now; the present-pacing half shipped as VK6 (v0.7.6). **Hardware now verified present** (2026-09 vulkaninfo); the decision is behavioral only. | — | backlog |
 | SM6-Theia | **slang-math v0.3.0 migration slice** — replace hand-rolled sites (`src/theia/scene/Scene.cpp:530` saturate; per-component trig in `src/theia/renderer/CameraController.hpp:36,78` → SM2 functions); bump the FetchContent pin in this repo's release commit. Track origin: slang-math/PLAN.md SM6. | slang-math v0.3.0 tag | backlog |
 
-### ReSTIR-PT refinements (GI-ENH — active)
+### ReSTIR-PT refinements (GI-ENH — (a) remains)
 
 Owned here (the reservoir lives in `gi.comp.slang`); the estimator half of either item is
 shared with Harmonia. Primary source: *ReSTIR PT Enhanced* (Lin, Kettunen, Wyman —
 I3D/PACMCGIT 2026, Best Paper, [doi:10.1145/3804494](https://doi.org/10.1145/3804494))
-on top of Lin 2022 GRIS:
+on top of Lin 2022 GRIS. *(Landed: vector-valued resampling weights (§6.3) and Gaussian
+paired-neighbor selection (§3) — expectation-identical by construction: `p̂·s ≡ u` makes
+the marginalised shade share the selected form's per-set luma exactly, so only per-candidate
+color allocation changes; bias floors measured invariant.)*
 
 - **Reconnection shift for the path reservoir, with footprint-based criteria** (GRIS §5 +
   Enhanced §4): replay-only reuse is unbiased but discards path-suffix correlation;
   reconnection (re-route the primary vertex, keep suffix vertices 1+) with the shift Jacobian
-  raises reuse quality on glossy surfaces. Reconnect at the first vertex satisfying the dual
+  raises reuse quality on glossy surfaces AND replaces the per-neighbour full replay with a
+  cached-suffix evaluation (1 shadow ray + BSDF re-evals instead of a multi-bounce walk).
+  Reconnect at the first vertex satisfying the dual
   ray-footprint test `min(1/(pˣ_{k−1}·G), 1/(pˣ_k·G_rev)) ≥ (c/100)·R_pri²` (c=0.02,
   `R_pri² = ‖x₀−x₁‖²·⟨n₁,ω₁⟩/(4π)` — scene-scale-independent, replaces scene-tuned
   distance/roughness thresholds) plus the single-vertex roughness guard α_{k−1} ≥ 0.2;
   skip the inverse test when x_k is diffuse/emissive. Needs path-vertex storage in the
-  reservoir (~256B stride) — paper-grade.
-- **Vector-valued resampling weights** (Enhanced §6.3): accumulate the spatial candidates'
-  RGB weights `Σ m_i·F(Y_i)·W_i` for shading instead of the scalar-selected sample's
-  `F(Y)·W` — kills chroma noise at zero extra cost (F was already evaluated for p̂).
-- **Gaussian paired-neighbor selection** (Enhanced §3): self-inverse offset textures
-  (σ=16 ≙ R=30 disk, per-frame flip/mirror/transpose/offset) replace uniform-square draws.
-  NB: the paper's 2× spatial-cost win assumes pairwise MIS's two shifts per neighbor; our
-  seed-space plain-RIS scheme already pays one, so this is a *quality* change here.
+  reservoir (the paper's compact (instance, primitive, barycentrics) reconnection record +
+  incident radiance + cached Jacobian product — stride 64→128 B) — paper-grade.
+- **Vector-valued resampling weights** *(landed)* (Enhanced §6.3) and **Gaussian
+  paired-neighbor selection** *(landed)* (Enhanced §3, self-inverse maps in
+  `PairingTextures.cpp`) — see the note above.
 - **Dual motion vectors** (Enhanced §6.4 / Zeng 2021): applies to the A-SVGF/TAA
   reprojection (presentation stages), not to the reservoir.
 - **Temporal reuse without recursion bias:** an unbiased temporal form (e.g. GRIS pairwise

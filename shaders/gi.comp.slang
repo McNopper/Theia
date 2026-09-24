@@ -51,6 +51,10 @@ cbuffer GiPC {
     uint     restirPtPathEnabled;          // GI2 full PT: 1 = multi-bounce path reservoir owns the indirect walk
     uint     fireflyClampEnabled;          // 1 = presentation firefly clamp (interactive default);
                                            // 0 = estimator-pure capture (--output): no clamp, NaN/Inf guard only
+    uint     pairingPerm0;                 // GI-ENH: per-frame pairing-texture transform, texture 0
+    uint     pairingPerm1;                 //   bits 0-2 = mirrorY|mirrorX|transpose, 3-10 = offsetX,
+    uint     pairingPerm2;                 //   11-18 = offsetY (tile phase; decorrelates the static maps)
+    uint     pairingEnabled;               // 1 = Gaussian paired neighbours (path-reservoir spatial reuse)
 };
 
 // ── A4: ReSTIR DI reservoir type ──────────────────────────────────────────────
@@ -177,16 +181,20 @@ RngState pathReplaySeed(uint key, uint index) {
 // WRS update with a replayable candidate (weight = p̂ = luminance(g); the
 // seed-space proposal density q ≡ 1 cancels). Attempts count toward M even when
 // the walk degenerated, keeping M consistent with the candidate budget.
+// GI-ENH §6.3: shadeSum accumulates the vector-valued weight g·(w/p̂) = g.
 void pathReservoirUpdate(inout PathReservoir r, RngState candSeed, float3 g, bool valid,
-                         inout RngState rng) {
+                         inout float3 shadeSum, inout RngState rng) {
     const float w = valid ? restirTargetLuma(g) : 0.0;
     r.w_sum += w;
     r.M += 1u;
-    if (w > 0.0 && randFloat(rng) < (w / max(r.w_sum, 1.0e-10))) {
-        r.rngKey        = candSeed.key;
-        r.rngIndex      = candSeed.index;
-        r.g             = g;
-        r.candidateHash = pathCandidateHash(candSeed.key, candSeed.index);
+    if (w > 0.0) {
+        shadeSum += g;
+        if (randFloat(rng) < (w / max(r.w_sum, 1.0e-10))) {
+            r.rngKey        = candSeed.key;
+            r.rngIndex      = candSeed.index;
+            r.g             = g;
+            r.candidateHash = pathCandidateHash(candSeed.key, candSeed.index);
+        }
     }
 }
 
@@ -195,17 +203,25 @@ void pathReservoirUpdate(inout PathReservoir r, RngState candSeed, float3 g, boo
 // primary surface; its luminance is p̂(y_src) evaluated at the current pixel.
 // On selection the reservoir stores the LOCAL replay (never the source's g,
 // which was evaluated at a different surface).
+//
+// GI-ENH §6.3: additionally accumulate the VECTOR-valued resampling weight
+// shadeSum += g · (w / p̂) = g · W_src·M_src (the candidate's contribution
+// marginalised over the selection — see restirPtIndirect's final shade).
 void pathReservoirCombine(inout PathReservoir r_dst, PathReservoir r_src,
-                          float3 gReplayed, bool replayValid, inout RngState rng) {
+                          float3 gReplayed, bool replayValid, inout float3 shadeSum,
+                          inout RngState rng) {
     const float pHat = replayValid ? restirTargetLuma(gReplayed) : 0.0;
     const float w = pHat * r_src.W * float(r_src.M);
     r_dst.M += r_src.M;
     r_dst.w_sum += w;
-    if (w > 0.0 && randFloat(rng) < (w / max(r_dst.w_sum, 1.0e-10))) {
-        r_dst.rngKey        = r_src.rngKey;
-        r_dst.rngIndex      = r_src.rngIndex;
-        r_dst.g             = gReplayed;
-        r_dst.candidateHash = r_src.candidateHash;
+    if (w > 0.0) {
+        shadeSum += gReplayed * (r_src.W * float(r_src.M));
+        if (randFloat(rng) < (w / max(r_dst.w_sum, 1.0e-10))) {
+            r_dst.rngKey        = r_src.rngKey;
+            r_dst.rngIndex      = r_src.rngIndex;
+            r_dst.g             = gReplayed;
+            r_dst.candidateHash = r_src.candidateHash;
+        }
     }
 }
 
@@ -255,6 +271,48 @@ float targetPdfEnv(float3 Le, float3 bsdfTimesCos) {
 // Layout: one PathReservoir per pixel, indexed [y * screenWidth + x].
 [[vk::binding(20, 0)]] RWStructuredBuffer<PathReservoir>   t_pathReservoirsCur;   // current-frame write
 [[vk::binding(21, 0)]] StructuredBuffer<PathReservoir>     t_pathReservoirsPrev;  // previous-frame read
+
+// GI-ENH: Gaussian paired-neighbor pairing textures (built by PairingTextures.cpp,
+// uploaded once). Three concatenated self-inverse offset maps (254/230/210), one
+// packed int16x2 texel per uint (x low, y high).
+[[vk::binding(22, 0)]] StructuredBuffer<uint>              t_pairingOffsets;
+
+// ── GI-ENH (ReSTIR PT Enhanced §3): Gaussian paired-neighbor selection ────────
+// Texel (x, y) of each pairing map holds the offset to its unique partner (an
+// involution), so selecting neighbour A of B implies selecting B of A. Pair
+// displacements are isotropic Gaussian, sigma 16 px per axis (matched to the
+// previous uniform-disk radius 30 px). The per-frame transform
+// (transpose/mirror/offset — paper §3.2) decorrelates the map's tiling so no
+// fixed spatial pattern enters the accumulated image. NB: the paper's pairing
+// exists to share one shift evaluation between both endpoints (2x spatial cost
+// win against pairwise-MIS baselines); this repo's seed-space plain-RIS scheme
+// pays one replay per neighbour and evaluates one direction only, so here the
+// change is a QUALITY one (Gaussian-concentrated neighbours → higher G-buffer
+// compatibility and better FLIP at equal mean radius). The self-inverse pairing
+// is kept so the paper's shift-sharing upgrade can drop in with the reconnection
+// shift later.
+static const uint kPairTexels0 = 254u * 254u;
+static const uint kPairTexels1 = 230u * 230u;
+
+int2 pairingOffset(uint texIdx, uint2 px) {
+    const int s = (texIdx == 0u) ? 254 : ((texIdx == 1u) ? 230 : 210);
+    const uint base = (texIdx == 0u) ? 0u : ((texIdx == 1u) ? kPairTexels0 : kPairTexels0 + kPairTexels1);
+    const uint perm = (texIdx == 0u) ? pairingPerm0 : ((texIdx == 1u) ? pairingPerm1 : pairingPerm2);
+    int2 t = int2(px);
+    if ((perm & 4u) != 0u) { t = t.yx; }  // transpose
+    if ((perm & 2u) != 0u) { t.x = -t.x; } // mirror x
+    if ((perm & 1u) != 0u) { t.y = -t.y; } // mirror y
+    t += int2(int((perm >> 3) & 0xFFu), int((perm >> 11) & 0xFFu)); // tile phase
+    const uint2 tc = uint2(uint(((t.x % s) + s) % s), uint(((t.y % s) + s) % s));
+    const uint v = t_pairingOffsets[base + tc.y * uint(s) + tc.x];
+    int2 d = int2(int(v << 16) >> 16, int(v) >> 16); // sign-extended int16 pair
+    // Inverse-transform the displacement back into screen space (mirror axes
+    // negate, transpose swaps) so the pairing stays an involution there too.
+    if ((perm & 1u) != 0u) { d.y = -d.y; }
+    if ((perm & 2u) != 0u) { d.x = -d.x; }
+    if ((perm & 4u) != 0u) { d = d.yx; }
+    return d;
+}
 
 /// Inverse of a row-major 3×3 lives in common.slang (shared with forward_render.mesh).
 
@@ -1241,11 +1299,12 @@ float4 restirPtIndirect(SurfaceHit primary, uint2 px, float adaptiveClamp, inout
 
     // ── Local candidates — stored UNMERGED for next frame's spatial reuse. ──
     PathReservoir rLocal = makeEmptyPathReservoir();
+    float3 shadeSum = 0.0.xxx; // GI-ENH §6.3: vector-valued resampling weights (RGB)
     for (uint i = 0u; i < kPathLocalCandidates; ++i) {
         const RngState candSeed = pathCandidateSeed(px, i);
         float3 g;
         const bool valid = traceGiPathCandidate(primary, candSeed, adaptiveClamp, g);
-        pathReservoirUpdate(rLocal, candSeed, g, valid, rng);
+        pathReservoirUpdate(rLocal, candSeed, g, valid, shadeSum, rng);
     }
     // Unbiased weight of the local reservoir (neighbours merge with w = p̂·W·M).
     {
@@ -1275,8 +1334,14 @@ float4 restirPtIndirect(SurfaceHit primary, uint2 px, float adaptiveClamp, inout
         uint seenCount = 1u;
 
         for (uint n = 0u; n < kPathSpatialNeighbors; ++n) {
-            const float2 off = (float2(randFloat(rng), randFloat(rng)) * 2.0 - 1.0) * kSpatialRadius;
-            const int2 nCoord = int2(int(px.x) + int(round(off.x)), int(px.y) + int(round(off.y)));
+            int2 off;
+            if (pairingEnabled != 0u) {
+                off = pairingOffset(n, px); // GI-ENH: deterministic Gaussian pair
+            } else {
+                const float2 rnd = (float2(randFloat(rng), randFloat(rng)) * 2.0 - 1.0) * kSpatialRadius;
+                off = int2(int(round(rnd.x)), int(round(rnd.y)));
+            }
+            const int2 nCoord = int2(int(px.x) + off.x, int(px.y) + off.y);
             if (nCoord.x < 0 || nCoord.y < 0 ||
                 nCoord.x >= int(screenWidth) || nCoord.y >= int(screenHeight)) {
                 continue;
@@ -1304,19 +1369,19 @@ float4 restirPtIndirect(SurfaceHit primary, uint2 px, float adaptiveClamp, inout
             float3 gN;
             const bool vn = traceGiPathCandidate(primary, pathReplaySeed(neighbor.rngKey, neighbor.rngIndex),
                                                  adaptiveClamp, gN);
-            pathReservoirCombine(r, neighbor, gN, vn, rng);
+            pathReservoirCombine(r, neighbor, gN, vn, shadeSum, rng);
         }
     }
 
-    // ── Final unbiased weight W = w_sum / (M · p̂(y)); contribution = g(y)·W. ──
-    float3 contribution = 0.0.xxx;
-    const float pHat = restirTargetLuma(r.g);
-    if (r.M > 0u && pHat > 0.0) {
-        r.W = r.w_sum / max(float(r.M) * pHat, 1.0e-10);
-        contribution = r.g * r.W;
-    } else {
-        r.W = 0.0;
-    }
+    // ── Final shade: GI-ENH §6.3 vector-valued resampling weights. ──────────
+    // Every merged candidate is FULLY evaluated at this surface (the replay is a
+    // complete walk), so the WRS selection among candidates is pure variance:
+    // `g_sel · W` and `Σ_j g_j·s_j / M` (s_j = w_j/p̂_j — 1 for local candidates,
+    // W_src·M_src for merged sources) have IDENTICAL conditional expectation, the
+    // latter being the exact marginalisation over the selection ("accumulate
+    // Σ m_i·F(Y_i)·W_i·|J| as RGB" of the paper). Shade with the marginalised sum:
+    // same estimator, strictly less variance, no per-candidate chroma decorrelation.
+    float3 contribution = (r.M > 0u) ? (shadeSum / float(r.M)) : 0.0.xxx;
     if (!all(isfinite(contribution)) || any(isnan(contribution))) {
         contribution = 0.0.xxx;
     }

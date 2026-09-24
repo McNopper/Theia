@@ -128,7 +128,7 @@ bool Application::onInitialize() {
             .gbufferImage = m_renderer->gbufferImage(),
             .gbufferView = m_renderer->gbufferView(),
         };
-        if (!m_giPass.initialize(deviceContext(), giCfg)) {
+        if (!m_giPass.initialize(deviceContext(), giCfg, commandPool())) {
             harmonia::Logger::warn("GiPass failed to initialize — ray-query GI disabled");
         }
         // The forward pass emits direct + emission only; GiPass supplies the indirect term.
@@ -699,7 +699,7 @@ void Application::onResize(VkExtent2D extent) noexcept {
             .gbufferImage = m_renderer->gbufferImage(),
             .gbufferView = m_renderer->gbufferView(),
         };
-        if (!m_giPass.initialize(deviceContext(), giCfg)) {
+        if (!m_giPass.initialize(deviceContext(), giCfg, commandPool())) {
             harmonia::Logger::warn("GiPass resize failed — ray-query GI disabled");
         }
         m_renderer->setRestirDiActive(giActive() && (m_useRestirDi || m_useRestirPt));
