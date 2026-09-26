@@ -11,6 +11,7 @@
 #include "harmonia/DeviceContext.hpp"
 #include "harmonia/core/Buffer.hpp"
 #include "harmonia/core/CommandPool.hpp"
+#include "harmonia/core/DescriptorBufferWriter.hpp"
 #include "harmonia/core/Image.hpp"
 #include "harmonia/core/VulkanHandle.hpp"
 #include "harmonia/renderer/Camera.hpp"
@@ -70,7 +71,7 @@ class ForwardRenderer {
     /// Env sampler / placeholder view owned by the renderer, used to keep the env descriptor
     /// set valid when a scene has no environment map (sky/GI gate reads on hasEnv).
     [[nodiscard]] VkSampler envSampler() const noexcept { return m_envSampler; }
-    [[nodiscard]] VkImageView dummyEnvView() const noexcept { return m_dummyEnv.view(); }
+    // VK14: no dummyEnvView — nullDescriptor handles absent env.
     /// Bind env-importance CDF buffers used by transparent-path stochastic env sampling.
     void setEnvImportanceSampling(VkBuffer marginalCdf,
                                   VkBuffer conditionalCdf,
@@ -246,17 +247,17 @@ class ForwardRenderer {
 
     /// Descriptor-binding cohort (extracted, R8/CH9): the four mesh-shader descriptor sets
     /// (geometry / material+light / IBL / bindless-texture) + their layouts + the pool.
+    /// MOD1: descriptor buffer writers replace pool + allocated sets.
     struct DescriptorState {
         harmonia::UniqueDescriptorSetLayout meshSetLayout; ///< set 0: geometry buffers
-        VkDescriptorSet meshSet = VK_NULL_HANDLE;
-        harmonia::UniqueDescriptorSetLayout matSetLayout; ///< set 1: material/lighting buffers
-        VkDescriptorSet matSet = VK_NULL_HANDLE;
-        harmonia::UniqueDescriptorSetLayout iblSetLayout; ///< set 2: IBL textures + samplers
-        VkDescriptorSet iblSet = VK_NULL_HANDLE;
+        harmonia::UniqueDescriptorSetLayout matSetLayout;  ///< set 1: material/lighting buffers
+        harmonia::UniqueDescriptorSetLayout iblSetLayout;  ///< set 2: IBL textures + samplers
         harmonia::UniqueDescriptorSetLayout textureSetLayout; ///< set 3: bindless material textures
-        VkDescriptorSet textureSet = VK_NULL_HANDLE;
+        harmonia::DescriptorBufferWriter mesh;
+        harmonia::DescriptorBufferWriter mat;
+        harmonia::DescriptorBufferWriter ibl;
+        harmonia::DescriptorBufferWriter texture;
         const Scene* texturesBoundFor = nullptr; ///< scene the bindless set was last written for
-        harmonia::UniqueDescriptorPool descriptorPool;
     } m_desc;
 
     VkDescriptorImageInfo m_envSamplerInfo{};
@@ -267,11 +268,9 @@ class ForwardRenderer {
     std::uint32_t m_envImportanceHeight = 0;
     float m_envUnitNits = 1.0f; ///< env_unit_nits for the raw-env sky background
 
-    /// Env sampler + 1×1 placeholder image keeping the env descriptor set valid when a scene
-    /// has no environment map (sky/GI gate reads on hasEnv, so the placeholder is never sampled).
+    // VK14: no dummy env/tile resources — nullDescriptor handles absent bindings.
     harmonia::UniqueSampler m_envSampler;
-    harmonia::Image m_dummyEnv;
-    bool m_dummyEnvReady = false; ///< one-time UNDEFINED → SHADER_READ_ONLY_OPTIMAL transition
+    // VK14: no dummy resources.
 
     // Tile-based light culling buffers (set by LightCuller before each recordFrame).
     VkBuffer m_tileLightCountsBuf = VK_NULL_HANDLE;
@@ -279,8 +278,7 @@ class ForwardRenderer {
     std::uint32_t m_tilesX = 0;
     std::uint32_t m_tilesY = 0;
     // Dummy 1-element buffers bound when no tile data is available (fallback to full light loop).
-    harmonia::Buffer m_dummyTileCounts;
-    harmonia::Buffer m_dummyTileIndices;
+    // VK14: no tile dummies.
 
     bool m_initialized = false;
     bool m_hdrFirstUse = true; ///< tracks whether HDR image is still in UNDEFINED layout

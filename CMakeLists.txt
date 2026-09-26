@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(theia VERSION 0.7.8 LANGUAGES C CXX)
+project(theia VERSION 0.7.9 LANGUAGES C CXX)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
@@ -212,7 +212,7 @@ FetchContent_Declare(
 FetchContent_Declare(
     harmonia
     GIT_REPOSITORY https://github.com/McNopper/Harmonia.git
-    GIT_TAG v0.7.8
+    GIT_TAG v0.7.9
 )
 FetchContent_MakeAvailable(aether harmonia)
 
@@ -355,7 +355,7 @@ if(PROJECT_IS_TOP_LEVEL)
     if(Python3_Interpreter_FOUND)
         add_test(NAME test_tidy
                  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_tidy.py)
-        set_tests_properties(test_tidy PROPERTIES SKIP_RETURN_CODE 77 LABELS analysis)
+        set_tests_properties(test_tidy PROPERTIES SKIP_RETURN_CODE 77 LABELS analysis RUN_SERIAL TRUE)
     endif()
 endif()
 

@@ -36,11 +36,14 @@ Application::~Application() {
         commandPool().free(m_stagesCmdBufs[1]);
         m_stagesCmdBufs[1] = VK_NULL_HANDLE;
     }
+    // MOD2: timeline semaphore replaces the async-compute VkFences — a single semaphore
+    // with monotonically increasing signal values (the host waits for the value from
+    // 2 frames ago, the same slot's previous use).
+    if (m_asyncTimelineSemaphore != VK_NULL_HANDLE) {
+        vkDestroySemaphore(dev, m_asyncTimelineSemaphore, nullptr);
+        m_asyncTimelineSemaphore = VK_NULL_HANDLE;
+    }
     for (std::size_t i = 0; i < 2; ++i) {
-        if (m_asyncFences[i] != VK_NULL_HANDLE) {
-            vkDestroyFence(dev, m_asyncFences[i], nullptr);
-            m_asyncFences[i] = VK_NULL_HANDLE;
-        }
         if (m_asyncSemaphores[i] != VK_NULL_HANDLE) {
             vkDestroySemaphore(dev, m_asyncSemaphores[i], nullptr);
             m_asyncSemaphores[i] = VK_NULL_HANDLE;
@@ -85,17 +88,32 @@ bool Application::onInitialize() {
     // the accumulation integrates the same pixel footprint as Hyperion's per-sample jitter.
     // Interactive rendering is unchanged.
     m_pureEstimatorCapture = !config().outputFile.empty();
-    // Debug/A-B toggle: set THEIA_NO_RECONNECTION to disable the GI-ENH (a) reconnection
-    // shift (replay-only fallback) for A/B measurement.
+    // Debug/A-B toggles for the GI-ENH (a) reconnection shift family:
+    //   THEIA_NO_RECONNECTION=1  -> replay-only (mask 0), the historical clean baseline.
+    //   THEIA_SHIFT_MASK=<n>     -> feature mask (step-through debug):
+    //       bit0 (1) = k=2 reconnection shift
+    //       bit1 (2) = k>=3 hybrid reconnection shift
+    // Default (unset) = all features on (mask 3).
     {
         char* noReconnectRaw = nullptr;
         std::size_t noReconnectLen = 0;
         if (_dupenv_s(&noReconnectRaw, &noReconnectLen, "THEIA_NO_RECONNECTION") == 0 && noReconnectRaw != nullptr) {
-            m_reconnectShiftEnabled = !(noReconnectRaw[0] != '\0' && noReconnectRaw[0] != '0');
+            m_reconnectShiftEnabled = !(noReconnectRaw[0] != '\0' && noReconnectRaw[0] != '0') ? 3u : 0u;
             std::free(noReconnectRaw);
-            if (!m_reconnectShiftEnabled) {
+            if (m_reconnectShiftEnabled == 0u) {
                 harmonia::Logger::info("THEIA_NO_RECONNECTION set — reconnection shift disabled (replay-only)");
             }
+        }
+        char* shiftMaskRaw = nullptr;
+        std::size_t shiftMaskLen = 0;
+        if (_dupenv_s(&shiftMaskRaw, &shiftMaskLen, "THEIA_SHIFT_MASK") == 0 && shiftMaskRaw != nullptr) {
+            m_reconnectShiftEnabled =
+                static_cast<std::uint32_t>(std::strtoul(shiftMaskRaw, nullptr, 0)) & 3u;
+            std::free(shiftMaskRaw);
+            harmonia::Logger::info("THEIA_SHIFT_MASK = {} (k2={} k3={})",
+                m_reconnectShiftEnabled,
+                (m_reconnectShiftEnabled & 1u) != 0u,
+                (m_reconnectShiftEnabled & 2u) != 0u);
         }
     }
     if (m_pureEstimatorCapture) {
@@ -226,15 +244,24 @@ bool Application::onInitialize() {
             .pNext = nullptr,
             .flags = 0,
         };
-        constexpr VkFenceCreateInfo fenceInfo{
-            .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+        // MOD2: single timeline semaphore replaces the per-slot VkFences. Monotonically
+        // increasing signal values track async-compute completion; the host waits for
+        // the value from 2 frames ago (the same slot's previous use).
+        const VkSemaphoreTypeCreateInfo timelineTypeInfo{
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO,
             .pNext = nullptr,
-            .flags = VK_FENCE_CREATE_SIGNALED_BIT,
+            .semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE,
+            .initialValue = 0,
         };
+        const VkSemaphoreCreateInfo timelineInfo{
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+            .pNext = &timelineTypeInfo,
+            .flags = 0,
+        };
+        ok = ok && (vkCreateSemaphore(dev, &timelineInfo, nullptr, &m_asyncTimelineSemaphore) == VK_SUCCESS);
         for (int i = 0; i < 2 && ok; ++i) {
             ok = ok && (vkCreateSemaphore(dev, &semInfo, nullptr, &m_gfxDoneSemaphores[i]) == VK_SUCCESS);
             ok = ok && (vkCreateSemaphore(dev, &semInfo, nullptr, &m_asyncSemaphores[i]) == VK_SUCCESS);
-            ok = ok && (vkCreateFence(dev, &fenceInfo, nullptr, &m_asyncFences[i]) == VK_SUCCESS);
         }
 
         if (ok) {
@@ -314,7 +341,7 @@ bool Application::onSceneLoaded(const harmonia::SceneLoader::SceneConfig& sceneC
     // valid — the shader gates all env reads on hasEnvMap.
     m_env.hasEnv = hasEnv;
     m_env.nits = envNits;
-    m_env.view = hasEnv ? envView : m_renderer->dummyEnvView();
+    m_env.view = hasEnv ? envView : VK_NULL_HANDLE; // VK14 nullDescriptor
     m_env.sampler = hasEnv ? envSampler : m_renderer->envSampler();
     m_env.marginalCdf = marginalCdf;
     m_env.conditionalCdf = conditionalCdf;
@@ -523,11 +550,21 @@ void Application::submitAsyncCompute(VkCommandBuffer cmd,
     }};
     harmonia::pipelineBarrier(cmd, gfxRelease);
 
-    if (const VkResult r = vkWaitForFences(deviceContext().device, 1, &m_asyncFences[slot], VK_TRUE, UINT64_MAX);
-        r != VK_SUCCESS)
-        harmonia::Logger::error("async compute wait for fences failed: {}", static_cast<std::int32_t>(r));
-    if (const VkResult r = vkResetFences(deviceContext().device, 1, &m_asyncFences[slot]); r != VK_SUCCESS)
-        harmonia::Logger::error("async compute reset fences failed: {}", static_cast<std::int32_t>(r));
+    // MOD2: wait for the same slot's PREVIOUS async-compute completion (2 frames ago)
+    // via the timeline semaphore. Signal value is monotonic — no reset needed.
+    if (m_asyncSignalValue >= 2) { // the first two frames have nothing to wait for
+        const std::uint64_t waitValue = m_asyncSignalValue - 2;
+        const VkSemaphoreWaitInfo waitInfo{
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .semaphoreCount = 1,
+            .pSemaphores = &m_asyncTimelineSemaphore,
+            .pValues = &waitValue,
+        };
+        if (const VkResult r = vkWaitSemaphores(deviceContext().device, &waitInfo, UINT64_MAX); r != VK_SUCCESS)
+            harmonia::Logger::error("async compute timeline wait failed: {}", static_cast<std::int32_t>(r));
+    }
     if (const VkResult r = vkResetCommandBuffer(m_asyncCmdBufs[slot], 0); r != VK_SUCCESS)
         harmonia::Logger::error("async compute reset command buffer failed: {}", static_cast<std::int32_t>(r));
     constexpr VkCommandBufferBeginInfo asyncBegin{
@@ -815,6 +852,18 @@ std::pair<VkCommandBuffer, VkSemaphore> Application::onBeforeSceneStages(VkComma
         .stageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
         .deviceIndex = 0,
     };
+    // MOD2: timeline semaphore signal replaces the VkFence — monotonically increasing
+    // value tracks completion for this slot (the host waits for value-2 in 2 frames).
+    ++m_asyncSignalValue;
+    const VkSemaphoreSubmitInfo timelineSignalInfo{
+        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+        .pNext = nullptr,
+        .semaphore = m_asyncTimelineSemaphore,
+        .value = m_asyncSignalValue,
+        .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+        .deviceIndex = 0,
+    };
+    const VkSemaphoreSubmitInfo asyncSignals[2] = {asyncSignal, timelineSignalInfo};
     const VkSubmitInfo2 asyncSubmit{
         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2,
         .pNext = nullptr,
@@ -823,10 +872,10 @@ std::pair<VkCommandBuffer, VkSemaphore> Application::onBeforeSceneStages(VkComma
         .pWaitSemaphoreInfos = &asyncWaitInfo,
         .commandBufferInfoCount = 1,
         .pCommandBufferInfos = &asyncCmdInfo,
-        .signalSemaphoreInfoCount = 1,
-        .pSignalSemaphoreInfos = &asyncSignal,
+        .signalSemaphoreInfoCount = 2,
+        .pSignalSemaphoreInfos = asyncSignals,
     };
-    if (const VkResult r = vkQueueSubmit2(deviceContext().asyncComputeQueue, 1, &asyncSubmit, m_asyncFences[slot]);
+    if (const VkResult r = vkQueueSubmit2(deviceContext().asyncComputeQueue, 1, &asyncSubmit, VK_NULL_HANDLE);
         r != VK_SUCCESS)
         harmonia::Logger::error("async compute submit failed: {}", static_cast<std::int32_t>(r));
 

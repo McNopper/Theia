@@ -140,8 +140,9 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     /// roughness regularization off (both are Theia-only presentation biases), camera
     /// jitter forced on (same pixel-footprint integral as Hyperion's per-sample jitter).
     bool m_pureEstimatorCapture = false;
-    /// GI-ENH (a): reconnection shift enabled (THEIA_NO_RECONNECTION=1 disables — A/B only).
-    bool m_reconnectShiftEnabled = true;
+    /// GI-ENH (a): reconnection shift feature mask (THEIA_NO_RECONNECTION=0 / THEIA_SHIFT_MASK).
+    /// bit0 = k=2 shift, bit1 = k>=3 shift. 0 = replay-only.
+    std::uint32_t m_reconnectShiftEnabled = 3u;
     std::uint32_t m_sceneMaxDepth = 3u;
 
     /// Previous frame's row-major view-projection matrix for motion vector computation.
@@ -172,12 +173,16 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     // the graphics queue simultaneously. MotionVectorPass runs in the graphics
     // stages cmd to keep motionVectorImage on the graphics queue family.
     VkCommandPool m_asyncCmdPool = VK_NULL_HANDLE;
+    /// MOD2: single timeline semaphore replaces the per-slot VkFences for async-compute
+    /// completion. Monotonically increasing signal values; the host waits for value−2
+    /// (the same slot's previous use) before re-recording.
+    VkSemaphore m_asyncTimelineSemaphore = VK_NULL_HANDLE;
+    std::uint64_t m_asyncSignalValue = 0;
     std::array<VkCommandBuffer, 2> m_asyncCmdBufs = {VK_NULL_HANDLE, VK_NULL_HANDLE};
     /// Per-slot graphics-family cmd bufs for the scene stages (denoiser etc.) in async mode.
     std::array<VkCommandBuffer, 2> m_stagesCmdBufs = {VK_NULL_HANDLE, VK_NULL_HANDLE};
     std::array<VkSemaphore, 2> m_gfxDoneSemaphores = {VK_NULL_HANDLE, VK_NULL_HANDLE};
     std::array<VkSemaphore, 2> m_asyncSemaphores = {VK_NULL_HANDLE, VK_NULL_HANDLE};
-    std::array<VkFence, 2> m_asyncFences = {VK_NULL_HANDLE, VK_NULL_HANDLE};
     bool m_asyncComputeEnabled = false;
     /// Pending motion-vector params set in record() and consumed by onBeforeSceneStages().
     MotionVectorPass::FrameParams m_pendingMvp{};

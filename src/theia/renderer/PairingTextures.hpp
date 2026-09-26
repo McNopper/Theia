@@ -13,9 +13,11 @@ namespace theia {
 // screen) whose pair displacements follow an isotropic Gaussian with per-axis
 // sigma 16 px (matched to the uniform-disk radius 30 px of the previous random
 // draws: sigma = sqrt(8/(9*pi)) * R). Texel (x, y) holds the offset to its unique
-// partner, so selecting neighbour A of B implies selecting B of A — the pairing
-// property the paper's shift-sharing upgrade needs (a plain quality upgrade for
-// this repo's one-replay-per-neighbour scheme).
+// partner, so selecting neighbour A of B implies selecting B of A.
+// In the paper this pairing also amortises the two shifts pairwise MIS needs;
+// that reuse was tried here and removed (this architecture uses "shift OR replay
+// per candidate", so there is no second shift to share). The pairing remains a
+// pure QUALITY upgrade for this repo's one-replay-per-neighbour scheme.
 //
 // The GPU applies a per-frame flip/mirror/transpose/offset to the static maps
 // (paper §3.2) so the tiling never bakes a fixed spatial pattern into the

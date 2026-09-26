@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <slang-math/slang-math.hpp>
 #include <utility>
 #include <vector>
@@ -42,7 +43,8 @@ bool GpuCullPass::initialize(const harmonia::DeviceContext& ctx, const char* spv
 
     auto compactBuf = harmonia::Buffer::create(ctx,
                                                kCompactListSize,
-                                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                   VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                                VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
                                                "theia.gpuCull.compactInstanceList");
     auto indirectBuf =
@@ -71,8 +73,10 @@ bool GpuCullPass::initialize(const harmonia::DeviceContext& ctx, const char* spv
         VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
         VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
     };
-    constexpr VkDescriptorBindingFlags kUAB = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
-    constexpr std::array<VkDescriptorBindingFlags, 4> bindingFlags{kUAB, kUAB, kUAB, kUAB};
+    // MOD1: no UPDATE_AFTER_BIND — incompatible with DESCRIPTOR_BUFFER layouts.
+    // The descriptor buffer is host-visible and written directly (no update-after-bind
+    // semantics needed).
+    constexpr std::array<VkDescriptorBindingFlags, 4> bindingFlags{0, 0, 0, 0};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = static_cast<std::uint32_t>(bindingFlags.size()),
@@ -81,7 +85,9 @@ bool GpuCullPass::initialize(const harmonia::DeviceContext& ctx, const char* spv
     const VkDescriptorSetLayoutCreateInfo setLayoutInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = &flagsInfo,
-        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
+        // MOD1: descriptor buffer path — this layout is used with a GPU descriptor
+        // buffer (vkCmdBindDescriptorBuffersEXT), not with a descriptor pool/set.
+        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT,
         .bindingCount = static_cast<std::uint32_t>(bindings.size()),
         .pBindings = bindings.data(),
     };
@@ -130,6 +136,8 @@ bool GpuCullPass::initialize(const harmonia::DeviceContext& ctx, const char* spv
     }
     const VkComputePipelineCreateInfo pipelineInfo{
         .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+        // MOD1: this pipeline uses descriptor buffers (not descriptor sets).
+        .flags = VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT,
         .stage =
             VkPipelineShaderStageCreateInfo{
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -149,59 +157,14 @@ bool GpuCullPass::initialize(const harmonia::DeviceContext& ctx, const char* spv
     }
     m_pipeline = harmonia::UniquePipeline{ctx.device, pipeline};
 
-    // --- Descriptor pool + set ---
-    const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 4};
-    const VkDescriptorPoolCreateInfo poolInfo{
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-        .flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
-        .maxSets = 1,
-        .poolSizeCount = 1,
-        .pPoolSizes = &poolSize,
-    };
-    VkDescriptorPool pool{};
-    if (vkCreateDescriptorPool(ctx.device, &poolInfo, nullptr, &pool) != VK_SUCCESS) {
-        harmonia::Logger::error("GpuCullPass: failed to create descriptor pool");
-        return false;
-    }
-    m_pool = harmonia::UniqueDescriptorPool{ctx.device, pool};
-    const VkDescriptorSetAllocateInfo allocInfo{
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-        .descriptorPool = m_pool,
-        .descriptorSetCount = 1,
-        .pSetLayouts = m_setLayout.ptr(),
-    };
-    if (vkAllocateDescriptorSets(ctx.device, &allocInfo, &m_set) != VK_SUCCESS) {
-        harmonia::Logger::error("GpuCullPass: failed to allocate descriptor set");
+    // --- MOD1: descriptor buffer (replaces the pool + set) ---
+    if (!m_descWriter.init(ctx, setLayout, 4, "theia.cull.descriptorBuffer")) {
         return false;
     }
 
     // Pre-write static output bindings (2–3 never change after initialization).
-    const VkDescriptorBufferInfo compactInfo{m_compactInstanceListBuf.handle(), 0, VK_WHOLE_SIZE};
-    const VkDescriptorBufferInfo indirectInfo{m_indirectDrawBuf.handle(), 0, VK_WHOLE_SIZE};
-    const std::array<VkWriteDescriptorSet, 2> staticWrites{
-        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                             nullptr,
-                             m_set,
-                             2,
-                             0,
-                             1,
-                             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                             nullptr,
-                             &compactInfo,
-                             nullptr},
-        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                             nullptr,
-                             m_set,
-                             3,
-                             0,
-                             1,
-                             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                             nullptr,
-                             &indirectInfo,
-                             nullptr},
-    };
-    vkUpdateDescriptorSets(
-        ctx.device, static_cast<std::uint32_t>(staticWrites.size()), staticWrites.data(), 0, nullptr);
+    m_descWriter.writeStorageBuffer(ctx, 2, m_compactInstanceListBuf.deviceAddress(), kCompactListSize);
+    m_descWriter.writeStorageBuffer(ctx, 3, m_indirectDrawBuf.deviceAddress(), kIndirectBufSize);
 
     harmonia::Logger::info("GpuCullPass: initialized (max {} instances)", kMaxInstances);
     return true;
@@ -210,9 +173,8 @@ bool GpuCullPass::initialize(const harmonia::DeviceContext& ctx, const char* spv
 void GpuCullPass::shutdown() {
     m_compactInstanceListBuf = {};
     m_indirectDrawBuf = {};
+    m_descWriter.shutdown(); // MOD1: replaces pool + set
 
-    m_pool.reset();
-    m_set = VK_NULL_HANDLE;
     m_pipeline.reset();
     m_pipelineLayout.reset();
     m_setLayout.reset();
@@ -249,35 +211,26 @@ void GpuCullPass::dispatch(VkCommandBuffer cmd,
     };
     vkCmdPipelineBarrier2(cmd, &fillDep);
 
-    // Update scene-bound input descriptors (bindings 0–1 may change if scene switches).
-    const VkDescriptorBufferInfo instInfo{instanceBuf, 0, VK_WHOLE_SIZE};
-    const VkDescriptorBufferInfo boundsInfo{instanceBoundsBuf, 0, VK_WHOLE_SIZE};
-    const std::array<VkWriteDescriptorSet, 2> dynWrites{
-        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                             nullptr,
-                             m_set,
-                             0,
-                             0,
-                             1,
-                             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                             nullptr,
-                             &instInfo,
-                             nullptr},
-        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                             nullptr,
-                             m_set,
-                             1,
-                             0,
-                             1,
-                             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                             nullptr,
-                             &boundsInfo,
-                             nullptr},
-    };
-    vkUpdateDescriptorSets(m_ctx->device, static_cast<std::uint32_t>(dynWrites.size()), dynWrites.data(), 0, nullptr);
+    // MOD1: update scene-bound input descriptors (bindings 0–1) via the descriptor buffer writer.
+    {
+        const VkBufferDeviceAddressInfo bufAddrInfo0{
+            .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO, .pNext = nullptr, .buffer = instanceBuf};
+        VkMemoryRequirements memReq0{};
+        vkGetBufferMemoryRequirements(m_ctx->device, instanceBuf, &memReq0);
+        m_descWriter.writeStorageBuffer(*m_ctx, 0, vkGetBufferDeviceAddress(m_ctx->device, &bufAddrInfo0),
+                                        memReq0.size);
+
+        const VkBufferDeviceAddressInfo bufAddrInfo1{
+            .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO, .pNext = nullptr, .buffer = instanceBoundsBuf};
+        VkMemoryRequirements memReq1{};
+        vkGetBufferMemoryRequirements(m_ctx->device, instanceBoundsBuf, &memReq1);
+        m_descWriter.writeStorageBuffer(*m_ctx, 1, vkGetBufferDeviceAddress(m_ctx->device, &bufAddrInfo1),
+                                        memReq1.size);
+    }
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout, 0, 1, &m_set, 0, nullptr);
+    // MOD1: bind the descriptor buffer (replaces vkCmdBindDescriptorSets).
+    m_descWriter.bind(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout);
 
     const CullPC pc{viewProj, instanceCount};
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(CullPC), &pc);

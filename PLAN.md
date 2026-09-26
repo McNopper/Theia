@@ -65,29 +65,20 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
 
 ### ReSTIR-PT refinements (GI-ENH — core landed; exploitation remains)
 
-**Landed (2026-09, uncommitted):** (b) vector-valued resampling weights (§6.3 — provably
-expectation-identical: `p̂·s ≡ u` makes the marginalised shade share the selected form's
-per-set luma exactly), (c) Gaussian paired-neighbor self-inverse maps (§3,
-`PairingTextures.cpp`), and (a) the **primary-vertex reconnection shift** (k = 2,
-`tryReconnectionShift` in `gi.comp.slang`): Eq. 5 footprint criteria (c = 0.02, α_min = 0.2,
-inverse-test skipped for diffuse/emissive x_k), opacity-gate mixture with replay fallback,
-GRIS k = 2 Jacobian, exact `SurfaceHit` rebuild from the cached raw identity —
-**bias-floor-proven unbiased** (cornell 1.826 vs 1.830 replay-only; metals unchanged within
-reference noise). Multi-frame captures are run-to-run pixel-reproducible again (see
-guardrails). Remaining exploitation — the paper's 2–3× cost/quality win:
+### ReSTIR-PT refinements (GI-ENH — all exploitation landed)
 
-- **k ≥ 3 hybrid extension**: replay the prefix deeper before reconnecting. Today's
-  conservative k = 2 eligibility (roughness guard at the primary, opaque-only x_k,
-  non-delta edges, no medium entries) falls back to replay for most neighbours — measured
-  variance-neutral at ~3% cost. Needs multi-vertex records (or per-bounce re-capture) and
-  the criteria evaluated at each replayed vertex.
-- **Forced NEE reconnection** (paper §6.2.3): reconnect to NEE-sampled light vertices
-  during replay — removes light sampling from the replay path entirely.
-- **Paired shift-sharing** on the (c) self-inverse maps: each ordered shift computed once,
-  consumed by both endpoints — halves shift work once pairwise MIS lands.
-- **Stream compaction** over pixel–neighbour pairs (paper §6.2.2) for replay divergence.
-- **Dual motion vectors** (Enhanced §6.4 / Zeng 2021): applies to the A-SVGF/TAA
-  reprojection (presentation stages), not to the reservoir.
+**Landed (2026-09-25):** (b) vector-valued resampling weights (§6.3), (c) Gaussian
+paired-neighbor self-inverse maps (§3), (a) k=2 + k≥3 reconnection shifts (telescoping
+GRIS Jacobian, Eq. 5 footprint criteria), **paper-faithful resampling** (shift OR replay per candidate - the pairwise-MIS
+average and the paired shift-sharing shortcut were both dropped: shift-sharing
+consumed the reverse-direction shift, and the paper's section 3 pairing only
+amortises the pair of shifts that pairwise MIS needs), **forced NEE reconnection** (§6.2.3 — reconnect to x_k
+using NEE only, higher eligibility), **Russian roulette at initial sampling only** (§6.2.4),
+and the **critical `flags |=` fix** (reconnection shift was silently never firing).
+Multi-frame captures are run-to-run pixel-reproducible. Remaining:
+
+- **Stream compaction** (§6.2.2) — reduce warp divergence in replay.
+- **Dual motion vectors** (§6.4) — presentation stage only (A-SVGF/TAA reprojection).
 - **Temporal reuse without recursion bias:** an unbiased temporal form (e.g. GRIS pairwise
   MIS with canonical-sample accounting) could restore temporal memory for the interactive
   (non-accumulated) path, where frame accumulation isn't available. Would also fix the DI

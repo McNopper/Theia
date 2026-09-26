@@ -3,12 +3,14 @@
 
 #include <volk/volk.h>
 
+#include <array>
 #include <cstdint>
 #include <slang-math/slang-math.hpp>
 
 #include "harmonia/DeviceContext.hpp"
 #include "harmonia/core/Buffer.hpp"
 #include "harmonia/core/CommandPool.hpp"
+#include "harmonia/core/DescriptorBufferWriter.hpp"
 #include "harmonia/core/Image.hpp"
 #include "harmonia/core/VulkanHandle.hpp"
 #include "theia/renderer/RendererConstants.hpp"
@@ -110,9 +112,10 @@ class GiPass {
         /// A4: screen-space motion vectors (R32G32F, pixel-space dx/dy) for temporal
         /// reprojection. VK_NULL_HANDLE → a 1×1 zero dummy is bound (static-history
         /// reuse: previous reservoir read at the same pixel).
-        /// GI-ENH (a): reconnection shift before replay fallback (THEIA_NO_RECONNECTION
-        /// disables it for A/B measurement).
-        bool reconnectShiftEnabled = true;
+        /// GI-ENH (a): reconnection shift feature mask (THEIA_NO_RECONNECTION=0 /
+        /// THEIA_SHIFT_MASK=<n>). bit0 = k=2 shift, bit1 = k>=3 hybrid shift.
+        /// 0 = replay-only (the clean baseline).
+        std::uint32_t reconnectShiftEnabled = 3;
         VkImageView motionVectorView = VK_NULL_HANDLE;
     };
 
@@ -170,8 +173,11 @@ class GiPass {
         std::uint32_t pairingPerm1 = 0;
         std::uint32_t pairingPerm2 = 0;
         std::uint32_t pairingEnabled = 0;        ///< 1 = Gaussian paired neighbours in path-reservoir spatial reuse
-        std::uint32_t reconnectShiftEnabled = 1; ///< GI-ENH (a): reconnection shift before replay (A/B toggle)
+        std::uint32_t reconnectShiftEnabled = 1; ///< GI-ENH (a): reconnection shift feature mask
+                                                 ///< bit0 = k=2, bit1 = k>=3. 0 = replay-only.
     };
+    // Layout guard: must equal the Slang `GiParams` struct exactly (2×float4x4 + float4
+    // + 26 scalars = 144 + 104 = 248). Fails loudly on any accidental padding mismatch.
     static_assert(sizeof(GiPushConstants) == 248);
 
     [[nodiscard]] bool createDescriptors();
@@ -185,16 +191,17 @@ class GiPass {
     const harmonia::DeviceContext* m_ctx = nullptr;
     Config m_cfg{};
 
-    harmonia::UniqueDescriptorSetLayout m_setLayout;
-    harmonia::UniqueDescriptorPool m_pool;
-    /// One descriptor set PER FRAME SLOT (== harmonia::FrameSync::kFrameSlots): frames run
-    /// pipelined, so a single mutable set would let frame N+1's per-frame Cur/Prev rebinding
-    /// race frame N's in-flight dispatch (UPDATE_AFTER_BIND makes that a silent data race —
-    /// the run-to-run nondeterminism root-caused 2026-09). `m_set` is the per-call write
-    /// target; `m_sets[slot]` is what record() binds.
+    /// One descriptor buffer writer PER FRAME SLOT (== harmonia::FrameSync::kFrameSlots):
+    /// frames run pipelined, so a single mutable descriptor buffer would let frame N+1's
+    /// per-frame Cur/Prev rebinding race frame N's in-flight dispatch (the run-to-run
+    /// nondeterminism root-caused 2026-09). Each slot has its own descriptor buffer.
     static constexpr std::uint32_t kDescriptorSlots = 2;
-    VkDescriptorSet m_sets[kDescriptorSlots]{};
-    VkDescriptorSet m_set = VK_NULL_HANDLE;
+
+    harmonia::UniqueDescriptorSetLayout m_setLayout;
+    /// MOD1: descriptor buffer writers replace the pool + allocated sets (ping-pong slots).
+    std::array<harmonia::DescriptorBufferWriter, kDescriptorSlots> m_descWriters{};
+    std::uint32_t m_activeSlot = 0;
+
     harmonia::UniquePipelineLayout m_pipelineLayout;
     harmonia::UniquePipeline m_pipeline;
 
@@ -210,8 +217,6 @@ class GiPass {
     /// A3(b): 1×1 R32G32F placeholder bound to binding 15 when no A-SVGF
     /// gradient/variance guide is provided; hasGradientVariance=0 ensures the
     /// shader never reads it.
-    harmonia::Image m_dummyGradientVariance{};
-    bool m_dummyGradientReady = false; ///< one-time UNDEFINED → GENERAL transition done
 
     // A4: ReSTIR DI reservoir ping-pong buffers (binding 16 = current write, 17 = prev
     // read) and a 1×1 zero motion-vector placeholder (binding 18). The reservoir stride
@@ -225,14 +230,13 @@ class GiPass {
     /// 384 B covers the Slang PathReservoir (40 B core + the GI-ENH (a) reconnection record:
     /// ~288 B with Slang's 16-byte float3 alignment — the CPU never indexes the contents, so
     /// generous over-allocation is the policy; too small = out-of-bounds struct reads).
-    static constexpr VkDeviceSize kPathReservoirStride = 384;
+    static constexpr VkDeviceSize kPathReservoirStride = 512; // GI-ENH k≥3: ReconnectionCapture grew ~64B
     harmonia::Buffer m_pathReservoirBuf[2]{};
     std::uint32_t m_pathReservoirPingPong = 0;
     bool m_pathReservoirsCleared = false;
     /// GI-ENH: Gaussian paired-neighbor pairing maps (binding 22, static after init).
     harmonia::Buffer m_pairingOffsetBuf{};
-    harmonia::Image m_dummyMotionVectors{}; ///< 1×1 R32G32F zero placeholder for binding 18
-    bool m_dummyMotionReady = false;
+
     VkImageView m_boundMotionVectorView = VK_NULL_HANDLE;
 };
 

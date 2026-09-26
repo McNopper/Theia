@@ -55,7 +55,10 @@ cbuffer GiPC {
     uint     pairingPerm1;                 //   bits 0-2 = mirrorY|mirrorX|transpose, 3-10 = offsetX,
     uint     pairingPerm2;                 //   11-18 = offsetY (tile phase; decorrelates the static maps)
     uint     pairingEnabled;               // 1 = Gaussian paired neighbours (path-reservoir spatial reuse)
-    uint     reconnectShiftEnabled;        // GI-ENH (a): 1 = try reconnection shift before replay
+    uint     reconnectShiftEnabled;        // GI-ENH (a) feature mask (0 = replay-only):
+                                           //   bit0 (1) = k=2 reconnection shift
+                                           //   bit1 (2) = k>=3 hybrid reconnection shift
+                                           // Step-through debug: THEIA_SHIFT_MASK.
                                            // (0 = replay-only; A/B via THEIA_NO_RECONNECTION)
 };
 
@@ -289,14 +292,14 @@ float targetPdfEnv(float3 Le, float3 bsdfTimesCos) {
 // displacements are isotropic Gaussian, sigma 16 px per axis (matched to the
 // previous uniform-disk radius 30 px). The per-frame transform
 // (transpose/mirror/offset — paper §3.2) decorrelates the map's tiling so no
-// fixed spatial pattern enters the accumulated image. NB: the paper's pairing
-// exists to share one shift evaluation between both endpoints (2x spatial cost
-// win against pairwise-MIS baselines); this repo's seed-space plain-RIS scheme
-// pays one replay per neighbour and evaluates one direction only, so here the
-// change is a QUALITY one (Gaussian-concentrated neighbours → higher G-buffer
-// compatibility and better FLIP at equal mean radius). The self-inverse pairing
-// is kept so the paper's shift-sharing upgrade can drop in with the reconnection
-// shift later.
+// fixed spatial pattern enters the accumulated image. NB on scope: in the paper the pairing exists to share one shift
+// evaluation between both endpoints (a 2x spatial-cost win against pairwise-MIS
+// baselines). That reuse was TRIED here and removed - it consumed the
+// reverse-direction shift, and section 3's pairing only amortises the PAIR of
+// shifts that pairwise MIS weights need, which this architecture does not use
+// ("shift OR replay per candidate"). The pairing is kept purely as a QUALITY
+// upgrade for this seed-space plain-RIS scheme: Gaussian-concentrated neighbours
+// give higher G-buffer compatibility and better FLIP at equal mean radius.
 static const uint kPairTexels0 = 254u * 254u;
 static const uint kPairTexels1 = 230u * 230u;
 
@@ -1009,7 +1012,7 @@ float4 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
 /// is kept separate from `outIndirect` so the firefly clamp never biases the sun term.
 bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp, bool includePrimaryEnvNee,
                           out float3 outIndirect, out float3 outEnvNee,
-                          bool captureRe, out ReconnectionCapture outRec) {
+                          bool captureRe, bool disableRR, out ReconnectionCapture outRec) {
     outIndirect = 0.0.xxx;
     outEnvNee = 0.0.xxx;
     outRec = makeEmptyReconnectionCapture();
@@ -1032,6 +1035,9 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
     state.mediumEta = 1.0;
     state.captureRe = captureRe ? 1u : 0u;
     state.reCaptured = 0u;
+    state.surfaceCount = 0u;
+    state.captureTarget = 1u; // GI-ENH k≥3: capture at the SECOND surface (x_3 = reconnection target)
+    state.disableRR = disableRR ? 1u : 0u; // GI-ENH §6.2.4: skip RR during replay
     state.rec = makeEmptyReconnectionCapture();
 
     const bool envEnabled = (hasEnvMap != 0u);
@@ -1076,6 +1082,12 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
                 primaryEnvNee = 0.0.xxx;
             }
         }
+
+        // GI-SMS (MNEE / specular manifold sampling) is NOT wired in here — see PLAN.md.
+        // A faithful implementation needs Zeltner et al. 2020 Alg. 1's full contribution
+        // form: specular_reflectance (Fresnel at the specular vertex) × geometric_term
+        // (the manifold-Jacobian ratio dw0_dx1·dx1_dx2, not a plain cos·cos/dist·dist) ×
+        // Le / p_offset. Sampling-only; the shared OpenPBR BSDF is untouched.
 
         // --- Primary BSDF continuation (env/emissive direct handled per scene type above) ---
         BSDFSample bs = sampleBSDF(primary.mat, primary.wo,
@@ -1134,9 +1146,23 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
     // NOT consume a bounce (charging it blacks out cut-out geometry wherever a ray grazes
     // several crossings). `iter` is the separate termination guard, mirroring Hyperion's
     // raygen loop and the medium walk's own budget.
-    const uint bounces = max(maxDepth, 1u);
+    //
+    // PATH-LENGTH PARITY with Hyperion (raygen.slang): Hyperion's loop condition is
+    // `surfaceBounces < maxDepth` and its FIRST iteration traces the camera ray, so the
+    // primary vertex is counted INSIDE the budget (maxDepth = total surfaces on the path).
+    // This walk shades the primary above, outside the loop, so that one surface must be
+    // pre-charged here — otherwise the path runs one surface LONGER than Hyperion's and
+    // indirect comes out systematically brighter (measured on cornell_classic: +3.0% mean,
+    // +28% in indirect-only regions, +0.3% where direct dominates — exactly the signature
+    // of one surplus bounce, since a real primary consumes budget and a pass-through does
+    // not, matching Hyperion's `if (!wasInMedium && !payload.passedThrough) surfaceBounces++`).
+    const uint primaryCharge = primaryPassThrough ? 0u : 1u;
+    const uint bounces = max(maxDepth, 1u) - primaryCharge;
     const uint maxIters = bounces + kMaxNullInteractions;
     uint bounce = 0u;
+    bool hopCaptured = false;
+    float3 x2Pos = 0.0.xxx;
+    float3 x2Normal = 0.0.xxx;
     for (uint iter = 0u; bounce < bounces && !state.terminated && iter < maxIters; ++iter) {
         // A null interaction (opacity pass-through) RESUMES the ray instead of scattering it,
         // so it uses the small continuation epsilon — the scattering guard would skip every
@@ -1193,12 +1219,31 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
             surf.mat.specularRoughAnisoIor.x = regRough;
             surf.mat.coatRoughAnisoIorDark.x = max(surf.mat.coatRoughAnisoIorDark.x, regRough * 0.5);
         }
-        state.depth = bounce + 1u;
+        // Depth counts real surface interactions: the primary consumed one (primaryCharge),
+        // so the loop's first real surface is depth 1 for a real primary and depth 0 when the
+        // primary was an opacity pass-through. Matches Hyperion's `payload.depth` numbering,
+        // which drives evalEmissionGuarded's `depth == 0` MIS guard and kRRMinDepth.
+        state.depth = bounce + primaryCharge;
         integrateSurface(tracer, surf,
             emissiveTriangleCount, emissiveTriangles, emissiveCdf,
             envMarginalCdf, envConditionalCdf,
             envImportanceWidth, envImportanceHeight, envEnabled, envLuminanceScale,
             t_envMap, s_env, state);
+        // GI-ENH k≥3: capture the hop (x_1 → x_2) at bounce 0 — direction, geometry, and
+        // the reconnection-edge direction/pdf from x_2's BSDF sample.
+        if (captureRe && bounce == 0u && !hopCaptured) {
+            hopCaptured = true;
+            const float3 dX1X2 = h.worldPos - primary.position;
+            const float3 x1ToX2 = normalize(dX1X2);
+            state.rec.omegaHop1 = normalize(dir); // direction x_1 → x_2
+            state.rec.dist2Hop1 = max(dot(dX1X2, dX1X2), 1.0e-12);
+            state.rec.geomGHop1Source = max(dot(h.shadingNormal, -x1ToX2), 0.0) / state.rec.dist2Hop1;
+            state.rec.geomGHop1Reverse = max(dot(primary.normal, x1ToX2), 0.0) / state.rec.dist2Hop1;
+            state.rec.omegaInK = normalize(state.nextDirection); // direction x_2 → x_3
+            state.rec.pdfInK = state.lastBsdfPdf; // p_s(ω_2 | x_2)
+            x2Pos = h.worldPos;
+            x2Normal = h.shadingNormal;
+        }
         if (captureRe && !recHarvested && state.reCaptured != 0u) {
             // GI-ENH (a): harvest x_k's raw surface identity (rebuilt exactly at shift
             // time) + the walk's radiance level after x_k's own emission/NEE terms.
@@ -1209,13 +1254,23 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
             state.rec.xkTangent = h.tangent;
             state.rec.xkUv = h.uv;
             state.rec.xkMaterialIdx = h.materialIdx;
-            const float3 dX1Xk = primary.position - h.worldPos;
-            state.rec.dist2X1Xk = max(dot(dX1Xk, dX1Xk), 1.0e-12);
-            const float3 x1ToXk = normalize(h.worldPos - primary.position);
-            // GRIS G-terms in the walk's shading-cosine measure (both sides of the shift
-            // use the same convention — the destination cosine factor is consistent).
-            state.rec.geomGSource = max(dot(h.shadingNormal, -x1ToXk), 0.0) / state.rec.dist2X1Xk;
-            state.rec.geomGReverse = max(dot(primary.normal, x1ToXk), 0.0) / state.rec.dist2X1Xk;
+            if (state.captureTarget == 0u) {
+                // k=2: reconnection edge = x_1 → x_k (hop is the reconnection).
+                const float3 dX1Xk = primary.position - h.worldPos;
+                state.rec.dist2X1Xk = max(dot(dX1Xk, dX1Xk), 1.0e-12);
+                const float3 x1ToXk = normalize(h.worldPos - primary.position);
+                state.rec.geomGSource = max(dot(h.shadingNormal, -x1ToXk), 0.0) / state.rec.dist2X1Xk;
+                state.rec.geomGReverse = max(dot(primary.normal, x1ToXk), 0.0) / state.rec.dist2X1Xk;
+                state.rec.kLevel = 1u;
+            } else {
+                // GI-ENH k≥3: reconnection edge = x_2 → x_k (hop is replayed).
+                const float3 dX2Xk = h.worldPos - x2Pos;
+                const float3 x2ToXk = normalize(dX2Xk);
+                state.rec.dist2InK = max(dot(dX2Xk, dX2Xk), 1.0e-12);
+                state.rec.geomGInKSource = max(dot(h.shadingNormal, -x2ToXk), 0.0) / state.rec.dist2InK;
+                state.rec.geomGInKReverse = max(dot(x2Normal, x2ToXk), 0.0) / state.rec.dist2InK;
+                state.rec.kLevel = 2u;
+            }
             // The suffix divisor: the FULL prefix throughput at x_k (w_1·w_2, post-RR —
             // everything the walk adds beyond x_2's own emission/NEE terms is weighted by
             // exactly this), so the cached suffix is pure incident radiance with no
@@ -1286,7 +1341,7 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
 bool estimateGiSample(SurfaceHit primary, RngState seed, float adaptiveClamp,
                       out float3 outIndirect, out float3 outEnvNee) {
     ReconnectionCapture recUnused = makeEmptyReconnectionCapture();
-    return estimateGiSampleCore(primary, seed, adaptiveClamp, true, outIndirect, outEnvNee, false, recUnused);
+    return estimateGiSampleCore(primary, seed, adaptiveClamp, true, outIndirect, outEnvNee, false, false, recUnused);
 }
 
 /// GI2 full PT: one replayable multi-bounce indirect path candidate. Returns the
@@ -1297,7 +1352,15 @@ bool estimateGiSample(SurfaceHit primary, RngState seed, float adaptiveClamp,
 bool traceGiPathCandidate(SurfaceHit primary, RngState seed, float adaptiveClamp, out float3 outG,
                           out ReconnectionCapture outRec) {
     float3 envNeeUnused;
-    return estimateGiSampleCore(primary, seed, adaptiveClamp, false, outG, envNeeUnused, true, outRec);
+    return estimateGiSampleCore(primary, seed, adaptiveClamp, false, outG, envNeeUnused, true, false, outRec);
+}
+
+/// GI-ENH §6.2.4: replay variant — disables Russian roulette to avoid killing valid
+/// paths during spatial reuse. Roulette stays at initial sampling only.
+bool traceGiPathCandidateNoRR(SurfaceHit primary, RngState seed, float adaptiveClamp, out float3 outG,
+                              out ReconnectionCapture outRec) {
+    float3 envNeeUnused;
+    return estimateGiSampleCore(primary, seed, adaptiveClamp, false, outG, envNeeUnused, true, true, outRec);
 }
 
 /// GI2 full PT: primary-vertex env NEE WITHOUT the multi-bounce walk, for the
@@ -1352,6 +1415,41 @@ float3 primaryEnvNeeOnly(SurfaceHit primary, RngState seed) {
 /// (seed-space uniformity), so the merged estimator is plain unbiased RIS over
 /// ≤ 1+3 independent candidates and the frame average converges to ground truth.
 // ── GI-ENH (a): primary-vertex reconnection shift (GRIS §5 hybrid shift, k = 2). ──
+//
+// Shift validity guard. A degenerate Jacobian input (zero source geometry term, zero
+// density, coincident vertices) must REJECT the shift, never be epsilon-clamped: the
+// reference implementation (DQLin/ReSTIR_PT, Shift.slang) returns 0 for these cases —
+// `isJacobianInvalid(Jacobian)` (≤0/NaN/Inf), `if (ili < 1e-3f) return 0.f` (coincident
+// endpoints), `if (abs(det) < 1e-6f) return 0.f` — and its optional
+// `rejectShiftBasedOnJacobian` (threshold 10) discards on |J| extremes with the comment
+// "discard based on Jacobian (unbiased)". Rejecting is unbiased because the caller falls
+// back to a complete replay walk for the same candidate.
+//
+// Clamping a genuine zero to 1e-20 is the opposite: it converts "no valid shift" into a
+// ~1e20 multiplier, which is exactly the single-pixel 2e15 blowup measured on
+// shaderball_metal (one pixel at (134,269); median and p90 matched Hyperion).
+//
+// `jac` is the composed Jacobian ratio (target/source path density). Returns false when
+// the shift must be abandoned.
+bool reconnectionJacobianValid(float jac, float denomProduct, float minDist2) {
+    if (!(jac > 0.0) || !isfinite(jac)) {
+        return false; // isJacobianInvalid
+    }
+    if (!(denomProduct > 0.0) || !isfinite(denomProduct)) {
+        return false; // zero/NaN source density or geometry term
+    }
+    if (!(minDist2 > 1.0e-6)) {
+        return false; // coincident vertices (reference: ili < 1e-3 → reject)
+    }
+    // Reference's Jacobian-extreme rejection (jacobianRejectionThreshold = 10), which is
+    // unbiased by construction — it only ever DISCARDS a shifted sample, and the caller
+    // substitutes an unbiased replay. |J| ∈ [1/11, 11] is the reference's acceptance band.
+    if (max(jac, 1.0 / jac) > 11.0) {
+        return false;
+    }
+    return true;
+}
+
 // The shifted path re-routes ONLY the first edge: my primary x'_1 connects to the
 // neighbour's stored first-bounce vertex x_k and the cached suffix radiance supplies
 // everything beyond — one shadow ray + a few BSDF re-evals replace a full multi-bounce
@@ -1368,8 +1466,8 @@ bool tryReconnectionShift(SurfaceHit primary, PathReservoir neighbor, float adap
     // per-channel continuation weight > 0, non-delta continuation at x_k and non-delta
     // primary edge at the source, no medium entered at the source primary — plus an
     // opaque x_k (its record's measure assumes a kept surface interaction).
-    if ((rec.flags & 0x3Fu) != 0x3Fu || rec.opacityXk < 1.0) {
-        return false;
+    if ((rec.flags & 0x3Fu) != 0x3Fu || rec.opacityXk < 1.0 || rec.kLevel != 1u) {
+        return false; // kLevel != 1: k=3 record (try tryReconnectionShiftK3) or no record
     }
     // Opacity-gate mixture at MY primary: surface branch (probability alpha) uses the
     // reconnection; the ambient branch falls back to a full replay — every candidate is a
@@ -1439,6 +1537,304 @@ bool tryReconnectionShift(SurfaceHit primary, PathReservoir neighbor, float adap
 
     // x_k's vertex terms under the NEW incoming direction (the stored NEE raw factors
     // are direction-independent by construction; env MIS is recomputed).
+    //
+    // GI-ENH: the integrand is SPLIT by technique, per ReSTIR PT Enhanced §2.3 ("a
+    // technique index ... indicates if the final path vertex is sampled by NEE or a
+    // BSDF-sampled continuation ray; this requires splitting the integrand") and Eq. 2,
+    // which states p^x_k(ω_k) "is replaced with 1 for k = d". A path that ENDS at x_k
+    // (k = d: the NEE events) therefore carries no continuation-density ratio, while a
+    // path that continues past x_k carries p^y_k(ω_k)/p^x_k(ω_k). The reference
+    // implementation (DQLin/ReSTIR_PT, Shift.slang) matches: it multiplies the Jacobian
+    // by dstRcVertexScatterPdf/srcRcVertexScatterPdf only for the continuing case and
+    // divides the NEE integrand by the LIGHT pdf, not the scatter pdf.
+    float3 vertexNee = 0.0.xxx;   // k = d terms (path ends at x_k)
+    float3 vertexCont = 0.0.xxx;  // k < d term (path continues past x_k)
+    if (rec.tri.valid != 0u) {
+        const float3 fTri = evalBSDF(surfK.mat, woK, rec.tri.wi,
+            surfK.normal, surfK.T, surfK.B, surfK.coatN, surfK.coatT, surfK.coatB, surfK.backface);
+        vertexNee += fTri * rec.tri.raw;
+    }
+    if (rec.env.valid != 0u) {
+        const float3 fEnv = evalBSDF(surfK.mat, woK, rec.env.wi,
+            surfK.normal, surfK.T, surfK.B, surfK.coatN, surfK.coatT, surfK.coatB, surfK.backface);
+        float misW = 1.0;
+        if (envImportanceWidth > 0u && envImportanceHeight > 0u) {
+            const float bsdfPdfK = pdfBSDF(surfK.mat, woK, rec.env.wi,
+                surfK.normal, surfK.T, surfK.B, surfK.coatN, surfK.coatT, surfK.coatB, surfK.backface);
+            misW = rec.env.srcPdf / max(rec.env.srcPdf + bsdfPdfK, 1.0e-6);
+        }
+        vertexNee += fEnv * rec.env.raw * misW;
+    }
+    // Continuation: x_k's own weight toward the cached suffix direction × L_inc.
+    const float pdfYk = max(pdfBSDF(surfK.mat, woK, rec.omegaK,
+        surfK.normal, surfK.T, surfK.B, surfK.coatN, surfK.coatT, surfK.coatB, surfK.backface), 1.0e-10);
+    const float3 fK = evalBSDF(surfK.mat, woK, rec.omegaK,
+        surfK.normal, surfK.T, surfK.B, surfK.coatN, surfK.coatT, surfK.coatB, surfK.backface);
+    float gContK;
+    const float fTermK = shadowTerminatorFactor(surfK.normal, surfK.geoNormal, rec.omegaK, gContK);
+    if (fTermK <= 0.0) {
+        return false;
+    }
+    const float3 w2 = fK * max(dot(rec.omegaK, surfK.normal), 0.0) * (fTermK / pdfYk);
+    vertexCont += w2 * rec.suffixRadiance;
+
+    // GRIS reconnection Jacobian (Eq. 2, k = 2): target/source path-density ratio in the
+    // walk's shading-cosine measure (both G sides use the same convention as the record;
+    // the single-sided G = shading-cos/dist² AT THE RECONNECTION VERTEX, matching the
+    // reference's shifted_cosine/shifted_dist2).
+    //   jacEnd  : k = d  — p^x_k(ω_k) ≡ 1, so no continuation-density ratio.
+    //   jacCont : k < d  — carries p^y_k(ω_k)/p^x_k(ω_k).
+    const float geomGTarget = max(dot(surfK.normal, woK), 0.0) / max(distXk * distXk, 1.0e-12);
+    const float jacEndDenom = rec.pdfEdgeIn * rec.geomGSource;
+    const float jacEnd = (pdfY1 * geomGTarget) / max(jacEndDenom, 1.0e-20);
+    const float jacCont = jacEnd * pdfYk / max(rec.pdfOmegaK, 1.0e-20);
+    // Reject (not clamp) on degenerate Jacobian inputs — see reconnectionJacobianValid.
+    if (!reconnectionJacobianValid(jacEnd, jacEndDenom, rec.dist2X1Xk)) {
+        return false;
+    }
+    if (!reconnectionJacobianValid(jacCont, rec.pdfOmegaK, rec.dist2X1Xk)) {
+        return false;
+    }
+
+    float3 value = (w1 * vis) * (vertexNee * jacEnd + vertexCont * jacCont) * exposure; // F(Y)·|J|, walk-scale
+    if (!all(isfinite(value)) || any(isnan(value))) {
+        return false;
+    }
+    gShift = max(value, 0.0.xxx);
+    if (fireflyClampEnabled != 0u) {
+        const float avg = (gShift.x + gShift.y + gShift.z) * (1.0 / 3.0);
+        if (avg > adaptiveClamp) {
+            gShift *= adaptiveClamp / avg;
+        }
+    }
+    return maxComp(gShift) > 0.0;
+}
+
+// ── GI-ENH k≥3: hybrid reconnection shift (GRIS §5, k = 3). ──
+// Replays one prefix vertex: x'_1 → x'_2 (trace in ω_1), then reconnects x'_2 → x_k
+// using the cached suffix beyond x_k. One extra ray trace + BSDF eval vs k=2, but the
+// reconnection entry is at x'_2 (rougher, further from camera) so the eligibility
+// criteria pass far more often — the paper's hit-rate unlock.
+// The GRIS Jacobian telescopes over the hop + reconnection edge + continuation.
+bool tryReconnectionShiftK3(SurfaceHit primary, PathReservoir neighbor, float adaptiveClamp,
+                            inout RngState rng, out float3 gShift) {
+    gShift = 0.0.xxx;
+    const ReconnectionCapture rec = neighbor.rec;
+    if (rec.kLevel < 2u || (rec.flags & 0x3Fu) != 0x3Fu || rec.opacityXk < 1.0) {
+        return false;
+    }
+    // Opacity-gate mixture at MY primary (same convention as k=2).
+    const float primaryOpacity = saturate(primary.mat.opacityFlagsPad.x);
+    if (randFloat(rng) < (1.0 - primaryOpacity)) {
+        return false;
+    }
+
+    // ── Replay: x'_1 → x'_2 in the source's hop direction ω_1. ──
+    const float3 hopDir = normalize(rec.omegaHop1);
+    const float3 hopOrigin = primary.position + primary.geoNormal * kRayEpsilon;
+    TheiaTracer tracer;
+    GiHit h2 = traceClosestHit(hopOrigin, hopDir, kInf, kRayEpsilon);
+    if (!h2.hit) {
+        return false;
+    }
+    SurfaceHit surf2 = makeSurfaceHit(h2, -hopDir);
+
+    // Eligibility at x'_2: non-delta edge, no medium, roughness guard.
+    const float rough2 = saturate(surf2.mat.specularRoughAnisoIor.x);
+    if (rough2 < 0.2) {
+        return false;
+    }
+
+    // ── Rebuild x_k's surface (same as k=2). ──
+    GiHit hK;
+    hK.hit = true;
+    hK.materialIdx = rec.xkMaterialIdx;
+    hK.worldPos = rec.xkPos;
+    hK.shadingNormal = rec.xkNormal;
+    hK.geoNormal = rec.xkGeoNormal;
+    hK.uv = rec.xkUv;
+    hK.tangent = rec.xkTangent;
+    hK.dist = 0.0;
+    const float3 toXk = rec.xkPos - surf2.position;
+    const float distXk = max(length(toXk), 1.0e-6);
+    const float3 wp = toXk / distXk;  // connection direction x'_2 → x_k
+    const float3 woK = -wp;           // x_k's outgoing toward x'_2
+    const SurfaceHit surfK = makeSurfaceHit(hK, woK);
+
+    // ── Footprint criteria (Eq. 5, k=3 form): all three source-side footprints must
+    // reach the primary footprint scaled by c/100. Inverse test skipped for diffuse/emissive. ──
+    const float3 toCamN = normalize(primary.position - cameraPos.xyz);
+    const float distCam2 = max(dot(primary.position - cameraPos.xyz, primary.position - cameraPos.xyz), 1.0e-6);
+    const float rPri2 = distCam2 * max(dot(primary.normal, -toCamN), 0.0) * (1.0 / (4.0 * kPi));
+    const float footprint1 = 1.0 / max(rec.pdfEdgeIn * rec.geomGHop1Source, 1.0e-20);   // hop
+    const float footprint2 = 1.0 / max(rec.pdfInK * rec.geomGInKSource, 1.0e-20);       // reconnection edge
+    const float footprint3 = 1.0 / max(rec.pdfOmegaK * rec.geomGInKReverse, 1.0e-20);   // continuation
+    const float roughK = saturate(surfK.mat.specularRoughAnisoIor.x);
+    const float emisK = maxComp(max(surfK.mat.emissionColorLum.xyz, 0.0.xxx) *
+                                max(surfK.mat.emissionColorLum.w, 0.0));
+    const bool skipInverse = (roughK >= 0.5) || (emisK > 0.0);
+    const float footprint = skipInverse ? min(footprint1, footprint2)
+                                        : min(footprint1, min(footprint2, footprint3));
+    if (footprint < 2.0e-4 * rPri2) {
+        return false;
+    }
+
+    // ── Connection visibility x'_2 → x_k (C14 transmittance-aware). ──
+    const float3 shadowOrigin = surf2.position + surf2.geoNormal * kRayEpsilon;
+    const float vis = tracer.traceTransmittance(shadowOrigin, wp, max(distXk - 2.0 * kRayEpsilon, 0.0));
+    if (vis <= 0.0) {
+        return false;
+    }
+
+    // ── Target-side hop weight at x'_1 (direction ω_1 → x'_2). ──
+    const float pdfY1 = max(pdfBSDF(primary.mat, primary.wo, hopDir,
+        primary.normal, primary.T, primary.B, primary.coatN, primary.coatT, primary.coatB, primary.backface), 1.0e-10);
+    const float3 f1 = evalBSDF(primary.mat, primary.wo, hopDir,
+        primary.normal, primary.T, primary.B, primary.coatN, primary.coatT, primary.coatB, primary.backface);
+    float gPrim1;
+    const float fTerm1 = shadowTerminatorFactor(primary.normal, primary.geoNormal, hopDir, gPrim1);
+    if (fTerm1 <= 0.0) {
+        return false;
+    }
+    const float3 wHop = f1 * max(dot(hopDir, primary.normal), 0.0) * (fTerm1 / pdfY1);
+
+    // ── Target-side reconnection-edge weight at x'_2 (direction ω_2 → x_k). ──
+    const float pdfY2 = max(pdfBSDF(surf2.mat, surf2.wo, wp,
+        surf2.normal, surf2.T, surf2.B, surf2.coatN, surf2.coatT, surf2.coatB, surf2.backface), 1.0e-10);
+    const float3 f2 = evalBSDF(surf2.mat, surf2.wo, wp,
+        surf2.normal, surf2.T, surf2.B, surf2.coatN, surf2.coatT, surf2.coatB, surf2.backface);
+    float gPrim2;
+    const float fTerm2 = shadowTerminatorFactor(surf2.normal, surf2.geoNormal, wp, gPrim2);
+    if (fTerm2 <= 0.0) {
+        return false;
+    }
+    const float3 wEdge = f2 * max(dot(wp, surf2.normal), 0.0) * (fTerm2 / pdfY2);
+
+    // ── x_k's vertex sum (NEE + continuation) — identical to k=2, split by technique. ──
+    // As in tryReconnectionShift: a path ending at x_k (k = d, the NEE events) carries no
+    // continuation-density ratio (paper Eq. 2: p^x_k(ω_k) "is replaced with 1 for k = d"),
+    // while the continuation past x_k carries p^y_k(ω_k)/p^x_k(ω_k).
+    float3 vertexNee = 0.0.xxx;
+    float3 vertexCont = 0.0.xxx;
+    if (rec.tri.valid != 0u) {
+        const float3 fTri = evalBSDF(surfK.mat, woK, rec.tri.wi,
+            surfK.normal, surfK.T, surfK.B, surfK.coatN, surfK.coatT, surfK.coatB, surfK.backface);
+        vertexNee += fTri * rec.tri.raw;
+    }
+    if (rec.env.valid != 0u) {
+        const float3 fEnv = evalBSDF(surfK.mat, woK, rec.env.wi,
+            surfK.normal, surfK.T, surfK.B, surfK.coatN, surfK.coatT, surfK.coatB, surfK.backface);
+        float misW = 1.0;
+        if (envImportanceWidth > 0u && envImportanceHeight > 0u) {
+            const float bsdfPdfK = pdfBSDF(surfK.mat, woK, rec.env.wi,
+                surfK.normal, surfK.T, surfK.B, surfK.coatN, surfK.coatT, surfK.coatB, surfK.backface);
+            misW = rec.env.srcPdf / max(rec.env.srcPdf + bsdfPdfK, 1.0e-6);
+        }
+        vertexNee += fEnv * rec.env.raw * misW;
+    }
+    const float pdfYk = max(pdfBSDF(surfK.mat, woK, rec.omegaK,
+        surfK.normal, surfK.T, surfK.B, surfK.coatN, surfK.coatT, surfK.coatB, surfK.backface), 1.0e-10);
+    const float3 fK = evalBSDF(surfK.mat, woK, rec.omegaK,
+        surfK.normal, surfK.T, surfK.B, surfK.coatN, surfK.coatT, surfK.coatB, surfK.backface);
+    float gContK;
+    const float fTermK = shadowTerminatorFactor(surfK.normal, surfK.geoNormal, rec.omegaK, gContK);
+    if (fTermK <= 0.0) {
+        return false;
+    }
+    const float3 wCont = fK * max(dot(rec.omegaK, surfK.normal), 0.0) * (fTermK / pdfYk);
+    vertexCont += wCont * rec.suffixRadiance;
+
+    // ── GRIS telescoping Jacobian (Eq. 2, k=3): target/source ratio over hop + edge + cont. ──
+    // G-target terms computed at shift time (destination cosine / dist², same measure).
+    // Technique split as in k=2: the k = d (NEE) terms take jacEnd, the continuation past
+    // x_k takes jacCont carrying p^y_k(ω_k)/p^x_k(ω_k) (paper Eq. 2, k = d ⇒ p^x_k ≡ 1).
+    const float distHop2 = max(dot(h2.worldPos - primary.position, h2.worldPos - primary.position), 1.0e-12);
+    const float geomGTargetHop = max(dot(h2.shadingNormal, -hopDir), 0.0) / distHop2;
+    const float geomGTargetEdge = max(dot(surfK.normal, woK), 0.0) / max(distXk * distXk, 1.0e-12);
+    const float jacEndDenom = rec.pdfEdgeIn * rec.geomGHop1Source * rec.pdfInK * rec.geomGInKSource;
+    const float jacEnd = (pdfY1 * geomGTargetHop * pdfY2 * geomGTargetEdge) /
+                         max(jacEndDenom, 1.0e-20);
+    const float jacCont = jacEnd * pdfYk / max(rec.pdfOmegaK, 1.0e-20);
+    // Reject (not clamp) on degenerate Jacobian inputs — see reconnectionJacobianValid.
+    if (!reconnectionJacobianValid(jacEnd, jacEndDenom, rec.dist2Hop1)) {
+        return false;
+    }
+    if (!reconnectionJacobianValid(jacCont, rec.pdfOmegaK, rec.dist2InK)) {
+        return false;
+    }
+
+    float3 value = (wHop * wEdge * vis) * (vertexNee * jacEnd + vertexCont * jacCont) * exposure;
+    if (!all(isfinite(value)) || any(isnan(value))) {
+        return false;
+    }
+    gShift = max(value, 0.0.xxx);
+    if (fireflyClampEnabled != 0u) {
+        const float avg = (gShift.x + gShift.y + gShift.z) * (1.0 / 3.0);
+        if (avg > adaptiveClamp) {
+            gShift *= adaptiveClamp / avg;
+        }
+    }
+    return maxComp(gShift) > 0.0;
+}
+
+// ── GI-ENH §6.2.3: forced NEE light reconnection. ─────────────────────────────
+// When the full reconnection shift (k=2/k=3) fails but the neighbour's NEE event
+// fired at x_k, reconnect to x_k and use ONLY the NEE contribution — no suffix
+// continuation needed. Higher eligibility than the full shift (no suffix requirement).
+// Per the paper: "force reconnection to such vertices if no earlier reconnection
+// is found — removes light sampling from random replay." The MIS weights correct
+// for any variance increase (surfaces are typically glossy).
+bool tryForcedNEEReconnection(SurfaceHit primary, PathReservoir neighbor, float adaptiveClamp,
+                               inout RngState rng, out float3 gShift) {
+    gShift = 0.0.xxx;
+    const ReconnectionCapture rec = neighbor.rec;
+    // Eligibility: at least one NEE event fired, opaque x_k.
+    if ((rec.tri.valid == 0u && rec.env.valid == 0u) || rec.opacityXk < 1.0) {
+        return false;
+    }
+    // Opacity-gate mixture at MY primary.
+    const float primaryOpacity = saturate(primary.mat.opacityFlagsPad.x);
+    if (randFloat(rng) < (1.0 - primaryOpacity)) {
+        return false;
+    }
+
+    // Rebuild x_k's surface.
+    GiHit hK;
+    hK.hit = true;
+    hK.materialIdx = rec.xkMaterialIdx;
+    hK.worldPos = rec.xkPos;
+    hK.shadingNormal = rec.xkNormal;
+    hK.geoNormal = rec.xkGeoNormal;
+    hK.uv = rec.xkUv;
+    hK.tangent = rec.xkTangent;
+    hK.dist = 0.0;
+    const float3 toXk = rec.xkPos - primary.position;
+    const float distXk = max(length(toXk), 1.0e-6);
+    const float3 wp = toXk / distXk;
+    const float3 woK = -wp;
+    const SurfaceHit surfK = makeSurfaceHit(hK, woK);
+
+    // Connection visibility.
+    TheiaTracer tracer;
+    const float3 shadowOrigin = primary.position + primary.geoNormal * kRayEpsilon;
+    const float vis = tracer.traceTransmittance(shadowOrigin, wp, max(distXk - 2.0 * kRayEpsilon, 0.0));
+    if (vis <= 0.0) {
+        return false;
+    }
+
+    // Target-side primary-edge weight.
+    const float pdfY1 = max(pdfBSDF(primary.mat, primary.wo, wp,
+        primary.normal, primary.T, primary.B, primary.coatN, primary.coatT, primary.coatB, primary.backface), 1.0e-10);
+    const float3 f1 = evalBSDF(primary.mat, primary.wo, wp,
+        primary.normal, primary.T, primary.B, primary.coatN, primary.coatT, primary.coatB, primary.backface);
+    float gPrim1;
+    const float fTerm1 = shadowTerminatorFactor(primary.normal, primary.geoNormal, wp, gPrim1);
+    if (fTerm1 <= 0.0) {
+        return false;
+    }
+    const float3 w1 = f1 * max(dot(wp, primary.normal), 0.0) * (fTerm1 / pdfY1);
+
+    // NEE vertex sum at x_k (no suffix continuation).
     float3 vertexSum = 0.0.xxx;
     if (rec.tri.valid != 0u) {
         const float3 fTri = evalBSDF(surfK.mat, woK, rec.tri.wi,
@@ -1456,26 +1852,17 @@ bool tryReconnectionShift(SurfaceHit primary, PathReservoir neighbor, float adap
         }
         vertexSum += fEnv * rec.env.raw * misW;
     }
-    // Continuation: x_k's own weight toward the cached suffix direction × L_inc.
-    const float pdfYk = max(pdfBSDF(surfK.mat, woK, rec.omegaK,
-        surfK.normal, surfK.T, surfK.B, surfK.coatN, surfK.coatT, surfK.coatB, surfK.backface), 1.0e-10);
-    const float3 fK = evalBSDF(surfK.mat, woK, rec.omegaK,
-        surfK.normal, surfK.T, surfK.B, surfK.coatN, surfK.coatT, surfK.coatB, surfK.backface);
-    float gContK;
-    const float fTermK = shadowTerminatorFactor(surfK.normal, surfK.geoNormal, rec.omegaK, gContK);
-    if (fTermK <= 0.0) {
+
+    // Simplified Jacobian (NEE-only, no continuation term).
+    const float geomGTarget = max(dot(surfK.normal, woK), 0.0) / max(distXk * distXk, 1.0e-12);
+    const float jacDenom = rec.pdfEdgeIn * rec.geomGSource;
+    const float jac = (pdfY1 * geomGTarget) / max(jacDenom, 1.0e-20);
+    // Reject (not clamp) on degenerate Jacobian inputs — see reconnectionJacobianValid.
+    if (!reconnectionJacobianValid(jac, jacDenom, rec.dist2X1Xk)) {
         return false;
     }
-    const float3 w2 = fK * max(dot(rec.omegaK, surfK.normal), 0.0) * (fTermK / pdfYk);
-    vertexSum += w2 * rec.suffixRadiance;
 
-    // GRIS reconnection Jacobian (Eq. 2, k = 2): target/source path-density ratio in the
-    // walk's shading-cosine measure (both G sides use the same convention as the record).
-    const float geomGTarget = max(dot(surfK.normal, woK), 0.0) / max(distXk * distXk, 1.0e-12);
-    const float jac = (pdfY1 * geomGTarget * pdfYk) /
-                      max(rec.pdfEdgeIn * rec.geomGSource * rec.pdfOmegaK, 1.0e-20);
-
-    float3 value = (w1 * vis) * vertexSum * jac * exposure; // F(Y)·|J|, walk-scale (post-exposure)
+    float3 value = (w1 * vis) * vertexSum * jac * exposure;
     if (!all(isfinite(value)) || any(isnan(value))) {
         return false;
     }
@@ -1565,12 +1952,26 @@ float4 restirPtIndirect(SurfaceHit primary, uint2 px, float adaptiveClamp, inout
 
             float3 gN;
             bool vn = false;
-            if (reconnectShiftEnabled != 0u && tryReconnectionShift(primary, neighbor, adaptiveClamp, rng, gN)) {
-                vn = true; // GI-ENH (a): cached-suffix reconnection (1 shadow ray + BSDF re-evals)
+            float3 gShift = 0.0.xxx;
+            bool vShift = false;
+            if (reconnectShiftEnabled != 0u) {
+                if ((reconnectShiftEnabled & 1u) != 0u) {
+                    vShift = tryReconnectionShift(primary, neighbor, adaptiveClamp, rng, gShift);
+                }
+                if (!vShift && (reconnectShiftEnabled & 2u) != 0u) {
+                    vShift = tryReconnectionShiftK3(primary, neighbor, adaptiveClamp, rng, gShift);
+                }
+            }
+            // Paper-faithful resampling (Zeltner §3 / Lin §6): shift OR replay.
+            // No pairwise MIS averaging — the paper uses one technique per candidate.
+            // Variance reduction comes from footprint criteria + k≥3 hit rate.
+            if (vShift && reconnectShiftEnabled != 0u) {
+                gN = gShift;
+                vn = true;
             } else {
                 ReconnectionCapture recNUnused = makeEmptyReconnectionCapture();
-                vn = traceGiPathCandidate(primary, pathReplaySeed(neighbor.rngKey, neighbor.rngIndex),
-                                                     adaptiveClamp, gN, recNUnused);
+                vn = traceGiPathCandidateNoRR(primary, pathReplaySeed(neighbor.rngKey, neighbor.rngIndex),
+                                                         adaptiveClamp, gN, recNUnused);
             }
             pathReservoirCombine(r, neighbor, gN, vn, shadeSum, rng);
         }

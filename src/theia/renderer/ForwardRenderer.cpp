@@ -185,21 +185,7 @@ bool ForwardRenderer::initialize(const harmonia::DeviceContext& ctx, const Confi
     }
 
     // Create 1-element dummy buffers for tile light slots (fallback when LightCuller hasn't run).
-    constexpr VkDeviceSize kDummySize = sizeof(std::uint32_t) * 128; // >= kMaxLightsPerTile
-    auto dummyCounts = harmonia::Buffer::create(ctx,
-                                                kDummySize,
-                                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                                VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                                                "theia.dummyTileCounts");
-    auto dummyIndices = harmonia::Buffer::create(ctx,
-                                                 kDummySize,
-                                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                                 VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                                                 "theia.dummyTileIndices");
-    if (dummyCounts && dummyIndices) {
-        m_dummyTileCounts = std::move(*dummyCounts);
-        m_dummyTileIndices = std::move(*dummyIndices);
-    }
+    // VK14: nullDescriptor — tile light buffers bind VK_NULL_HANDLE when absent (no dummy).
 
     // Env sampler (linear, U-repeat / V-clamp, mip-linear) for the raw equirectangular
     // panorama bound at set 2 binding 3 (sky background + transparent env path).
@@ -228,20 +214,7 @@ bool ForwardRenderer::initialize(const harmonia::DeviceContext& ctx, const Confi
     }
     m_envSampler = harmonia::UniqueSampler{ctx.device, envSampler};
 
-    // 1×1 placeholder SAMPLED_IMAGE for set 2 binding 4 when a scene has no environment
-    // map. The sky/GI stages gate reads on hasEnv, so it is never sampled; it only keeps
-    // the descriptor valid.
-    auto dummyEnv = harmonia::Image::create(ctx,
-                                            {1U, 1U},
-                                            VK_FORMAT_R16G16B16A16_SFLOAT,
-                                            VK_IMAGE_USAGE_SAMPLED_BIT,
-                                            VK_IMAGE_ASPECT_COLOR_BIT,
-                                            "theia.dummyEnv");
-    if (!dummyEnv) {
-        harmonia::Logger::error("ForwardRenderer: failed to create dummy env image");
-        return false;
-    }
-    m_dummyEnv = std::move(*dummyEnv);
+    // VK14: nullDescriptor — env view binds VK_NULL_HANDLE when absent (no 1×1 placeholder).
 
     m_initialized = true;
     m_hdrFirstUse = true;
@@ -267,20 +240,21 @@ void ForwardRenderer::shutdown() {
     m_desc.matSetLayout.reset();
     m_desc.iblSetLayout.reset();
     m_desc.textureSetLayout.reset();
-    m_desc.descriptorPool.reset();
+    m_desc.mesh.shutdown();
+    m_desc.mat.shutdown();
+    m_desc.ibl.shutdown();
+    m_desc.texture.shutdown();
 
     m_envSamplerInfo = {};
     m_envRawInfo = {};
     m_envSampler.reset();
-    m_dummyEnv = {};
-    m_dummyEnvReady = false;
+    // VK14: no dummy resources to destroy.
     m_envMarginalCdf = VK_NULL_HANDLE;
     m_envConditionalCdf = VK_NULL_HANDLE;
     m_envImportanceWidth = 0;
     m_envImportanceHeight = 0;
 
-    m_dummyTileCounts = {};
-    m_dummyTileIndices = {};
+    // VK14: no tile dummies.
 
     if (m_gpu.dgcPreprocessBuf != VK_NULL_HANDLE) {
         vmaDestroyBuffer(m_ctx->allocator, m_gpu.dgcPreprocessBuf, m_gpu.dgcPreprocessAlloc);
@@ -292,10 +266,7 @@ void ForwardRenderer::shutdown() {
 
     m_gpu.dgcLayout.reset();
 
-    m_desc.meshSet = VK_NULL_HANDLE;
-    m_desc.matSet = VK_NULL_HANDLE;
-    m_desc.iblSet = VK_NULL_HANDLE;
-    m_desc.textureSet = VK_NULL_HANDLE;
+    m_desc.texturesBoundFor = nullptr;
     m_desc.texturesBoundFor = nullptr;
     m_gpu.hiZPass.shutdown();
     m_gpu.gpuCullPass.shutdown();
@@ -344,41 +315,20 @@ void ForwardRenderer::setTileBuffers(VkBuffer tileLightCounts,
 }
 
 void ForwardRenderer::setEnvironment(VkImageView rawEnvView, float envUnitNits) {
-    if (!m_ctx || m_desc.iblSet == VK_NULL_HANDLE) {
+    if (!m_ctx || !m_desc.ibl.layoutSize()) {
         return;
     }
 
-    m_envSamplerInfo = VkDescriptorImageInfo{m_envSampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
     // Raw env panorama for the sky background / transparent env path. Fall back to the
     // 1×1 placeholder when no env is supplied, so the descriptor stays valid (sky/GI gate
     // reads on hasEnv).
-    const VkImageView envView = (rawEnvView != VK_NULL_HANDLE) ? rawEnvView : m_dummyEnv.view();
-    m_envRawInfo = VkDescriptorImageInfo{VK_NULL_HANDLE, envView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    // VK14 nullDescriptor: bind VK_NULL_HANDLE when no env (shader gates on hasEnv).
+    const VkImageView envView = rawEnvView;
     m_envUnitNits = envUnitNits;
 
-    const std::array<VkWriteDescriptorSet, 2> writes{
-        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                             nullptr,
-                             m_desc.iblSet,
-                             3,
-                             0,
-                             1,
-                             VK_DESCRIPTOR_TYPE_SAMPLER,
-                             &m_envSamplerInfo,
-                             nullptr,
-                             nullptr},
-        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                             nullptr,
-                             m_desc.iblSet,
-                             4,
-                             0,
-                             1,
-                             VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-                             &m_envRawInfo,
-                             nullptr,
-                             nullptr},
-    };
-    vkUpdateDescriptorSets(m_ctx->device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    // MOD1: write IBL descriptors into the descriptor buffer.
+    m_desc.ibl.writeSampler(*m_ctx, 3, m_envSampler);
+    m_desc.ibl.writeSampledImage(*m_ctx, 4, envView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 }
 
 bool ForwardRenderer::createDepthTarget() {
@@ -437,8 +387,13 @@ void ForwardRenderer::drawOpaque(VkCommandBuffer cmd,
         return;
     }
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_graphicsPipeline);
-    const std::array<VkDescriptorSet, 4> descSets{m_desc.meshSet, m_desc.matSet, m_desc.iblSet, m_desc.textureSet};
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 4, descSets.data(), 0, nullptr);
+    // MOD1: bind descriptor buffers (replaces vkCmdBindDescriptorSets).
+    {
+        const std::array<harmonia::DescriptorBufferWriter*, 4> writers{
+            &m_desc.mesh, &m_desc.mat, &m_desc.ibl, &m_desc.texture};
+        harmonia::DescriptorBufferWriter::bindSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0,
+                                                    writers);
+    }
     auto pc = pcBase;
     pc.presentationParams.y = 0.0f; // opaque routing in the task shader
     pc.cullPhase = cullPhase;
@@ -525,7 +480,7 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
     constexpr VkShaderStageFlags kTaskMeshFragStages =
         VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT;
     constexpr VkShaderStageFlags kTaskStage = VK_SHADER_STAGE_TASK_BIT_EXT;
-    constexpr VkDescriptorBindingFlags kUAB = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+    // MOD1: no UPDATE_AFTER_BIND — incompatible with DESCRIPTOR_BUFFER layouts.
 
     const std::array<VkDescriptorSetLayoutBinding, 12> meshBindings{
         VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, kTaskMeshFragStages, nullptr},
@@ -549,8 +504,7 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
                                      VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                      nullptr},
     };
-    const std::array<VkDescriptorBindingFlags, 12> meshBindingFlags{
-        kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB, kUAB};
+    const std::array<VkDescriptorBindingFlags, 12> meshBindingFlags{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo meshBindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = static_cast<std::uint32_t>(meshBindingFlags.size()),
@@ -559,7 +513,7 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
     const VkDescriptorSetLayoutCreateInfo meshSetLayoutInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = &meshBindingFlagsInfo,
-        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
+        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT,
         .bindingCount = static_cast<std::uint32_t>(meshBindings.size()),
         .pBindings = meshBindings.data(),
     };
@@ -579,7 +533,7 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
         VkDescriptorSetLayoutBinding{
             5, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
     };
-    const std::array<VkDescriptorBindingFlags, 6> matBindingFlags{kUAB, kUAB, kUAB, kUAB, kUAB, kUAB};
+    const std::array<VkDescriptorBindingFlags, 6> matBindingFlags{0, 0, 0, 0, 0, 0};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo matBindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = static_cast<std::uint32_t>(matBindingFlags.size()),
@@ -588,7 +542,7 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
     const VkDescriptorSetLayoutCreateInfo matSetLayoutInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = &matBindingFlagsInfo,
-        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
+        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT,
         .bindingCount = static_cast<std::uint32_t>(matBindings.size()),
         .pBindings = matBindings.data(),
     };
@@ -609,7 +563,7 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
         VkDescriptorSetLayoutBinding{6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
     };
-    const std::array<VkDescriptorBindingFlags, 4> iblBindingFlags{kUAB, kUAB, kUAB, kUAB};
+    const std::array<VkDescriptorBindingFlags, 4> iblBindingFlags{0, 0, 0, 0};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo iblBindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = static_cast<std::uint32_t>(iblBindingFlags.size()),
@@ -618,7 +572,7 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
     const VkDescriptorSetLayoutCreateInfo iblSetLayoutInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = &iblBindingFlagsInfo,
-        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
+        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT,
         .bindingCount = static_cast<std::uint32_t>(iblBindings.size()),
         .pBindings = iblBindings.data(),
     };
@@ -634,7 +588,7 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
     const VkDescriptorSetLayoutBinding textureBinding{
         0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
     const VkDescriptorBindingFlags textureBindingFlags =
-        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
+        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT; // MOD1: no UPDATE_AFTER_BIND (incompatible with DESCRIPTOR_BUFFER)
     const VkDescriptorSetLayoutBindingFlagsCreateInfo textureBindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = 1,
@@ -643,7 +597,7 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
     const VkDescriptorSetLayoutCreateInfo textureSetLayoutInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = &textureBindingFlagsInfo,
-        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
+        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT,
         .bindingCount = 1,
         .pBindings = &textureBinding,
     };
@@ -657,53 +611,22 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
     }
     m_desc.textureSetLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, textureSetLayout};
 
-    const std::array<VkDescriptorPoolSize, 5> poolSizes{
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 18},
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 2},
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_SAMPLER, 1},
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures},
-        VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1},
-    };
-    const VkDescriptorPoolCreateInfo poolInfo{
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-        .flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
-        .maxSets = 4,
-        .poolSizeCount = static_cast<std::uint32_t>(poolSizes.size()),
-        .pPoolSizes = poolSizes.data(),
-    };
-    VkDescriptorPool descriptorPool{};
-    if (vkCreateDescriptorPool(m_ctx->device, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
-        harmonia::Logger::error("Failed to create descriptor pool");
+    // MOD1: descriptor buffers (replaces the pool + allocated sets).
+    if (!m_desc.mesh.init(*m_ctx, meshSetLayout, 12, "theia.fwd.mesh.descBuf") ||
+        !m_desc.mat.init(*m_ctx, matSetLayout, 6, "theia.fwd.mat.descBuf") ||
+        !m_desc.ibl.init(*m_ctx, iblSetLayout, 8, "theia.fwd.ibl.descBuf") ||
+        !m_desc.texture.init(*m_ctx, textureSetLayout, 1, "theia.fwd.texture.descBuf")) {
+        harmonia::Logger::error("Failed to create descriptor buffers");
+        m_desc.mesh.shutdown();
+        m_desc.mat.shutdown();
+        m_desc.ibl.shutdown();
+        m_desc.texture.shutdown();
         m_desc.textureSetLayout.reset();
         m_desc.iblSetLayout.reset();
         m_desc.matSetLayout.reset();
         m_desc.meshSetLayout.reset();
         return false;
     }
-    m_desc.descriptorPool = harmonia::UniqueDescriptorPool{m_ctx->device, descriptorPool};
-
-    const std::array<VkDescriptorSetLayout, 4> setLayouts{
-        m_desc.meshSetLayout, m_desc.matSetLayout, m_desc.iblSetLayout, m_desc.textureSetLayout};
-    const VkDescriptorSetAllocateInfo allocInfo{
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-        .descriptorPool = m_desc.descriptorPool,
-        .descriptorSetCount = static_cast<std::uint32_t>(setLayouts.size()),
-        .pSetLayouts = setLayouts.data(),
-    };
-    std::array<VkDescriptorSet, 4> sets{};
-    if (vkAllocateDescriptorSets(m_ctx->device, &allocInfo, sets.data()) != VK_SUCCESS) {
-        harmonia::Logger::error("Failed to allocate descriptor sets");
-        m_desc.descriptorPool.reset();
-        m_desc.textureSetLayout.reset();
-        m_desc.iblSetLayout.reset();
-        m_desc.matSetLayout.reset();
-        m_desc.meshSetLayout.reset();
-        return false;
-    }
-    m_desc.meshSet = sets[0];
-    m_desc.matSet = sets[1];
-    m_desc.iblSet = sets[2];
-    m_desc.textureSet = sets[3];
     return true;
 }
 
@@ -725,7 +648,10 @@ bool ForwardRenderer::createPipelineLayouts() {
     VkPipelineLayout pipelineLayout{};
     if (vkCreatePipelineLayout(m_ctx->device, &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
         harmonia::Logger::error("Failed to create graphics pipeline layout");
-        m_desc.descriptorPool.reset();
+        m_desc.mesh.shutdown();
+    m_desc.mat.shutdown();
+    m_desc.ibl.shutdown();
+    m_desc.texture.shutdown();
         m_desc.textureSetLayout.reset();
         m_desc.iblSetLayout.reset();
         m_desc.matSetLayout.reset();
@@ -781,6 +707,7 @@ bool ForwardRenderer::createOpaquePipeline() {
     const VkGraphicsPipelineCreateInfo pipelineInfo{
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .pNext = &b.rendering,
+        .flags = VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT, // MOD1
         .stageCount = static_cast<std::uint32_t>(graphicsStages.size()),
         .pStages = graphicsStages.data(),
         .pVertexInputState = &b.vertexInput,
@@ -798,7 +725,10 @@ bool ForwardRenderer::createOpaquePipeline() {
         VK_SUCCESS) {
         harmonia::Logger::error("Failed to create graphics pipeline");
         m_pipelineLayout.reset();
-        m_desc.descriptorPool.reset();
+        m_desc.mesh.shutdown();
+    m_desc.mat.shutdown();
+    m_desc.ibl.shutdown();
+    m_desc.texture.shutdown();
         m_desc.iblSetLayout.reset();
         m_desc.matSetLayout.reset();
         m_desc.meshSetLayout.reset();
@@ -856,6 +786,7 @@ bool ForwardRenderer::createTransparentPipeline() {
     const VkGraphicsPipelineCreateInfo transparentPipelineInfo{
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .pNext = &b.rendering,
+        .flags = VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT, // MOD1
         .stageCount = static_cast<std::uint32_t>(graphicsStages.size()),
         .pStages = graphicsStages.data(),
         .pVertexInputState = &b.vertexInput,
@@ -875,7 +806,10 @@ bool ForwardRenderer::createTransparentPipeline() {
         harmonia::Logger::error("Failed to create transparent graphics pipeline");
         m_graphicsPipeline.reset();
         m_pipelineLayout.reset();
-        m_desc.descriptorPool.reset();
+        m_desc.mesh.shutdown();
+    m_desc.mat.shutdown();
+    m_desc.ibl.shutdown();
+    m_desc.texture.shutdown();
         m_desc.textureSetLayout.reset();
         m_desc.iblSetLayout.reset();
         m_desc.matSetLayout.reset();
@@ -960,6 +894,7 @@ bool ForwardRenderer::createSkyPipeline() {
     const VkGraphicsPipelineCreateInfo skyPipelineInfo{
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .pNext = &b.rendering,
+        .flags = VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT, // MOD1
         .stageCount = static_cast<std::uint32_t>(skyStages.size()),
         .pStages = skyStages.data(),
         .pVertexInputState = &b.vertexInput,
@@ -993,18 +928,7 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
     // Ensure the two-pass Hi-Z visibility buffers exist for the current scene.
     const bool visReady = m_scene != nullptr && m_gpu.ensureVisibilityBuffers(*m_ctx, *m_scene);
 
-    // One-time layout transition for the 1×1 dummy env placeholder: it is never written,
-    // but setEnvironment binds it as SHADER_READ_ONLY_OPTIMAL, so move it out of UNDEFINED once.
-    if (!m_dummyEnvReady && m_dummyEnv.isValid()) {
-        m_dummyEnv.transition(cmd,
-                              VK_IMAGE_LAYOUT_UNDEFINED,
-                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                              VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
-                              VK_ACCESS_2_NONE,
-                              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                              VK_ACCESS_2_SHADER_READ_BIT);
-        m_dummyEnvReady = true;
-    }
+    // VK14: no dummy env — nullDescriptor handles the absent-env case.
 
     prepareAttachments(cmd);
 
@@ -1262,304 +1186,57 @@ void ForwardRenderer::prepareAttachments(VkCommandBuffer cmd) {
 }
 
 void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
-    VkDescriptorBufferInfo vertexBufferInfo{
-        .buffer = m_scene->vertexBuffer().handle(),
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    VkDescriptorBufferInfo instanceBufferInfo{
-        .buffer = m_scene->instanceBuffer().handle(),
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    VkDescriptorBufferInfo instanceTransformInfo{
-        .buffer = m_scene->instanceTransformBuffer().handle(),
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    VkDescriptorBufferInfo indexBufferInfo{
-        .buffer = m_scene->indexBuffer().handle(),
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    VkDescriptorBufferInfo meshletBufferInfo{
-        .buffer = m_scene->meshletBuffer().handle(),
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    VkDescriptorBufferInfo meshletVertexBufferInfo{
-        .buffer = m_scene->meshletVertexBuffer().handle(),
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    VkDescriptorBufferInfo meshletTriangleBufferInfo{
-        .buffer = m_scene->meshletTriangleBuffer().handle(),
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-
-    VkDescriptorBufferInfo materialBufferInfo{
-        .buffer = m_scene->materialBuffer().handle(),
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    VkDescriptorBufferInfo lightBufferInfo{
-        .buffer = m_scene->lightBuffer().handle(),
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    VkDescriptorBufferInfo emissiveTriangleBufferInfo{
-        .buffer = m_scene->emissiveTriangleBuffer().handle(),
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    const VkBuffer cdfFallbackBuffer = (m_dummyTileCounts.handle() != VK_NULL_HANDLE)
-                                           ? m_dummyTileCounts.handle()
-                                           : m_scene->materialBuffer().handle();
-    VkDescriptorBufferInfo envMarginalCdfInfo{
-        .buffer = (m_envMarginalCdf != VK_NULL_HANDLE) ? m_envMarginalCdf : cdfFallbackBuffer,
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    VkDescriptorBufferInfo envConditionalCdfInfo{
-        .buffer = (m_envConditionalCdf != VK_NULL_HANDLE) ? m_envConditionalCdf : cdfFallbackBuffer,
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    const VkBuffer tileCntBuf = (m_tileLightCountsBuf != VK_NULL_HANDLE && m_dummyTileCounts.handle() != VK_NULL_HANDLE)
-                                    ? m_tileLightCountsBuf
-                                    : m_dummyTileCounts.handle();
-    const VkBuffer tileIdxBuf =
-        (m_tileLightIndicesBuf != VK_NULL_HANDLE && m_dummyTileIndices.handle() != VK_NULL_HANDLE)
-            ? m_tileLightIndicesBuf
-            : m_dummyTileIndices.handle();
-    const bool hasTileData = (tileCntBuf != VK_NULL_HANDLE && tileIdxBuf != VK_NULL_HANDLE);
-    VkDescriptorBufferInfo tileLightCountsInfo{
-        .buffer = hasTileData ? tileCntBuf : m_dummyTileCounts.handle(),
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    VkDescriptorBufferInfo tileLightIndicesInfo{
-        .buffer = hasTileData ? tileIdxBuf : m_dummyTileIndices.handle(),
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
+    // MOD1: fallback buffer handles for optional resources (env CDFs, tile lights, visibility).
+    // VK14 nullDescriptor: bind VK_NULL_HANDLE when buffers are absent (shader gates on hasTileData).
+    const VkBuffer tileLightCountsBuf = m_tileLightCountsBuf;
+    const VkBuffer tileLightIndicesBuf = m_tileLightIndicesBuf;
+    const VkBuffer envMarginalCdfBuf = m_envMarginalCdf;
+    const VkBuffer envConditionalCdfBuf = m_envConditionalCdf;
 
     const VkAccelerationStructureKHR sceneTlas = m_scene->tlas();
-    const VkWriteDescriptorSetAccelerationStructureKHR tlasWriteInfo{
-        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR,
-        .accelerationStructureCount = 1,
-        .pAccelerationStructures = &sceneTlas,
-    };
 
     const VkBuffer visFallbackBuf = m_scene->meshletBuffer().handle();
     const VkBuffer prevVisBuf = m_gpu.meshletVisibility[m_gpu.visFrame].handle();
     const VkBuffer currVisBuf = m_gpu.meshletVisibility[m_gpu.visFrame ^ 1u].handle();
-    VkDescriptorBufferInfo prevVisInfo{
-        .buffer = (prevVisBuf != VK_NULL_HANDLE) ? prevVisBuf : visFallbackBuf,
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    VkDescriptorBufferInfo currVisInfo{
-        .buffer = (currVisBuf != VK_NULL_HANDLE) ? currVisBuf : visFallbackBuf,
-        .offset = 0,
-        .range = VK_WHOLE_SIZE,
-    };
-    VkDescriptorImageInfo hiZInfo{
-        .sampler = VK_NULL_HANDLE,
-        .imageView = m_gpu.hiZPass.sampledView(),
-        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-    };
-
+    const VkBuffer prevVisBufFinal = (prevVisBuf != VK_NULL_HANDLE) ? prevVisBuf : visFallbackBuf;
+    const VkBuffer currVisBufFinal = (currVisBuf != VK_NULL_HANDLE) ? currVisBuf : visFallbackBuf;
     const VkBuffer compactInstBuf = m_gpu.gpuCullPass.compactInstanceListBuffer();
-    VkDescriptorBufferInfo compactInstInfo{compactInstBuf, 0, VK_WHOLE_SIZE};
 
-    std::array<VkWriteDescriptorSet, 20> writes{
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_desc.meshSet,
-            .dstBinding = 0,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &vertexBufferInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_desc.meshSet,
-            .dstBinding = 1,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &instanceBufferInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_desc.meshSet,
-            .dstBinding = 2,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &indexBufferInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_desc.meshSet,
-            .dstBinding = 3,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &meshletBufferInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_desc.meshSet,
-            .dstBinding = 4,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &meshletVertexBufferInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_desc.meshSet,
-            .dstBinding = 5,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &meshletTriangleBufferInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_desc.meshSet,
-            .dstBinding = 6,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &materialBufferInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_desc.matSet,
-            .dstBinding = 0,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &materialBufferInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_desc.matSet,
-            .dstBinding = 1,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &lightBufferInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_desc.matSet,
-            .dstBinding = 2,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &emissiveTriangleBufferInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_desc.matSet,
-            .dstBinding = 3,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &tileLightCountsInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_desc.matSet,
-            .dstBinding = 4,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &tileLightIndicesInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .pNext = &tlasWriteInfo,
-            .dstSet = m_desc.matSet,
-            .dstBinding = 5,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_desc.iblSet,
-            .dstBinding = 6,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &envMarginalCdfInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_desc.iblSet,
-            .dstBinding = 7,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &envConditionalCdfInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_desc.meshSet,
-            .dstBinding = 7,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &prevVisInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_desc.meshSet,
-            .dstBinding = 8,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &currVisInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_desc.meshSet,
-            .dstBinding = 9,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-            .pImageInfo = &hiZInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_desc.meshSet,
-            .dstBinding = 10,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &compactInstInfo,
-        },
-        VkWriteDescriptorSet{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = m_desc.meshSet,
-            .dstBinding = 11,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &instanceTransformInfo,
-        },
-    };
-    vkUpdateDescriptorSets(m_ctx->device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
+    // MOD1: write all descriptors via the descriptor buffer writers.
+    // Mesh set (set 0)
+    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 0, m_scene->vertexBuffer().handle());
+    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 1, m_scene->instanceBuffer().handle());
+    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 2, m_scene->indexBuffer().handle());
+    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 3, m_scene->meshletBuffer().handle());
+    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 4, m_scene->meshletVertexBuffer().handle());
+    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 5, m_scene->meshletTriangleBuffer().handle());
+    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 6, m_scene->materialBuffer().handle());
+    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 7, prevVisBufFinal);
+    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 8, currVisBufFinal);
+    m_desc.mesh.writeSampledImage(*m_ctx, 9, m_gpu.hiZPass.sampledView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 10, compactInstBuf);
+    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 11, m_scene->instanceTransformBuffer().handle());
+
+    // Mat set (set 1)
+    m_desc.mat.writeStorageBufferHandle(*m_ctx, 0, m_scene->materialBuffer().handle());
+    m_desc.mat.writeStorageBufferHandle(*m_ctx, 1, m_scene->lightBuffer().handle());
+    m_desc.mat.writeStorageBufferHandle(*m_ctx, 2, m_scene->emissiveTriangleBuffer().handle());
+    m_desc.mat.writeStorageBufferHandle(*m_ctx, 3, tileLightCountsBuf);
+    m_desc.mat.writeStorageBufferHandle(*m_ctx, 4, tileLightIndicesBuf);
+    m_desc.mat.writeAccelerationStructure(*m_ctx, 5, sceneTlas);
+
+    // IBL set (set 2) — bindings 3,4 written in setEnvironment(); 6,7 here.
+    m_desc.ibl.writeStorageBufferHandle(*m_ctx, 6, envMarginalCdfBuf);
+    m_desc.ibl.writeStorageBufferHandle(*m_ctx, 7, envConditionalCdfBuf);
 
     if (m_scene != m_desc.texturesBoundFor) {
         const auto& sceneTextures = m_scene->textures();
         const std::uint32_t texCount = std::min(static_cast<std::uint32_t>(sceneTextures.size()), kMaxBindlessTextures);
-        if (texCount > 0) {
-            std::vector<VkDescriptorImageInfo> imageInfos(texCount);
-            for (std::uint32_t i = 0; i < texCount; ++i) {
-                imageInfos[i] = VkDescriptorImageInfo{
-                    .sampler = sceneTextures[i].sampler(),
-                    .imageView = sceneTextures[i].image().view(),
-                    .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                };
-            }
-            const VkWriteDescriptorSet texWrite{
-                .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                .dstSet = m_desc.textureSet,
-                .dstBinding = 0,
-                .dstArrayElement = 0,
-                .descriptorCount = texCount,
-                .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                .pImageInfo = imageInfos.data(),
-            };
-            vkUpdateDescriptorSets(m_ctx->device, 1, &texWrite, 0, nullptr);
+        for (std::uint32_t i = 0; i < texCount; ++i) {
+            // MOD1: write bindless combined image samplers into the descriptor buffer.
+            m_desc.texture.writeCombinedImageSampler(*m_ctx, 0, i, sceneTextures[i].sampler(),
+                                                      sceneTextures[i].image().view(),
+                                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
         m_desc.texturesBoundFor = m_scene;
     }
@@ -1609,8 +1286,13 @@ void ForwardRenderer::beginSceneRendering(VkCommandBuffer cmd, VkAttachmentLoadO
 }
 
 void ForwardRenderer::bindMeshSets(VkCommandBuffer cmd) {
-    const std::array<VkDescriptorSet, 4> descSets{m_desc.meshSet, m_desc.matSet, m_desc.iblSet, m_desc.textureSet};
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, 4, descSets.data(), 0, nullptr);
+    // MOD1: bind descriptor buffers (replaces vkCmdBindDescriptorSets).
+    {
+        const std::array<harmonia::DescriptorBufferWriter*, 4> writers{
+            &m_desc.mesh, &m_desc.mat, &m_desc.ibl, &m_desc.texture};
+        harmonia::DescriptorBufferWriter::bindSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0,
+                                                    writers);
+    }
 }
 
 void ForwardRenderer::recordSky(VkCommandBuffer cmd) {
@@ -1637,8 +1319,7 @@ void ForwardRenderer::recordSky(VkCommandBuffer cmd) {
         ._pad1 = 0u,
     };
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skyPipeline);
-    vkCmdBindDescriptorSets(
-        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skyPipelineLayout, 0, 1, &m_desc.iblSet, 0, nullptr);
+    m_desc.ibl.bind(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_skyPipelineLayout, 0);
     vkCmdPushConstants(
         cmd, m_skyPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(skyPc), &skyPc);
     vkCmdDraw(cmd, 3, 1, 0, 0);

@@ -302,7 +302,7 @@ VkResult Scene::uploadSceneBuffers(const harmonia::DeviceContext& ctx,
             ctx,
             pool,
             std::as_bytes(std::span<const GpuInstanceBounds>(m_instanceBounds.data(), m_instanceBounds.size())),
-            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            kStorageAddr,
             "scene.instanceBounds",
             m_instanceBoundsBuffer)) {
         return r;

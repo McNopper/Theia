@@ -161,6 +161,23 @@ cd build; ctest --output-on-failure
 Equivalent preset flow (Ninja + Release + clang-cl + `$env:VCPKG_ROOT` toolchain):
 `cmake --preset win` / `cmake --build --preset win` / `ctest --preset win`.
 
+> **⚠️ Do not run things in parallel — it slows the machine to a crawl.**
+> - **Tests are serialised in CMake:** every test carries `RUN_SERIAL`, so `ctest -j`
+>   cannot parallelise them. That only covers *within* one `ctest` invocation, so still
+>   run ONE repo's suite at a time (never Harmonia + Theia + Hyperion together).
+> - **GPU jobs strictly one after the other:** renders, gallery generation and parity
+>   gates all saturate the GPU. Run one, wait for it to finish, then start the next.
+>   Two concurrent jobs make both several times slower and interleave their logs.
+> - **Offscreen capture self-deprioritises:** `App::renderOffscreen()` drops the
+>   process to below-normal CPU priority (`BELOW_NORMAL_PRIORITY_CLASS` on Windows,
+>   nice +10 on POSIX) for the whole capture, so the desktop stays usable while a
+>   render runs. A per-frame `std::this_thread::yield()` alone is NOT sufficient - it
+>   is `SwitchToThread()`/`sched_yield()`, only a hint that does nothing when no
+>   equal-or-higher-priority thread is already runnable. On POSIX the drop is one-way
+>   for an unprivileged process (raising priority back needs `CAP_SYS_NICE`), so it is
+>   used only in the one-shot capture path. This helps *during* a capture; it is still
+>   not licence to run two captures at once.
+
 **Static analysis:** `python tools/check_tidy.py` â€” parallel clang-tidy over
 `build/compile_commands.json`, classified per `.clang-tidy`'s WarningsAsErrors contract
 (clang-diagnostic/clang-analyzer/bugprone fail the run; modernize/performance/portability
@@ -228,7 +245,11 @@ path. Both paths share one task-shader entry point (`gid.x = 0..visibleCount-1`)
   the GD3 indirect draw is always available.
 - Debug A/B toggles: `THEIA_FORCE_GD3` (skip DGC, use indirect draw), `THEIA_SINGLE_PASS`
   (bypass two-pass Hi-Z), `THEIA_DISABLE_HIZ` (draw all meshlets), `THEIA_NO_RECONNECTION`
-  (GI-ENH (a) reconnection shift off — replay-only, for A/B measurement).
+  (GI-ENH (a) reconnection shift off — replay-only, for A/B measurement), `THEIA_SHIFT_MASK=<n>`
+  (GI-ENH (a) feature mask: bit0 = k=2 reconnection shift, bit1 = k>=3 hybrid shift;
+  0 = replay-only. Note the k=2 path is currently inert: `captureTarget` is hardcoded to 1,
+  so `kLevel` is always 2 and the `kLevel != 1` guard in `tryReconnectionShift` rejects every
+  record. Only the k>=3 hybrid shift actually fires today).
 - GD4: Both Hi-Z passes (`cullPhase=1` and `cullPhase=2`) use the same GPU-indirect path;
   per-meshlet Hi-Z occlusion is handled by the mesh shader using `cullPhase` push constant.
 

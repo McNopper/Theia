@@ -55,37 +55,11 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx,
     m_boundEnvMarginalCdf = VK_NULL_HANDLE;
     m_boundEnvConditionalCdf = VK_NULL_HANDLE;
     m_boundGradientVarianceView = VK_NULL_HANDLE;
-    m_dummyGradientReady = false;
-
-    // A3(b): 1×1 R32G32F placeholder for binding 15 when no A-SVGF gradient/variance
-    // guide is available. Keeps the descriptor valid; hasGradientVariance=0 gates reads.
-    auto dummyGrad = harmonia::Image::create(ctx,
-                                             {1U, 1U},
-                                             VK_FORMAT_R32G32_SFLOAT,
-                                             VK_IMAGE_USAGE_SAMPLED_BIT,
-                                             VK_IMAGE_ASPECT_COLOR_BIT,
-                                             "theia.gi.dummyGradientVariance");
-    if (!dummyGrad) {
-        harmonia::Logger::error("GiPass: failed to create dummy gradient/variance image: VkResult {}",
-                                static_cast<int>(dummyGrad.error()));
-        return false;
-    }
-    m_dummyGradientVariance = std::move(*dummyGrad);
-
-    // A4: 1×1 R32G32F zero placeholder for the motion-vector binding (18) when no real
-    // motion vectors are wired (static-history temporal reuse).
-    auto dummyMotion = harmonia::Image::create(ctx,
-                                               {1U, 1U},
-                                               VK_FORMAT_R32G32_SFLOAT,
-                                               VK_IMAGE_USAGE_SAMPLED_BIT,
-                                               VK_IMAGE_ASPECT_COLOR_BIT,
-                                               "theia.gi.dummyMotionVectors");
-    if (!dummyMotion) {
-        harmonia::Logger::error("GiPass: failed to create dummy motion-vector image: VkResult {}",
-                                static_cast<int>(dummyMotion.error()));
-        return false;
-    }
-    m_dummyMotionVectors = std::move(*dummyMotion);
+    // VK14/nullDescriptor: bindings 15 (gradient/variance) and 18 (motion vectors) no
+    // longer need 1×1 dummy images — VK_NULL_HANDLE is bound and the shader reads return
+    // zero (the push-constant flags hasGradientVariance=0 / restirHasMotion=0 already gate
+    // the read paths). The dummy images, their layout transitions, and their state tracking
+    // are all deleted.
 
     // A4: ReSTIR DI reservoir ping-pong buffers. Sized to hold one Reservoir per pixel
     // at a generous stride (kReservoirStride) covering the Slang struct layout.
@@ -95,7 +69,8 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx,
         for (auto& slot : m_reservoirBuf) {
             auto buf = harmonia::Buffer::create(ctx,
                                                 reservoirBytes,
-                                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                                 VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
                                                 "theia.gi.restirReservoir");
             if (!buf) {
@@ -111,7 +86,8 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx,
         for (auto& slot : m_pathReservoirBuf) {
             auto buf = harmonia::Buffer::create(ctx,
                                                 pathReservoirBytes,
-                                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                                 VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
                                                 "theia.gi.restirPathReservoir");
             if (!buf) {
@@ -130,7 +106,8 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx,
         auto buf = harmonia::Buffer::upload(ctx,
                                             uploadPool,
                                             std::as_bytes(std::span<const std::uint32_t>(packed)),
-                                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                             "theia.gi.pairingOffsets");
         if (!buf) {
             harmonia::Logger::error("GiPass: failed to upload pairing offsets: VkResult {}",
@@ -143,7 +120,6 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx,
     m_reservoirsCleared = false;
     m_pathReservoirPingPong = 0;
     m_pathReservoirsCleared = false;
-    m_dummyMotionReady = false;
     m_boundMotionVectorView = VK_NULL_HANDLE;
 
     if (!createDescriptors()) {
@@ -156,10 +132,6 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx,
 }
 
 void GiPass::shutdown() {
-    m_dummyGradientVariance = {};
-    m_dummyGradientReady = false;
-    m_dummyMotionVectors = {};
-    m_dummyMotionReady = false;
     m_reservoirBuf[0] = {};
     m_reservoirBuf[1] = {};
     m_reservoirsCleared = false;
@@ -172,10 +144,8 @@ void GiPass::shutdown() {
     m_boundMotionVectorView = VK_NULL_HANDLE;
     m_pipeline.reset();
     m_pipelineLayout.reset();
-    m_pool.reset();
-    m_set = VK_NULL_HANDLE;
-    for (auto& set : m_sets) {
-        set = VK_NULL_HANDLE;
+    for (auto& w : m_descWriters) {
+        w.shutdown(); // MOD1: replaces pool + sets
     }
     m_setLayout.reset();
     m_boundScene = nullptr;
@@ -188,7 +158,7 @@ void GiPass::shutdown() {
 }
 
 bool GiPass::createDescriptors() {
-    const std::array<VkDescriptorSetLayoutBinding, 23> bindings{{
+    const std::array<VkDescriptorSetLayoutBinding, 25> bindings{{
         {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // TLAS
         {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // hdr (RW)
         {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // giBuffer
@@ -218,16 +188,18 @@ bool GiPass::createDescriptors() {
         {21, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI2 PT path reservoirs
                                                                                           // (prev, RO)
         {22, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI-ENH pairing maps
+        {23, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI-ENH shift share (cur, RW)
+        {24, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI-ENH shift share (prev, RO)
     }};
 
-    constexpr VkDescriptorBindingFlags kUpdateAfterBind = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
-    constexpr VkDescriptorBindingFlags kTextureFlags =
-        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
-    const std::array<VkDescriptorBindingFlags, 23> bindingFlags{
-        kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind,
-        kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind,
-        kUpdateAfterBind, kTextureFlags,    kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind,
-        kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind, kUpdateAfterBind};
+    // MOD1: no UPDATE_AFTER_BIND — incompatible with DESCRIPTOR_BUFFER layouts.
+    constexpr VkDescriptorBindingFlags kTextureFlags = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
+    const std::array<VkDescriptorBindingFlags, 25> bindingFlags{
+        0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0,
+        0, kTextureFlags, 0, 0, 0, 0,
+        0, 0, 0, 0, 0,
+        0, 0};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = static_cast<std::uint32_t>(bindingFlags.size()),
@@ -237,7 +209,7 @@ bool GiPass::createDescriptors() {
     const VkDescriptorSetLayoutCreateInfo setInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = &bindingFlagsInfo,
-        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
+        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT,
         .bindingCount = static_cast<std::uint32_t>(bindings.size()),
         .pBindings = bindings.data(),
     };
@@ -248,60 +220,19 @@ bool GiPass::createDescriptors() {
     }
     m_setLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, setLayout};
 
-    // Pool covers EVERY slot's set (the per-frame-slot sets are allocated together —
-    // a pool sized for one set silently kills GiPass init with maxSets exhausted).
-    const std::array<VkDescriptorPoolSize, 6> poolSizes{{
-        {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1 * kDescriptorSlots},
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1 * kDescriptorSlots},
-        {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 5 * kDescriptorSlots}, // 2,3,4,15 + 18 (motion)
-        {VK_DESCRIPTOR_TYPE_SAMPLER, 1 * kDescriptorSlots},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 14 * kDescriptorSlots}, // 6,7,8,9,10,11,12,14 + 16,17 (reservoirs)
-                                                                    // + 19 (instance transforms) + 20,21 (path
-                                                                    // reservoirs) + 22 (pairing)
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures * kDescriptorSlots},
-    }};
-    const VkDescriptorPoolCreateInfo poolInfo{
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-        .flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
-        .maxSets = kDescriptorSlots,
-        .poolSizeCount = static_cast<std::uint32_t>(poolSizes.size()),
-        .pPoolSizes = poolSizes.data(),
-    };
-    VkDescriptorPool pool{};
-    if (vkCreateDescriptorPool(m_ctx->device, &poolInfo, nullptr, &pool) != VK_SUCCESS) {
-        harmonia::Logger::error("GiPass: failed to create descriptor pool");
-        return false;
-    }
-    m_pool = harmonia::UniqueDescriptorPool{m_ctx->device, pool};
-
-    const VkDescriptorSetAllocateInfo allocInfo{
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-        .descriptorPool = m_pool,
-        .descriptorSetCount = 1,
-        .pSetLayouts = m_setLayout.ptr(),
-    };
-    for (auto& set : m_sets) {
-        if (vkAllocateDescriptorSets(m_ctx->device, &allocInfo, &set) != VK_SUCCESS) {
-            harmonia::Logger::error("GiPass: failed to allocate descriptor set");
+    // MOD1: descriptor buffers (replaces the pool + allocated sets).
+    for (std::uint32_t si = 0; si < kDescriptorSlots; ++si) {
+        if (!m_descWriters[si].init(*m_ctx, setLayout, 25,
+                                    si == 0 ? "theia.gi.descBuf0" : "theia.gi.descBuf1")) {
+            harmonia::Logger::error("GiPass: failed to create descriptor buffer slot {}", si);
+            for (std::uint32_t j = 0; j <= si; ++j) m_descWriters[j].shutdown();
             return false;
         }
     }
-    m_set = m_sets[0];
 
-    // GI-ENH pairing maps (binding 22) are static after creation — write once per set.
-    for (auto set : m_sets) {
-        const VkDescriptorBufferInfo pairingInfo{m_pairingOffsetBuf.handle(), 0, VK_WHOLE_SIZE};
-        const VkWriteDescriptorSet pairingWrite{
-            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .pNext = nullptr,
-            .dstSet = set,
-            .dstBinding = 22,
-            .dstArrayElement = 0,
-            .descriptorCount = 1,
-            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-            .pBufferInfo = &pairingInfo,
-        };
-        vkUpdateDescriptorSets(m_ctx->device, 1, &pairingWrite, 0, nullptr);
+    // GI-ENH pairing maps (binding 22) are static after creation — write once per slot.
+    for (std::uint32_t si = 0; si < kDescriptorSlots; ++si) {
+        m_descWriters[si].writeStorageBufferHandle(*m_ctx, 22, m_pairingOffsetBuf.handle());
     }
     return true;
 }
@@ -334,6 +265,7 @@ bool GiPass::createPipeline(const char* giSpv) {
 
     const VkComputePipelineCreateInfo pipeInfo{
         .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+        .flags = VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT, // MOD1
         .stage = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
                   .stage = VK_SHADER_STAGE_COMPUTE_BIT,
                   .module = *module,
@@ -355,29 +287,6 @@ void GiPass::updateDescriptors(const FrameParams& params) {
     const Scene* scene = params.scene;
 
     VkAccelerationStructureKHR tlas = scene->tlas();
-    const VkWriteDescriptorSetAccelerationStructureKHR tlasWriteInfo{
-        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR,
-        .accelerationStructureCount = 1,
-        .pAccelerationStructures = &tlas,
-    };
-
-    const VkDescriptorImageInfo hdrInfo{
-        .imageView = m_cfg.hdrView,
-        .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
-    };
-    const VkDescriptorImageInfo giBufferInfo{
-        .imageView = m_cfg.giBufferView,
-        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-    };
-    const VkDescriptorImageInfo gbufferInfo{
-        .imageView = m_cfg.gbufferView,
-        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-    };
-    const VkDescriptorImageInfo envInfo{
-        .imageView = params.envMapView,
-        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-    };
-    const VkDescriptorImageInfo envSamplerInfo{.sampler = params.envSampler};
 
     // Env CDF buffers may be absent (no env map); bind the material buffer as a harmless
     // placeholder so the descriptor stays valid — the shader gates all reads on hasEnvMap.
@@ -386,231 +295,49 @@ void GiPass::updateDescriptors(const FrameParams& params) {
     const VkBuffer conditionalCdf =
         (params.envConditionalCdf != VK_NULL_HANDLE) ? params.envConditionalCdf : cdfFallback;
 
-    const VkDescriptorBufferInfo materialsInfo{scene->materialBuffer().handle(), 0, VK_WHOLE_SIZE};
-    const VkDescriptorBufferInfo verticesInfo{scene->vertexBuffer().handle(), 0, VK_WHOLE_SIZE};
-    const VkDescriptorBufferInfo instancesInfo{scene->instanceBuffer().handle(), 0, VK_WHOLE_SIZE};
-    const VkDescriptorBufferInfo instanceTransformsInfo{scene->instanceTransformBuffer().handle(), 0, VK_WHOLE_SIZE};
-    const VkDescriptorBufferInfo indicesInfo{scene->indexBuffer().handle(), 0, VK_WHOLE_SIZE};
-    const VkDescriptorBufferInfo emissiveInfo{scene->emissiveTriangleBuffer().handle(), 0, VK_WHOLE_SIZE};
-    const VkDescriptorBufferInfo emissiveCdfInfo{scene->emissiveCdfBuffer().handle(), 0, VK_WHOLE_SIZE};
-    const VkDescriptorBufferInfo marginalInfo{marginalCdf, 0, VK_WHOLE_SIZE};
-    const VkDescriptorBufferInfo conditionalInfo{conditionalCdf, 0, VK_WHOLE_SIZE};
-
-    // A3(b): A-SVGF gradient/variance guide, or the 1×1 dummy when unavailable.
-    // Both live in VK_IMAGE_LAYOUT_GENERAL (the real guide is a denoiser storage image).
-    const VkDescriptorImageInfo gradientVarianceInfo{
-        .imageView = (params.gradientVarianceView != VK_NULL_HANDLE) ? params.gradientVarianceView
-                                                                     : m_dummyGradientVariance.view(),
-        .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
-    };
-
-    // Scene bindings are frame-independent — write them into EVERY slot's set (the
-    // texture block's dirty flag is computed once outside the loop).
+    // Scene bindings are frame-independent — write them into EVERY slot's descriptor buffer.
     const bool texturesDirty = (m_texturesBoundFor != scene);
     for (std::uint32_t si = 0; si < kDescriptorSlots; ++si) {
-        m_set = m_sets[si];
-        const std::array<VkWriteDescriptorSet, 16> writes{{
-            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-             &tlasWriteInfo,
-             m_set,
-             0,
-             0,
-             1,
-             VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
-             nullptr,
-             nullptr,
-             nullptr},
-            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-             nullptr,
-             m_set,
-             1,
-             0,
-             1,
-             VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
-             &hdrInfo,
-             nullptr,
-             nullptr},
-            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-             nullptr,
-             m_set,
-             2,
-             0,
-             1,
-             VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-             &giBufferInfo,
-             nullptr,
-             nullptr},
-            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-             nullptr,
-             m_set,
-             3,
-             0,
-             1,
-             VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-             &gbufferInfo,
-             nullptr,
-             nullptr},
-            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-             nullptr,
-             m_set,
-             4,
-             0,
-             1,
-             VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-             &envInfo,
-             nullptr,
-             nullptr},
-            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-             nullptr,
-             m_set,
-             5,
-             0,
-             1,
-             VK_DESCRIPTOR_TYPE_SAMPLER,
-             &envSamplerInfo,
-             nullptr,
-             nullptr},
-            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-             nullptr,
-             m_set,
-             6,
-             0,
-             1,
-             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-             nullptr,
-             &materialsInfo,
-             nullptr},
-            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-             nullptr,
-             m_set,
-             7,
-             0,
-             1,
-             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-             nullptr,
-             &verticesInfo,
-             nullptr},
-            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-             nullptr,
-             m_set,
-             8,
-             0,
-             1,
-             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-             nullptr,
-             &instancesInfo,
-             nullptr},
-            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-             nullptr,
-             m_set,
-             9,
-             0,
-             1,
-             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-             nullptr,
-             &indicesInfo,
-             nullptr},
-            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-             nullptr,
-             m_set,
-             10,
-             0,
-             1,
-             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-             nullptr,
-             &emissiveInfo,
-             nullptr},
-            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-             nullptr,
-             m_set,
-             11,
-             0,
-             1,
-             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-             nullptr,
-             &marginalInfo,
-             nullptr},
-            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-             nullptr,
-             m_set,
-             12,
-             0,
-             1,
-             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-             nullptr,
-             &conditionalInfo,
-             nullptr},
-            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-             nullptr,
-             m_set,
-             14,
-             0,
-             1,
-             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-             nullptr,
-             &emissiveCdfInfo,
-             nullptr},
-            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-             nullptr,
-             m_set,
-             15,
-             0,
-             1,
-             VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-             &gradientVarianceInfo,
-             nullptr,
-             nullptr},
-            {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-             nullptr,
-             m_set,
-             19,
-             0,
-             1,
-             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-             nullptr,
-             &instanceTransformsInfo,
-             nullptr},
-        }};
+        auto& w = m_descWriters[si];
+        // MOD1: typed descriptor buffer writes.
+        w.writeAccelerationStructure(*m_ctx, 0, tlas);
+        w.writeStorageImage(*m_ctx, 1, m_cfg.hdrView, VK_IMAGE_LAYOUT_GENERAL);
+        w.writeSampledImage(*m_ctx, 2, m_cfg.giBufferView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        w.writeSampledImage(*m_ctx, 3, m_cfg.gbufferView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        w.writeSampledImage(*m_ctx, 4, params.envMapView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        w.writeSampler(*m_ctx, 5, params.envSampler);
+        w.writeStorageBufferHandle(*m_ctx, 6, scene->materialBuffer().handle());
+        w.writeStorageBufferHandle(*m_ctx, 7, scene->vertexBuffer().handle());
+        w.writeStorageBufferHandle(*m_ctx, 8, scene->instanceBuffer().handle());
+        w.writeStorageBufferHandle(*m_ctx, 9, scene->indexBuffer().handle());
+        w.writeStorageBufferHandle(*m_ctx, 10, scene->emissiveTriangleBuffer().handle());
+        w.writeStorageBufferHandle(*m_ctx, 11, marginalCdf);
+        w.writeStorageBufferHandle(*m_ctx, 12, conditionalCdf);
+        w.writeStorageBufferHandle(*m_ctx, 14, scene->emissiveCdfBuffer().handle());
+        w.writeSampledImage(*m_ctx, 15, params.gradientVarianceView, VK_IMAGE_LAYOUT_GENERAL);
+        w.writeStorageBufferHandle(*m_ctx, 19, scene->instanceTransformBuffer().handle());
 
-        std::vector<VkWriteDescriptorSet> allWrites(writes.begin(), writes.end());
+        // Bindless textures (binding 13) — write when scene changes.
         if (texturesDirty) {
             const auto& sceneTextures = scene->textures();
             const std::uint32_t texCount =
                 std::min(static_cast<std::uint32_t>(sceneTextures.size()), kMaxBindlessTextures);
-            if (texCount > 0) {
-                std::vector<VkDescriptorImageInfo> imageInfos(texCount);
-                for (std::uint32_t i = 0; i < texCount; ++i) {
-                    imageInfos[i] = VkDescriptorImageInfo{
-                        .sampler = sceneTextures[i].sampler(),
-                        .imageView = sceneTextures[i].image().view(),
-                        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                    };
-                }
-                allWrites.push_back(VkWriteDescriptorSet{
-                    .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                    .dstSet = m_set,
-                    .dstBinding = 13,
-                    .dstArrayElement = 0,
-                    .descriptorCount = texCount,
-                    .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                    .pImageInfo = imageInfos.data(),
-                });
+            for (std::uint32_t i = 0; i < texCount; ++i) {
+                w.writeCombinedImageSampler(*m_ctx, 13, i, sceneTextures[i].sampler(),
+                                             sceneTextures[i].image().view(),
+                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             }
-            m_texturesBoundFor = scene;
         }
-        vkUpdateDescriptorSets(
-            m_ctx->device, static_cast<std::uint32_t>(allWrites.size()), allWrites.data(), 0, nullptr);
     }
     m_texturesBoundFor = scene;
 }
 
 void GiPass::updateRestirDescriptors(const FrameParams& params, std::uint32_t slot) {
-    // Per-frame bindings are written ONLY into the given slot's set — the other slot may
-    // hold a frame that is still in flight (the descriptor-race fix).
-    m_set = m_sets[slot % kDescriptorSlots];
-    // A4: bindings 16 (cur reservoir, written this frame), 17 (prev reservoir, read for
-    // temporal reuse) and 18 (motion vectors). Rewritten every frame because the reservoir
-    // ping-pong flips and the motion view can change; all three are UPDATE_AFTER_BIND.
+    // Per-frame bindings are written ONLY into the given slot's descriptor buffer —
+    // the other slot may hold a frame that is still in flight (the descriptor-race fix).
+    auto& w = m_descWriters[slot % kDescriptorSlots];
+    m_activeSlot = slot % kDescriptorSlots;
+    // A4: bindings 16 (cur reservoir), 17 (prev reservoir), 18 (motion vectors).
     // GI2 full PT: bindings 20/21 mirror 16/17 for the path reservoir ping-pong.
     if (!m_reservoirBuf[0].isValid() || !m_reservoirBuf[1].isValid() || !m_pathReservoirBuf[0].isValid() ||
         !m_pathReservoirBuf[1].isValid()) {
@@ -618,74 +345,16 @@ void GiPass::updateRestirDescriptors(const FrameParams& params, std::uint32_t sl
     }
     const std::uint32_t cur = m_reservoirPingPong;
     const std::uint32_t prev = 1u - m_reservoirPingPong;
-    const VkDescriptorBufferInfo curInfo{m_reservoirBuf[cur].handle(), 0, VK_WHOLE_SIZE};
-    const VkDescriptorBufferInfo prevInfo{m_reservoirBuf[prev].handle(), 0, VK_WHOLE_SIZE};
     const std::uint32_t pathCur = m_pathReservoirPingPong;
     const std::uint32_t pathPrev = 1u - m_pathReservoirPingPong;
-    const VkDescriptorBufferInfo pathCurInfo{m_pathReservoirBuf[pathCur].handle(), 0, VK_WHOLE_SIZE};
-    const VkDescriptorBufferInfo pathPrevInfo{m_pathReservoirBuf[pathPrev].handle(), 0, VK_WHOLE_SIZE};
 
-    const VkImageView motionView =
-        (params.motionVectorView != VK_NULL_HANDLE) ? params.motionVectorView : m_dummyMotionVectors.view();
-    const VkDescriptorImageInfo motionInfo{
-        .imageView = motionView,
-        .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
-    };
-
-    const std::array<VkWriteDescriptorSet, 5> writes{{
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-         nullptr,
-         m_set,
-         16,
-         0,
-         1,
-         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-         nullptr,
-         &curInfo,
-         nullptr},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-         nullptr,
-         m_set,
-         17,
-         0,
-         1,
-         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-         nullptr,
-         &prevInfo,
-         nullptr},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-         nullptr,
-         m_set,
-         18,
-         0,
-         1,
-         VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-         &motionInfo,
-         nullptr,
-         nullptr},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-         nullptr,
-         m_set,
-         20,
-         0,
-         1,
-         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-         nullptr,
-         &pathCurInfo,
-         nullptr},
-        {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-         nullptr,
-         m_set,
-         21,
-         0,
-         1,
-         VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-         nullptr,
-         &pathPrevInfo,
-         nullptr},
-    }};
-    vkUpdateDescriptorSets(m_ctx->device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
-    m_boundMotionVectorView = motionView;
+    // MOD1: typed descriptor buffer writes.
+    w.writeStorageBufferHandle(*m_ctx, 16, m_reservoirBuf[cur].handle());
+    w.writeStorageBufferHandle(*m_ctx, 17, m_reservoirBuf[prev].handle());
+    w.writeSampledImage(*m_ctx, 18, params.motionVectorView, VK_IMAGE_LAYOUT_GENERAL);
+    w.writeStorageBufferHandle(*m_ctx, 20, m_pathReservoirBuf[pathCur].handle());
+    w.writeStorageBufferHandle(*m_ctx, 21, m_pathReservoirBuf[pathPrev].handle());
+    m_boundMotionVectorView = params.motionVectorView;
 }
 
 bool GiPass::descriptorsDirty(const FrameParams& params) const {
@@ -708,31 +377,6 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         m_boundEnvMarginalCdf = params.envMarginalCdf;
         m_boundEnvConditionalCdf = params.envConditionalCdf;
         m_boundGradientVarianceView = params.gradientVarianceView;
-    }
-
-    // One-time layout transition for the dummy gradient/variance placeholder: it is never
-    // written, but the descriptor declares GENERAL, so move it out of UNDEFINED once.
-    if (!m_dummyGradientReady && m_dummyGradientVariance.isValid()) {
-        m_dummyGradientVariance.transition(cmd,
-                                           VK_IMAGE_LAYOUT_UNDEFINED,
-                                           VK_IMAGE_LAYOUT_GENERAL,
-                                           VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
-                                           VK_ACCESS_2_NONE,
-                                           VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                           VK_ACCESS_2_SHADER_READ_BIT);
-        m_dummyGradientReady = true;
-    }
-
-    // A4: one-time layout transition for the 1×1 dummy motion-vector placeholder.
-    if (!m_dummyMotionReady && m_dummyMotionVectors.isValid()) {
-        m_dummyMotionVectors.transition(cmd,
-                                        VK_IMAGE_LAYOUT_UNDEFINED,
-                                        VK_IMAGE_LAYOUT_GENERAL,
-                                        VK_PIPELINE_STAGE_2_TOP_OF_PIPE_BIT,
-                                        VK_ACCESS_2_NONE,
-                                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                        VK_ACCESS_2_SHADER_READ_BIT);
-        m_dummyMotionReady = true;
     }
 
     // A4: one-time zero-fill of both reservoir buffers so uninitialized entries read as
@@ -901,11 +545,12 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         .pairingPerm1 = pairingPermFor(params.frameSampleIndex, 1u),
         .pairingPerm2 = pairingPermFor(params.frameSampleIndex, 2u),
         .pairingEnabled = m_pairingOffsetBuf.isValid() ? 1u : 0u,
-        .reconnectShiftEnabled = params.reconnectShiftEnabled ? 1u : 0u,
+        .reconnectShiftEnabled = params.reconnectShiftEnabled,
     };
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout, 0, 1, &m_set, 0, nullptr);
+    // MOD1: bind the descriptor buffer for the active slot (replaces vkCmdBindDescriptorSets).
+    m_descWriters[m_activeSlot].bind(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout);
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
 
     const std::uint32_t gx = (m_cfg.width + 7u) / 8u;

@@ -3,6 +3,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <slang-math/slang-math.hpp>
 #include <utility>
 #include <vector>
@@ -64,12 +65,14 @@ bool LightCuller::initialize(const harmonia::DeviceContext& ctx,
 
     auto counts = harmonia::Buffer::create(ctx,
                                            countsBufSize,
-                                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                               VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                            VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
                                            "theia.tileLightCounts");
     auto indices = harmonia::Buffer::create(ctx,
                                             indicesBufSize,
-                                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                             VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
                                             "theia.tileLightIndices");
     if (!counts || !indices) {
@@ -85,8 +88,8 @@ bool LightCuller::initialize(const harmonia::DeviceContext& ctx,
         VkDescriptorSetLayoutBinding{1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
         VkDescriptorSetLayoutBinding{2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
     };
-    constexpr VkDescriptorBindingFlags kUAB = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT;
-    constexpr std::array<VkDescriptorBindingFlags, 3> bindingFlags{kUAB, kUAB, kUAB};
+    // MOD1: no UPDATE_AFTER_BIND — incompatible with DESCRIPTOR_BUFFER layouts.
+    constexpr std::array<VkDescriptorBindingFlags, 3> bindingFlags{0, 0, 0};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = static_cast<std::uint32_t>(bindingFlags.size()),
@@ -95,7 +98,8 @@ bool LightCuller::initialize(const harmonia::DeviceContext& ctx,
     const VkDescriptorSetLayoutCreateInfo setLayoutInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .pNext = &bindingFlagsInfo,
-        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT,
+        // MOD1: descriptor buffer path — this layout is used with a GPU descriptor buffer.
+        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT,
         .bindingCount = static_cast<std::uint32_t>(bindings.size()),
         .pBindings = bindings.data(),
     };
@@ -145,6 +149,8 @@ bool LightCuller::initialize(const harmonia::DeviceContext& ctx,
 
     const VkComputePipelineCreateInfo pipelineInfo{
         .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+        // MOD1: this pipeline uses descriptor buffers (not descriptor sets).
+        .flags = VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT,
         .stage =
             VkPipelineShaderStageCreateInfo{
                 .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -164,58 +170,14 @@ bool LightCuller::initialize(const harmonia::DeviceContext& ctx,
     }
     m_pipeline = harmonia::UniquePipeline{ctx.device, pipeline};
 
-    // Descriptor pool + set
-    const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 3};
-    const VkDescriptorPoolCreateInfo poolInfo{
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-        .flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT,
-        .maxSets = 1,
-        .poolSizeCount = 1,
-        .pPoolSizes = &poolSize,
-    };
-    VkDescriptorPool pool{};
-    if (vkCreateDescriptorPool(ctx.device, &poolInfo, nullptr, &pool) != VK_SUCCESS) {
-        harmonia::Logger::error("LightCuller: failed to create descriptor pool");
-        return false;
-    }
-    m_pool = harmonia::UniqueDescriptorPool{ctx.device, pool};
-    const VkDescriptorSetAllocateInfo allocInfo{
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-        .descriptorPool = m_pool,
-        .descriptorSetCount = 1,
-        .pSetLayouts = m_setLayout.ptr(),
-    };
-    if (vkAllocateDescriptorSets(ctx.device, &allocInfo, &m_set) != VK_SUCCESS) {
-        harmonia::Logger::error("LightCuller: failed to allocate descriptor set");
+    // --- MOD1: descriptor buffer (replaces the pool + set) ---
+    if (!m_descWriter.init(ctx, setLayout, 3, "theia.lightCull.descriptorBuffer")) {
         return false;
     }
 
-    // Pre-write the static tile buffer bindings (bindings 1 and 2 never change).
-    const VkDescriptorBufferInfo countsInfo{m_tileLightCountsBuf.handle(), 0, VK_WHOLE_SIZE};
-    const VkDescriptorBufferInfo indicesInfo{m_tileLightIndicesBuf.handle(), 0, VK_WHOLE_SIZE};
-    const std::array<VkWriteDescriptorSet, 2> staticWrites{
-        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                             nullptr,
-                             m_set,
-                             1,
-                             0,
-                             1,
-                             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                             nullptr,
-                             &countsInfo,
-                             nullptr},
-        VkWriteDescriptorSet{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-                             nullptr,
-                             m_set,
-                             2,
-                             0,
-                             1,
-                             VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                             nullptr,
-                             &indicesInfo,
-                             nullptr},
-    };
-    vkUpdateDescriptorSets(ctx.device, 2, staticWrites.data(), 0, nullptr);
+    // Pre-write static tile buffer bindings (1–2 never change).
+    m_descWriter.writeStorageBuffer(ctx, 1, m_tileLightCountsBuf.deviceAddress(), m_tileLightCountsBuf.size());
+    m_descWriter.writeStorageBuffer(ctx, 2, m_tileLightIndicesBuf.deviceAddress(), m_tileLightIndicesBuf.size());
 
     harmonia::Logger::info("LightCuller: initialized {}×{} tiles ({}×{} px each) for {}×{} screen",
                            m_tilesX,
@@ -230,9 +192,8 @@ bool LightCuller::initialize(const harmonia::DeviceContext& ctx,
 void LightCuller::shutdown() {
     m_tileLightCountsBuf = {};
     m_tileLightIndicesBuf = {};
+    m_descWriter.shutdown(); // MOD1: replaces pool + set
 
-    m_pool.reset();
-    m_set = VK_NULL_HANDLE;
     m_pipeline.reset();
     m_pipelineLayout.reset();
     m_setLayout.reset();
@@ -270,24 +231,19 @@ void LightCuller::dispatch(VkCommandBuffer cmd,
     };
     vkCmdPipelineBarrier2(cmd, &dep);
 
-    // Update binding 0 (light buffer) — may change per-frame (scene switch)
-    const VkDescriptorBufferInfo lightInfo{lightBuffer, 0, VK_WHOLE_SIZE};
-    const VkWriteDescriptorSet lightWrite{
-        VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-        nullptr,
-        m_set,
-        0,
-        0,
-        1,
-        VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-        nullptr,
-        &lightInfo,
-        nullptr,
-    };
-    vkUpdateDescriptorSets(m_ctx->device, 1, &lightWrite, 0, nullptr);
+    // MOD1: update binding 0 (light buffer) via the descriptor buffer writer.
+    {
+        const VkBufferDeviceAddressInfo bufAddrInfo{
+            .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO, .pNext = nullptr, .buffer = lightBuffer};
+        VkMemoryRequirements memReq{};
+        vkGetBufferMemoryRequirements(m_ctx->device, lightBuffer, &memReq);
+        m_descWriter.writeStorageBuffer(*m_ctx, 0, vkGetBufferDeviceAddress(m_ctx->device, &bufAddrInfo),
+                                        memReq.size);
+    }
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout, 0, 1, &m_set, 0, nullptr);
+    // MOD1: bind the descriptor buffer (replaces vkCmdBindDescriptorSets).
+    m_descWriter.bind(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout);
 
     const LightCullPC pc{
         .proj = proj, // row-major for Slang

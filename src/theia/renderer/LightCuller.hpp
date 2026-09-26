@@ -3,11 +3,13 @@
 
 #include <volk/volk.h>
 
+#include <array>
 #include <cstdint>
 #include <slang-math/slang-math.hpp>
 
 #include "harmonia/DeviceContext.hpp"
 #include "harmonia/core/Buffer.hpp"
+#include "harmonia/core/DescriptorBufferWriter.hpp"
 #include "harmonia/core/VulkanHandle.hpp"
 
 namespace theia {
@@ -62,8 +64,8 @@ class LightCuller {
     harmonia::UniquePipeline m_pipeline;
     harmonia::UniquePipelineLayout m_pipelineLayout;
     harmonia::UniqueDescriptorSetLayout m_setLayout;
-    harmonia::UniqueDescriptorPool m_pool;
-    VkDescriptorSet m_set = VK_NULL_HANDLE;
+    /// MOD1: descriptor buffer writer replaces the pool + allocated set.
+    harmonia::DescriptorBufferWriter m_descWriter;
 
     harmonia::Buffer m_tileLightCountsBuf;  // uint[tilesX*tilesY]
     harmonia::Buffer m_tileLightIndicesBuf; // uint[tilesX*tilesY * kMaxLightsPerTile]

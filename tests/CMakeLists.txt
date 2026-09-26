@@ -23,4 +23,4 @@ target_include_directories(theia_module_tests PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../src"
     "${harmonia_SOURCE_DIR}/tests"
 )
-gtest_discover_tests(theia_module_tests)
+gtest_discover_tests(theia_module_tests PROPERTIES RUN_SERIAL TRUE)
