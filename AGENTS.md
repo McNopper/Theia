@@ -245,11 +245,15 @@ path. Both paths share one task-shader entry point (`gid.x = 0..visibleCount-1`)
   the GD3 indirect draw is always available.
 - Debug A/B toggles: `THEIA_FORCE_GD3` (skip DGC, use indirect draw), `THEIA_SINGLE_PASS`
   (bypass two-pass Hi-Z), `THEIA_DISABLE_HIZ` (draw all meshlets), `THEIA_NO_RECONNECTION`
-  (GI-ENH (a) reconnection shift off — replay-only, for A/B measurement), `THEIA_SHIFT_MASK=<n>`
-  (GI-ENH (a) feature mask: bit0 = k=2 reconnection shift, bit1 = k>=3 hybrid shift;
-  0 = replay-only. Note the k=2 path is currently inert: `captureTarget` is hardcoded to 1,
-  so `kLevel` is always 2 and the `kLevel != 1` guard in `tryReconnectionShift` rejects every
-  record. Only the k>=3 hybrid shift actually fires today).
+  (GI-ENH (a) reconnection shift off — replay-only, for A/B measurement), `THEIA_SHIFT_MASK=<n>` (GI-ENH (a) shift MODE, mirroring the reference's `kShiftStrategy`):
+  0 = RandomReplay (no shift), 1 = Reconnection, 2 = Hybrid, 3 = Hybrid (bit1 wins).
+  1 = Reconnection: x_k at the first secondary hit, UNCONDITIONAL (reference:
+  `!useHybridShift && path.length == 1`). 2/3 = Hybrid: x_k at the FIRST pair satisfying
+  the paper's criteria -> adaptive k (reference: `useHybridShift && canConnect`):
+  (i) roughness min(a_{k-1}, a_k) >= 0.2, (ii) distance ||x_k - x_{k-1}|| >= 0.1
+  (Params.slang: specularRoughnessThreshold / nearFieldDistance). The shift BODY is
+  chosen by the captured `kLevel`, not the mask - the reference has one
+  `computeShiftedIntegrandReconnection` serving any rcVertexLength).
 - GD4: Both Hi-Z passes (`cullPhase=1` and `cullPhase=2`) use the same GPU-indirect path;
   per-meshlet Hi-Z occlusion is handled by the mesh shader using `cullPhase` push constant.
 

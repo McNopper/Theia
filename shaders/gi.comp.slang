@@ -1036,7 +1036,22 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
     state.captureRe = captureRe ? 1u : 0u;
     state.reCaptured = 0u;
     state.surfaceCount = 0u;
-    state.captureTarget = 1u; // GI-ENH k≥3: capture at the SECOND surface (x_3 = reconnection target)
+    // GI-ENH: the reconnection vertex x_k is chosen by the paper's TWO criteria, at the
+    // FIRST pair (x_{k-1}, x_k) that satisfies both (ReSTIR PT Enhanced p.3):
+    //   (i)  roughness   min(alpha_{x_{k-1}}, alpha_{x_k}) >= alpha_min   (both vertices)
+    //   (ii) distance    ||x_k - x_{k-1}|| >= d_min                       (avoids singularities)
+    // Reference constants (DQLin/ReSTIR_PT Params.slang): alpha_min = specularRoughnessThreshold
+    // = 0.2, d_min = nearFieldDistance = 0.1. This makes k ADAPTIVE per path - "this
+    // predetermines the replayed path length" - rather than a fixed capture depth. The loop
+    // below assigns captureTarget at the first qualifying pair.
+    //
+    // kCaptureNone = "no qualifying pair yet": captureTarget + 1 then wraps to 0xFFFFFFFF,
+    // which can never equal surfaceCount (>= 1 inside integrateSurface), so nothing is
+    // captured and the path falls back to replay.
+    // NB the paper specifies alpha "from the path's sampled lobes"; this uses the material
+    // roughness as a proxy (the sampled-lobe alpha is not tracked per vertex here).
+    constexpr uint kCaptureNone = 0xFFFFFFFEu;
+    state.captureTarget = kCaptureNone;
     state.disableRR = disableRR ? 1u : 0u; // GI-ENH §6.2.4: skip RR during replay
     state.rec = makeEmptyReconnectionCapture();
 
@@ -1160,6 +1175,9 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
     const uint bounces = max(maxDepth, 1u) - primaryCharge;
     const uint maxIters = bounces + kMaxNullInteractions;
     uint bounce = 0u;
+    // Paper criterion (i) is PAIRWISE: min(alpha_{x_{k-1}}, alpha_{x_k}) >= alpha_min. Track
+    // the previous vertex so each candidate x_k can be tested together with its predecessor.
+    float prevRough = saturate(primary.mat.specularRoughAnisoIor.x);
     bool hopCaptured = false;
     float3 x2Pos = 0.0.xxx;
     float3 x2Normal = 0.0.xxx;
@@ -1223,6 +1241,41 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
         // so the loop's first real surface is depth 1 for a real primary and depth 0 when the
         // primary was an opacity pass-through. Matches Hyperion's `payload.depth` numbering,
         // which drives evalEmissionGuarded's `depth == 0` MIS guard and kRRMinDepth.
+        // ── Reconnection-vertex selection: the reference's TWO DISTINCT SHIFT MODES ─────
+        //   DQLin/ReSTIR_PT PathTracer.slang:
+        //     if (!path.useHybridShift && path.length == 1 || path.useHybridShift && canConnect)
+        //   * Reconnection mode (bit0 clear... see below): x_k at the FIRST secondary hit,
+        //     UNCONDITIONALLY - no criteria. Paper: "the Jacobian is 1 if no reconnection
+        //     happens"; there is no prefix to replay, so nothing to make invertible.
+        //   * Hybrid mode (bit1 set): x_k at the FIRST pair satisfying the paper's criteria,
+        //     making k adaptive ("this predetermines the replayed path length"):
+        //       (i)  roughness  min(alpha_{k-1}, alpha_k) >= alpha_min   (PAIRWISE)
+        //       (ii) distance   ||x_k - x_{k-1}|| >= d_min
+        //   Reference constants (Params.slang): alpha_min = specularRoughnessThreshold = 0.2,
+        //   d_min = nearFieldDistance = 0.1. bit1 selects Hybrid, else Reconnection - matching
+        //   the reference, where kShiftStrategy is ONE mode per render pass.
+        //   NB the paper specifies alpha "from the path's sampled lobes"; this uses the
+        //   material roughness as a proxy (sampled-lobe alpha is not tracked per vertex).
+        {
+            const bool hybridMode = (reconnectShiftEnabled & 2u) != 0u;
+            if (!hybridMode) {
+                // Reconnection mode: unconditional first secondary hit (k = 2).
+                if (state.captureTarget == kCaptureNone && state.surfaceCount < 1u) {
+                    state.captureTarget = state.surfaceCount;
+                }
+            } else if (state.captureTarget == kCaptureNone && state.surfaceCount < 2u) {
+                // Hybrid mode: first qualifying pair (adaptive k, capped at k = 3).
+                const float curRough = saturate(surf.mat.specularRoughAnisoIor.x);
+                constexpr float kAlphaMin = 0.2F;
+                constexpr float kDMin = 0.1F;
+                const bool pairRough = (curRough >= kAlphaMin) && (prevRough >= kAlphaMin);
+                const bool farField = h.dist >= kDMin;
+                if (pairRough && farField) {
+                    state.captureTarget = state.surfaceCount;
+                }
+            }
+            prevRough = saturate(surf.mat.specularRoughAnisoIor.x);
+        }
         state.depth = bounce + primaryCharge;
         integrateSurface(tracer, surf,
             emissiveTriangleCount, emissiveTriangles, emissiveCdf,
@@ -1656,7 +1709,16 @@ bool tryReconnectionShiftK3(SurfaceHit primary, PathReservoir neighbor, float ad
     hK.tangent = rec.xkTangent;
     hK.dist = 0.0;
     const float3 toXk = rec.xkPos - surf2.position;
-    const float distXk = max(length(toXk), 1.0e-6);
+        const float distXk = max(length(toXk), 1.0e-6);
+        // Paper: "Shift invertibility is checked when connecting from y_{k-1} to x_k." The
+        // reference implements the connection-time half of that as a near-field rejection in
+        // computeShiftedIntegrandReconnection - `if (!isFarField) return 0.f` - on the SHIFTED
+        // edge ||x_k - y_{k-1}||, which is distinct from the selection criterion on the BASE
+        // edge ||x_k - x_{k-1}||. It is also gated on the Hybrid shift there (`&& useHybridShift`),
+        // so it belongs to this shift only. Rejecting falls back to the unbiased replay.
+        if (distXk < 0.1F) {
+            return false;   // d_min = nearFieldDistance (Params.slang)
+        }
     const float3 wp = toXk / distXk;  // connection direction x'_2 → x_k
     const float3 woK = -wp;           // x_k's outgoing toward x'_2
     const SurfaceHit surfK = makeSurfaceHit(hK, woK);
@@ -1955,12 +2017,19 @@ float4 restirPtIndirect(SurfaceHit primary, uint2 px, float adaptiveClamp, inout
             float3 gShift = 0.0.xxx;
             bool vShift = false;
             if (reconnectShiftEnabled != 0u) {
-                if ((reconnectShiftEnabled & 1u) != 0u) {
+            // Dispatch on the CAPTURED k (neighbor.rec.kLevel), not on the mask bits. The
+            // mask selects the MODE (how x_k is chosen); the record's kLevel selects which
+            // shift body handles it - mirroring the reference, whose single
+            // computeShiftedIntegrandReconnection serves any rcVertexLength. Gating the
+            // body by mask made Hybrid mode unable to use the k=2 shift when its own
+            // criteria selected a k=2 capture, silently degrading it to replay.
+            if (reconnectShiftEnabled != 0u) {
+                if (neighbor.rec.kLevel == 1u) {
                     vShift = tryReconnectionShift(primary, neighbor, adaptiveClamp, rng, gShift);
-                }
-                if (!vShift && (reconnectShiftEnabled & 2u) != 0u) {
+                } else if (neighbor.rec.kLevel >= 2u) {
                     vShift = tryReconnectionShiftK3(primary, neighbor, adaptiveClamp, rng, gShift);
                 }
+            }
             }
             // Paper-faithful resampling (Zeltner §3 / Lin §6): shift OR replay.
             // No pairwise MIS averaging — the paper uses one technique per candidate.

@@ -77,7 +77,23 @@ using NEE only, higher eligibility), **Russian roulette at initial sampling only
 and the **critical `flags |=` fix** (reconnection shift was silently never firing).
 Multi-frame captures are run-to-run pixel-reproducible. Remaining:
 
-- **Stream compaction** (§6.2.2) — reduce warp divergence in replay.
+- **Hybrid shift, remaining (paper-faithful gaps - read `DQLin/ReSTIR_PT` before touching):**
+- *Prefix-replay invertibility.* The paper: "Shift invertibility is checked when connecting
+  from y_{k-1} to x_k." The CONNECTION-time half is implemented (near-field rejection on the
+  shifted edge, gated on Hybrid exactly as `computeShiftedIntegrandReconnection` does).
+  The PREFIX half is NOT: the reference's `handleHit` sets `invertible = false` on
+  non-invertible prefixes (NEE-bounce / diffuse-assignment cases) and
+  `invalidateAndTerminateReplayPath` zeroes `L`/`thp`. That needs the prefix-replay
+  generalisation below, and is the prime suspect for the residual -0.5% mean shift under k=3.
+- *k >= 4*: the reference's `rcVertexLength` is adaptive over the whole path; ours is capped
+  at the second surface because only the k=2 (no replay) and k=3 (one-hop) shift bodies exist.
+- *alpha from sampled lobes*: the paper uses "a from the path's sampled lobes"; we use the
+  material roughness as a proxy (sampled-lobe alpha is not tracked per vertex).
+- *Exercising k=3*: the criteria pick the first pair on the test scenes (rough, long edges),
+  so the k=3 body is barely hit. It needs a scene where the first pair fails (near-specular
+  primary, or a sub-0.1 segment) before its correctness can be measured.
+
+**Stream compaction** (§6.2.2) — reduce warp divergence in replay.
 - **Dual motion vectors** (§6.4) — presentation stage only (A-SVGF/TAA reprojection).
 - **Temporal reuse without recursion bias:** an unbiased temporal form (e.g. GRIS pairwise
   MIS with canonical-sample accounting) could restore temporal memory for the interactive
