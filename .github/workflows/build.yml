@@ -1,0 +1,268 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      # Windows/clang-cl/Ninja (the documented local flow, AGENTS.md) and
+      # Linux/g++/Ninja â€” both proven locally: Windows is the primary dev
+      # platform, Linux validated end-to-end in WSL before this leg existed.
+      # macOS is absent on purpose: Platform.cmake rejects it outright.
+      # ubuntu-26.04 (not ubuntu-latest=24.04): libsdl3-dev exists only from
+      # Ubuntu 25.04 on, and 26.04 is exactly the WSL proof environment.
+      matrix:
+        os: [windows-latest, ubuntu-26.04]
+
+    env:
+      # Content-addressed vcpkg binary cache, persisted across runs by the
+      # cache step below. OpenImageIO builds from source on a cold cache â€”
+      # that cost is paid once, not on every run.
+      VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg-binary-cache,readwrite"
+
+    steps:
+      # Sibling checkouts: build Harmonia/Aether/slang-math HEAD, the way
+      # the local dev flow does via FETCHCONTENT_SOURCE_DIR_* overrides,
+      # instead of the pinned tags (the same sibling-HEAD choice the
+      # OpenGL/GLUS CI documents).
+      - uses: actions/checkout@v4
+        with:
+          path: Theia
+          lfs: true
+      - uses: actions/checkout@v4
+        with:
+          repository: McNopper/Harmonia
+          path: Harmonia
+          lfs: true
+      - uses: actions/checkout@v4
+        with:
+          repository: McNopper/Aether
+          path: Aether
+          lfs: true
+      - uses: actions/checkout@v4
+        with:
+          repository: McNopper/slang-math
+          path: slang-math
+          lfs: true
+
+      # The runner images' preinstalled vcpkg is a shallow clone: the version
+      # database entries our builtin-baseline needs (per-port git trees from
+      # older commits) sit outside its window - CI rounds 3/4: "no version
+      # database entry for libpng at 1.6.59 / openexr at 3.5.2". Complete the
+      # clone with observable fetch results, then verify the EXACT
+      # port@version trees that broke (DIAG lines carry the ground truth).
+      - name: Ensure vcpkg registry
+        shell: bash
+        run: |
+          # Regression tripwires: versions this repo's dependency graph needs at
+          # ITS baseline (Aether pins the older d59510da deliberately - empty).
+          CHECKS=('l-/libpng@1.6.59' 'o-/openexr@3.5.2' 'o-/opencolorio@2.6.0' 'm-/meshoptimizer@1.3')
+          bl=$(grep -o '"builtin-baseline": "[0-9a-f]*"' Theia/vcpkg.json | head -1 | grep -oE '[0-9a-f]{40}')
+          vk="${VCPKG_INSTALLATION_ROOT:-C:/vcpkg}"
+          vk="$(printf '%s' "$vk" | tr '\\' '/')"
+          echo "DIAG: baseline=$bl vcpkg=$vk"
+          if [ "$(git -C "$vk" rev-parse --is-shallow-repository)" = "true" ]; then
+            git -C "$vk" fetch --unshallow origin || git -C "$vk" fetch --depth 10000000 origin || { echo "error: DIAG every vcpkg fetch attempt failed"; exit 1; }
+          else
+            git -C "$vk" fetch origin master || echo "DIAG: master fetch failed (continuing)"
+          fi
+          git -C "$vk" cat-file -e "$bl" 2>/dev/null || { echo "error: baseline commit absent: $bl"; exit 1; }
+          # Align HEAD AND the working tree with the baseline: `git fetch` only
+          # moves origin/master, while vcpkg reads the version index from the
+          # checked-out files - leaving HEAD at the image-vintage commit mixed a
+          # new baseline.json with an old versions index (the libpng 1.6.59 /
+          # openexr 3.5.2 "no version database entry" failures).
+          # Align HEAD + worktree ONLY when the baseline is ahead of the checkout
+          # (resetting backwards desyncs vcpkg's scripts from its binary -
+          # observed: "vcpkg-tools.json schema version 1 is not supported").
+          if git -C "$vk" merge-base --is-ancestor HEAD "$bl" 2>/dev/null; then
+            git -C "$vk" reset --hard "$bl"
+            echo "DIAG: HEAD reset to $(git -C "$vk" rev-parse --short HEAD) (baseline ahead of checkout)"
+          else
+            echo "DIAG: reset skipped - checkout is not behind baseline (HEAD=$(git -C "$vk" rev-parse --short HEAD))"
+          fi
+          git -C "$vk" show "$bl:versions/baseline.json" | jq -e . > /dev/null || { echo "error: baseline.json unreadable at $bl"; exit 1; }
+          fail=0
+          check() {
+            pv="$1"; p="${pv%@*}"; v="${pv##*@}"
+            t=$(git -C "$vk" show "$bl:versions/$p.json" | jq -r --arg v "$v" '.versions[] | select((.version // .["version-semver"] // .["version-date"]) == $v) | ."git-tree"' | head -1)
+            if [ -z "$t" ] || [ "$t" = "null" ]; then echo "error: DIAG no index entry for $pv at baseline"; fail=1; return; fi
+            if ! git -C "$vk" cat-file -e "$t" 2>/dev/null; then echo "error: DIAG git-tree object missing for $pv ($t)"; fail=1; return; fi
+            echo "DIAG: ok $pv -> $t"
+          }
+          for pv in ${CHECKS[@]+"${CHECKS[@]}"}; do check "$pv"; done
+          if [ "$fail" -ne 0 ]; then echo "error: vcpkg registry incomplete for baseline $bl"; exit 1; fi
+          echo "vcpkg registry complete for baseline $bl (HEAD aligned)"
+
+      # The build needs slangc, volk, SDL3 and the Vulkan headers, all of
+      # which come from the SDK (not vcpkg). Windows: the official zip is
+      # extracted under RUNNER_TEMP and VULKAN_SDK is exported for later
+      # steps via GITHUB_ENV (machine-level env is not inherited anyway).
+      - name: Cache Vulkan SDK (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: ${ runner.temp }/vulkan-sdk
+          key: vulkan-sdk-windows-v1
+
+      # Official LunarG zip - the chocolatey community feed proved unreliable
+      # mid-CI ("Unable to find package vulkan-sdk", 3 retries all failed).
+      # VULKAN_SDK is detected from Bin/slangc.exe, so archive nesting does not
+      # matter; the extracted tree is cached like the Linux tarball.
+      - name: Install Vulkan SDK (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dest = Join-Path $env:RUNNER_TEMP 'vulkan-sdk'
+          $bin = $null
+          if (Test-Path $dest) {
+            $bin = Get-ChildItem $dest -Recurse -Filter slangc.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+          if (-not $bin) {
+            # The URL serves the LunarG INSTALLER (an MZ executable despite the
+            # .zip name). Run it silently - the same artifact and default
+            # components that produced the local SDK (which ships SDL3 + VMA).
+            # Windows runners run elevated, which the installer requires (CLI
+            # runs refuse to self-elevate: "Cannot elevate access rights").
+            $exe = Join-Path $env:RUNNER_TEMP 'vulkan_sdk_installer.exe'
+            curl.exe -sL -o $exe https://sdk.lunarg.com/sdk/download/latest/windows/vulkan_sdk.zip
+            if (-not (Test-Path $exe) -or (Get-Item $exe).Length -lt 100000000) { throw 'Vulkan SDK installer download failed' }
+            # The exact component set the local machine's install selected
+            # (recorded in its InstallationLog.txt): core + glm + sdl2 (ships
+            # both SDL2 and SDL3) + volk + vma + arm64 extras. `--default-answer`
+            # alone selects only com.lunarg.vulkan + core (missing VMA/SDL3);
+            # QtIFW: "install ... <pkg|alias ...>" accepts explicit packages.
+            $comps = 'com.lunarg.vulkan', 'com.lunarg.vulkan.core', 'com.lunarg.vulkan.glm', 'com.lunarg.vulkan.sdl2', 'com.lunarg.vulkan.volk', 'com.lunarg.vulkan.vma', 'com.lunarg.vulkan.arm64'
+            $p = Start-Process -FilePath $exe -ArgumentList (@('--root', $dest, '--accept-licenses', '--default-answer', '--confirm-command', 'install') + $comps) -Wait -PassThru -NoNewWindow
+            if ($p.ExitCode -ne 0) { throw "Vulkan SDK installer failed (exit $($p.ExitCode))" }
+            $bin = Get-ChildItem $dest -Recurse -Filter slangc.exe | Select-Object -First 1
+            if (-not $bin) { throw 'slangc.exe not found in the installed SDK' }
+          }
+          $sdkRoot = Split-Path $bin.Directory.FullName
+          "VULKAN_SDK=$sdkRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          # The local install registers its Bin on PATH (the installer does it);
+          # SDL3.dll lives there and every linked exe needs it at startup -
+          # without this, gtest test discovery dies with 0xc0000135
+          # (STATUS_DLL_NOT_FOUND).
+          "PATH=$sdkRoot\Bin;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          # Insurance: VMA must exist for VulkanSDK.cmake; the choco package
+          # omitted it, so fetch header-only VMA if the zip does too (layout
+          # moved src/ -> include/ in newer VMA versions - try both).
+          $vma = Join-Path $sdkRoot 'Include\vma\vk_mem_alloc.h'
+          if (-not (Test-Path $vma)) {
+            New-Item -ItemType Directory -Force (Split-Path $vma) | Out-Null
+            $tag = 'v3.1.0'
+            try { $tag = (Invoke-RestMethod 'https://api.github.com/repos/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/releases/latest').tag_name } catch {}
+            $ok = $false
+            foreach ($rel in 'include', 'src') {
+              curl.exe -sL -o $vma "https://raw.githubusercontent.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator/$tag/$rel/vk_mem_alloc.h"
+              if ((Test-Path $vma) -and (Get-Item $vma).Length -ge 10000) { $ok = $true; break }
+            }
+            if (-not $ok) { throw "VMA header fetch failed (tag=$tag)" }
+            Write-Output "VMA $tag installed"
+          }
+          foreach ($req in 'Include\vma\vk_mem_alloc.h', 'Include\SDL3\SDL.h', 'Lib\SDL3.lib', 'Bin\slangc.exe') {
+            if (-not (Test-Path (Join-Path $sdkRoot $req))) { throw "Vulkan SDK missing required $req" }
+          }
+          Write-Output "Vulkan SDK contract OK: $sdkRoot"
+
+      # Linux: official tarball (distro-agnostic), cached across runs; the
+      # VULKAN_SDK root is detected from slangc's location because the
+      # extracted layout is <version>/x86_64. VulkanSDK.cmake's Linux branch
+      # requires $VULKAN_SDK/{include,lib,bin} with SDL3 and volk/VMA - the
+      # Linux SDK ships no SDL3 (the Windows one does), so distro SDL3 is
+      # bridged into that layout. Same recipe proven in WSL (Ubuntu 26.04).
+      - name: Cache Vulkan SDK (Linux)
+        if: runner.os == 'Linux'
+        id: cache-sdk
+        uses: actions/cache@v4
+        with:
+          path: ~/vulkan-sdk
+          key: vulkan-sdk-linux-v1
+
+      - name: Install Vulkan SDK (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          if [ "${{ steps.cache-sdk.outputs.cache-hit }}" != 'true' ]; then
+            curl -sL -o /tmp/vulkan_sdk.tar.xz https://sdk.lunarg.com/sdk/download/latest/linux/vulkan_sdk.tar.xz
+            mkdir -p ~/vulkan-sdk
+            tar -xJf /tmp/vulkan_sdk.tar.xz -C ~/vulkan-sdk
+            rm /tmp/vulkan_sdk.tar.xz
+          fi
+          SDK_BIN="$(dirname "$(find "$HOME/vulkan-sdk" -name slangc -type f | head -1)")"
+          SDK_ROOT="$(dirname "$SDK_BIN")"
+          if [ ! -e "$SDK_ROOT/bin/slangc" ]; then echo 'slangc not found in cached SDK'; exit 1; fi
+          echo "VULKAN_SDK=$SDK_ROOT" >> "$GITHUB_ENV"
+          sudo apt-get update -qq && sudo apt-get install -y -qq libsdl3-dev
+          # Idempotent: on cache-hit the previous run's link already exists, and
+          # `ln -sf` would then follow it into /usr/include (Permission denied).
+          if [ ! -e "$SDK_ROOT/include/SDL3" ]; then ln -sf /usr/include/SDL3 "$SDK_ROOT/include/SDL3"; fi
+          if [ ! -e "$SDK_ROOT/lib/libSDL3.so" ]; then ln -sf /usr/lib/x86_64-linux-gnu/libSDL3.so "$SDK_ROOT/lib/libSDL3.so"; fi
+          test -e "$SDK_ROOT/lib/libSDL3.so" && test -e "$SDK_ROOT/include/SDL3/SDL.h"
+          echo "VULKAN_SDK=$SDK_ROOT (SDL3 bridged)"
+
+      # clang-cl may or may not ship on the runner image; like the SDK, a
+      # PATH change from choco is not inherited by later steps. (Linux uses
+      # the image's g++, proven in WSL - no install needed.)
+      - name: Ensure clang-cl
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (Get-Command clang-cl -ErrorAction SilentlyContinue) {
+            Write-Output 'clang-cl present on image'
+          } else {
+            choco install -y llvm
+            "PATH=C:\Program Files\LLVM\bin;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/vcpkg-binary-cache
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('Theia/vcpkg.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $root = if ($env:VCPKG_INSTALLATION_ROOT) { $env:VCPKG_INSTALLATION_ROOT } else { 'C:\vcpkg' }
+          $tc = Join-Path $root 'scripts/buildsystems/vcpkg.cmake'
+          if (-not (Test-Path $tc)) { throw "vcpkg toolchain not found at $tc" }
+          $ws = ($PWD.Path -replace '\\', '/')
+          cmake -S Theia -B Theia/build -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl `
+            "-DCMAKE_TOOLCHAIN_FILE=$tc" `
+            -DFETCHCONTENT_SOURCE_DIR_HARMONIA="$ws/Harmonia" `
+            -DFETCHCONTENT_SOURCE_DIR_AETHER="$ws/Aether" `
+            -DFETCHCONTENT_SOURCE_DIR_SLANG_MATH="$ws/slang-math"
+
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          tc="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          [ -e "$tc" ] || { echo "vcpkg toolchain not found at $tc"; exit 1; }
+          ws="$PWD"
+          cmake -S Theia -B Theia/build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ \
+            -DCMAKE_TOOLCHAIN_FILE="$tc" \
+            -DFETCHCONTENT_SOURCE_DIR_HARMONIA="$ws/Harmonia" \
+            -DFETCHCONTENT_SOURCE_DIR_AETHER="$ws/Aether" \
+            -DFETCHCONTENT_SOURCE_DIR_SLANG_MATH="$ws/slang-math"
+
+      - name: Build
+        run: cmake --build Theia/build

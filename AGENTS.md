@@ -161,6 +161,10 @@ cd build; ctest --output-on-failure
 Equivalent preset flow (Ninja + Release + clang-cl + `$env:VCPKG_ROOT` toolchain):
 `cmake --preset win` / `cmake --build --preset win` / `ctest --preset win`.
 
+**Linux:** supported and CI-proven (g++/Ninja, glibc 2.43-era) — the Vulkan SDK tarball +
+SDL3-bridge recipe lives in Harmonia's AGENTS.md. CI: `.github/workflows/build.yml` builds
+`windows-latest` + `ubuntu-latest` (pure build — the test suites need a GPU).
+
 > **⚠️ Do not run things in parallel — it slows the machine to a crawl.**
 > - **Tests are serialised in CMake:** every test carries `RUN_SERIAL`, so `ctest -j`
 >   cannot parallelise them. That only covers *within* one `ctest` invocation, so still

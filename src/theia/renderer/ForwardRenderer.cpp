@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <harmonia/core/Barrier.hpp>
+#include <harmonia/core/Env.hpp>
 #include <harmonia/core/Logger.hpp>
 #include <harmonia/core/ShaderModule.hpp>
 #include <slang-math/slang-math.hpp>
@@ -17,6 +18,10 @@
 #ifdef __clang__
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
+#endif
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 #endif
 
 namespace theia {
@@ -56,11 +61,8 @@ bool ForwardRenderer::initialize(const harmonia::DeviceContext& ctx, const Confi
     // vkCmdDrawMeshTasksIndirectEXT (GD3) draw path. Used to isolate DGC-specific regressions.
     bool forceGd3 = false;
     {
-        char* forceGd3Raw = nullptr;
-        std::size_t forceGd3Len = 0;
-        if (_dupenv_s(&forceGd3Raw, &forceGd3Len, "THEIA_FORCE_GD3") == 0 && forceGd3Raw != nullptr) {
-            forceGd3 = (forceGd3Raw[0] != '\0' && forceGd3Raw[0] != '0');
-            std::free(forceGd3Raw);
+        if (const auto forceGd3Raw = harmonia::getEnvString("THEIA_FORCE_GD3")) {
+            forceGd3 = ((!forceGd3Raw->empty() && (*forceGd3Raw)[0] != '0'));
             if (forceGd3) {
                 harmonia::Logger::info("THEIA_FORCE_GD3 set — DGC disabled, using indirect draw fallback");
             }
@@ -152,11 +154,8 @@ bool ForwardRenderer::initialize(const harmonia::DeviceContext& ctx, const Confi
         }
     }
 
-    char* debugModeRaw = nullptr;
-    std::size_t debugModeLen = 0;
-    if (_dupenv_s(&debugModeRaw, &debugModeLen, "THEIA_DEBUG_RAY_HIT_MODE") == 0 && debugModeRaw != nullptr) {
-        m_render.debugRayHitMode = std::clamp(std::strtof(debugModeRaw, nullptr), 0.0f, 6.0f);
-        std::free(debugModeRaw);
+    if (const auto debugModeRaw = harmonia::getEnvString("THEIA_DEBUG_RAY_HIT_MODE")) {
+        m_render.debugRayHitMode = std::clamp(std::strtof(debugModeRaw->c_str(), nullptr), 0.0f, 6.0f);
         if (m_render.debugRayHitMode > 0.0f) {
             harmonia::Logger::info("THEIA_DEBUG_RAY_HIT_MODE = {:.1f}", m_render.debugRayHitMode);
         }
@@ -164,21 +163,15 @@ bool ForwardRenderer::initialize(const harmonia::DeviceContext& ctx, const Confi
 
     // Debug/A-B toggle: set THEIA_DISABLE_HIZ to draw all meshlets (two passes, no occlusion
     // test). Used to verify Hi-Z culling is visually equivalent to the uncullered path.
-    char* hiZDisableRaw = nullptr;
-    std::size_t hiZDisableLen = 0;
-    if (_dupenv_s(&hiZDisableRaw, &hiZDisableLen, "THEIA_DISABLE_HIZ") == 0 && hiZDisableRaw != nullptr) {
-        m_gpu.hiZDebugDisabled = (hiZDisableRaw[0] != '\0' && hiZDisableRaw[0] != '0');
-        std::free(hiZDisableRaw);
+    if (const auto hiZDisableRaw = harmonia::getEnvString("THEIA_DISABLE_HIZ")) {
+        m_gpu.hiZDebugDisabled = ((!hiZDisableRaw->empty() && (*hiZDisableRaw)[0] != '0'));
         if (m_gpu.hiZDebugDisabled) {
             harmonia::Logger::info("THEIA_DISABLE_HIZ set — Hi-Z occlusion test disabled");
         }
     }
 
-    char* singlePassRaw = nullptr;
-    std::size_t singlePassLen = 0;
-    if (_dupenv_s(&singlePassRaw, &singlePassLen, "THEIA_SINGLE_PASS") == 0 && singlePassRaw != nullptr) {
-        m_gpu.forceSinglePass = (singlePassRaw[0] != '\0' && singlePassRaw[0] != '0');
-        std::free(singlePassRaw);
+    if (const auto singlePassRaw = harmonia::getEnvString("THEIA_SINGLE_PASS")) {
+        m_gpu.forceSinglePass = ((!singlePassRaw->empty() && (*singlePassRaw)[0] != '0'));
         if (m_gpu.forceSinglePass) {
             harmonia::Logger::info("THEIA_SINGLE_PASS set — two-pass Hi-Z bypassed (single draw pass)");
         }
@@ -1362,4 +1355,7 @@ void ForwardRenderer::recordOpaquePass(VkCommandBuffer cmd, const MeshPushConsta
 
 #ifdef __clang__
 #pragma clang diagnostic pop
+#endif
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
 #endif

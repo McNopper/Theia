@@ -1,7 +1,7 @@
 {
   "name": "theia",
   "version": "0.3.0",
-  "builtin-baseline": "d59510da59a2ee8b943509998b63da7b472d93cf",
+  "builtin-baseline": "2cfff9c458d9dcf642e9fa09ba624f9931bb5358",
   "dependencies": [
     "tomlplusplus",
     "openimageio",

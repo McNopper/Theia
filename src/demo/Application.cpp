@@ -9,6 +9,7 @@
 #include <tuple>
 
 #include "harmonia/core/Barrier.hpp"
+#include "harmonia/core/Env.hpp"
 #include "harmonia/core/Logger.hpp"
 #include "harmonia/renderer/Camera.hpp"
 #include "theia/renderer/CameraJitter.hpp"
@@ -95,21 +96,15 @@ bool Application::onInitialize() {
     //       bit1 (2) = k>=3 hybrid reconnection shift
     // Default (unset) = all features on (mask 3).
     {
-        char* noReconnectRaw = nullptr;
-        std::size_t noReconnectLen = 0;
-        if (_dupenv_s(&noReconnectRaw, &noReconnectLen, "THEIA_NO_RECONNECTION") == 0 && noReconnectRaw != nullptr) {
-            m_reconnectShiftEnabled = !(noReconnectRaw[0] != '\0' && noReconnectRaw[0] != '0') ? 3u : 0u;
-            std::free(noReconnectRaw);
+        if (const auto noReconnectRaw = harmonia::getEnvString("THEIA_NO_RECONNECTION")) {
+            m_reconnectShiftEnabled = !((!noReconnectRaw->empty() && (*noReconnectRaw)[0] != '0')) ? 3u : 0u;
             if (m_reconnectShiftEnabled == 0u) {
                 harmonia::Logger::info("THEIA_NO_RECONNECTION set — reconnection shift disabled (replay-only)");
             }
         }
-        char* shiftMaskRaw = nullptr;
-        std::size_t shiftMaskLen = 0;
-        if (_dupenv_s(&shiftMaskRaw, &shiftMaskLen, "THEIA_SHIFT_MASK") == 0 && shiftMaskRaw != nullptr) {
+        if (const auto shiftMaskRaw = harmonia::getEnvString("THEIA_SHIFT_MASK")) {
             m_reconnectShiftEnabled =
-                static_cast<std::uint32_t>(std::strtoul(shiftMaskRaw, nullptr, 0)) & 3u;
-            std::free(shiftMaskRaw);
+                static_cast<std::uint32_t>(std::strtoul(shiftMaskRaw->c_str(), nullptr, 0)) & 3u;
             harmonia::Logger::info("THEIA_SHIFT_MASK = {} (k2={} k3={})",
                 m_reconnectShiftEnabled,
                 (m_reconnectShiftEnabled & 1u) != 0u,
