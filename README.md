@@ -1,5 +1,7 @@
 # Theia
 
+[![Build](https://github.com/McNopper/Theia/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/McNopper/Theia/actions/workflows/build.yml)
+
 GPU-driven accumulation path-traced renderer for OpenPBR materials.
 
 > *[Theia](https://en.wikipedia.org/wiki/Theia_(mythology)) — Titaness of heavenly light, mother of Helios, Selene and Eos.*
