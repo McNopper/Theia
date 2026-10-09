@@ -15,8 +15,8 @@ namespace theia {
 struct EnvImportanceResources {
     VkImageView view = VK_NULL_HANDLE;
     VkSampler sampler = VK_NULL_HANDLE;
-    VkBuffer marginalCdf = VK_NULL_HANDLE;
-    VkBuffer conditionalCdf = VK_NULL_HANDLE;
+    const harmonia::Buffer* marginalCdf = nullptr;
+    const harmonia::Buffer* conditionalCdf = nullptr;
     std::uint32_t cdfWidth = 0;
     std::uint32_t cdfHeight = 0;
     bool hasEnv = false;

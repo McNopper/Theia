@@ -53,8 +53,8 @@ class LightCuller {
                   float farZ);
 
     // GPU buffers read by ForwardRenderer
-    [[nodiscard]] VkBuffer tileLightCountsBuffer() const noexcept { return m_tileLightCountsBuf.handle(); }
-    [[nodiscard]] VkBuffer tileLightIndicesBuffer() const noexcept { return m_tileLightIndicesBuf.handle(); }
+    [[nodiscard]] const harmonia::Buffer& tileLightCountsBuffer() const noexcept { return m_tileLightCountsBuf; }
+    [[nodiscard]] const harmonia::Buffer& tileLightIndicesBuffer() const noexcept { return m_tileLightIndicesBuf; }
     [[nodiscard]] std::uint32_t tilesX() const noexcept { return m_tilesX; }
     [[nodiscard]] std::uint32_t tilesY() const noexcept { return m_tilesY; }
 

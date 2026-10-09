@@ -79,7 +79,7 @@ class GpuCullPass {
 
     /// GPU buffer of visible instance indices (uint[kMaxInstances]).
     /// Bind to ForwardRenderer set 0, binding 10 for the task shader to read.
-    [[nodiscard]] VkBuffer compactInstanceListBuffer() const noexcept { return m_compactInstanceListBuf.handle(); }
+    [[nodiscard]] const harmonia::Buffer& compactInstanceListBuffer() const noexcept { return m_compactInstanceListBuf; }
 
     /// Single VkDrawMeshTasksIndirectCommandEXT entry: {visibleCount, 1, 1}.
     /// GD3: pass to vkCmdDrawMeshTasksIndirectEXT (drawCount=1, stride=12).

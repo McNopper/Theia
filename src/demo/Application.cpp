@@ -322,8 +322,8 @@ bool Application::onSceneLoaded(const harmonia::SceneLoader::SceneConfig& sceneC
     const VkImageView envView = hasEnv ? iblProbe()->imageView() : VK_NULL_HANDLE;
     const VkSampler envSampler = hasEnv ? iblProbe()->sampler() : VK_NULL_HANDLE;
     const float envNits = sceneConfig.envUnitNits.value_or(1.0f);
-    const VkBuffer marginalCdf = hasEnv ? iblProbe()->marginalCdfBuffer().handle() : VK_NULL_HANDLE;
-    const VkBuffer conditionalCdf = hasEnv ? iblProbe()->conditionalCdfBuffer().handle() : VK_NULL_HANDLE;
+    const harmonia::Buffer* marginalCdf = hasEnv ? &iblProbe()->marginalCdfBuffer() : nullptr;
+    const harmonia::Buffer* conditionalCdf = hasEnv ? &iblProbe()->conditionalCdfBuffer() : nullptr;
     const std::uint32_t cdfW = hasEnv ? iblProbe()->cdfWidth() : 0u;
     const std::uint32_t cdfH = hasEnv ? iblProbe()->cdfHeight() : 0u;
 

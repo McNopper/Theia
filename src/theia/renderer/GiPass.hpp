@@ -52,8 +52,8 @@ class GiPass {
         const Scene* scene = nullptr;
         VkImageView envMapView = VK_NULL_HANDLE; ///< env panorama (or a harmless placeholder when no env)
         VkSampler envSampler = VK_NULL_HANDLE;
-        VkBuffer envMarginalCdf = VK_NULL_HANDLE;    ///< may be VK_NULL_HANDLE (no env importance)
-        VkBuffer envConditionalCdf = VK_NULL_HANDLE; ///< may be VK_NULL_HANDLE
+        const harmonia::Buffer* envMarginalCdf = nullptr;    ///< may be nullptr (no env importance)
+        const harmonia::Buffer* envConditionalCdf = nullptr; ///< may be nullptr
         std::uint32_t envImportanceWidth = 0;
         std::uint32_t envImportanceHeight = 0;
         bool hasEnvMap = false;
@@ -210,8 +210,8 @@ class GiPass {
     const Scene* m_texturesBoundFor = nullptr;
     VkImageView m_boundEnvMapView = VK_NULL_HANDLE;
     VkSampler m_boundEnvSampler = VK_NULL_HANDLE;
-    VkBuffer m_boundEnvMarginalCdf = VK_NULL_HANDLE;
-    VkBuffer m_boundEnvConditionalCdf = VK_NULL_HANDLE;
+    const harmonia::Buffer* m_boundEnvMarginalCdf = nullptr;
+    const harmonia::Buffer* m_boundEnvConditionalCdf = nullptr;
     VkImageView m_boundGradientVarianceView = VK_NULL_HANDLE;
 
     /// A3(b): 1×1 R32G32F placeholder bound to binding 15 when no A-SVGF

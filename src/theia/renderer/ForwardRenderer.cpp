@@ -242,8 +242,8 @@ void ForwardRenderer::shutdown() {
     m_envRawInfo = {};
     m_envSampler.reset();
     // VK14: no dummy resources to destroy.
-    m_envMarginalCdf = VK_NULL_HANDLE;
-    m_envConditionalCdf = VK_NULL_HANDLE;
+    m_envMarginalCdf = nullptr;
+    m_envConditionalCdf = nullptr;
     m_envImportanceWidth = 0;
     m_envImportanceHeight = 0;
 
@@ -297,12 +297,12 @@ bool ForwardRenderer::resize(std::uint32_t width,
     return createDepthTarget();
 }
 
-void ForwardRenderer::setTileBuffers(VkBuffer tileLightCounts,
-                                     VkBuffer tileLightIndices,
+void ForwardRenderer::setTileBuffers(const harmonia::Buffer& tileLightCounts,
+                                     const harmonia::Buffer& tileLightIndices,
                                      std::uint32_t tilesX,
                                      std::uint32_t tilesY) {
-    m_tileLightCountsBuf = tileLightCounts;
-    m_tileLightIndicesBuf = tileLightIndices;
+    m_tileLightCountsBuf = &tileLightCounts;
+    m_tileLightIndicesBuf = &tileLightIndices;
     m_tilesX = tilesX;
     m_tilesY = tilesY;
 }
@@ -1151,47 +1151,57 @@ void ForwardRenderer::prepareAttachments(VkCommandBuffer cmd) {
 
 void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
     // MOD1: fallback buffer handles for optional resources (env CDFs, tile lights, visibility).
-    // VK14 nullDescriptor: bind VK_NULL_HANDLE when buffers are absent (shader gates on hasTileData).
-    const VkBuffer tileLightCountsBuf = m_tileLightCountsBuf;
-    const VkBuffer tileLightIndicesBuf = m_tileLightIndicesBuf;
-    const VkBuffer envMarginalCdfBuf = m_envMarginalCdf;
-    const VkBuffer envConditionalCdfBuf = m_envConditionalCdf;
+    // VK14 nullDescriptor: bind a null descriptor when buffers are absent (shader gates on hasTileData).
+    const harmonia::Buffer* tileLightCountsBuf = m_tileLightCountsBuf;
+    const harmonia::Buffer* tileLightIndicesBuf = m_tileLightIndicesBuf;
+    const harmonia::Buffer* envMarginalCdfBuf = m_envMarginalCdf;
+    const harmonia::Buffer* envConditionalCdfBuf = m_envConditionalCdf;
 
     const VkAccelerationStructureKHR sceneTlas = m_scene->tlas();
 
-    const VkBuffer visFallbackBuf = m_scene->meshletBuffer().handle();
-    const VkBuffer prevVisBuf = m_gpu.meshletVisibility[m_gpu.visFrame].handle();
-    const VkBuffer currVisBuf = m_gpu.meshletVisibility[m_gpu.visFrame ^ 1u].handle();
-    const VkBuffer prevVisBufFinal = (prevVisBuf != VK_NULL_HANDLE) ? prevVisBuf : visFallbackBuf;
-    const VkBuffer currVisBufFinal = (currVisBuf != VK_NULL_HANDLE) ? currVisBuf : visFallbackBuf;
-    const VkBuffer compactInstBuf = m_gpu.gpuCullPass.compactInstanceListBuffer();
+    const harmonia::Buffer& visFallbackBuf = m_scene->meshletBuffer();
+    const harmonia::Buffer& prevVisBuf = m_gpu.meshletVisibility[m_gpu.visFrame];
+    const harmonia::Buffer& currVisBuf = m_gpu.meshletVisibility[m_gpu.visFrame ^ 1u];
+    const harmonia::Buffer& prevVisBufFinal = prevVisBuf.isValid() ? prevVisBuf : visFallbackBuf;
+    const harmonia::Buffer& currVisBufFinal = currVisBuf.isValid() ? currVisBuf : visFallbackBuf;
+    const harmonia::Buffer& compactInstBuf = m_gpu.gpuCullPass.compactInstanceListBuffer();
 
     // MOD1: write all descriptors via the descriptor buffer writers.
+    // Optional buffers (tile lights, env CDFs) may be absent — bind a null descriptor
+    // (VK14 nullDescriptor; the shaders gate reads on hasTileData/hasEnvMap).
+    const auto writeOptional = [this](harmonia::DescriptorBufferWriter& w, std::uint32_t binding,
+                                      const harmonia::Buffer* buf) {
+        if (buf != nullptr) {
+            w.writeStorageBufferHandle(*m_ctx, binding, *buf);
+        } else {
+            w.writeStorageBufferHandle(*m_ctx, binding, VK_NULL_HANDLE, 0U);
+        }
+    };
     // Mesh set (set 0)
-    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 0, m_scene->vertexBuffer().handle());
-    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 1, m_scene->instanceBuffer().handle());
-    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 2, m_scene->indexBuffer().handle());
-    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 3, m_scene->meshletBuffer().handle());
-    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 4, m_scene->meshletVertexBuffer().handle());
-    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 5, m_scene->meshletTriangleBuffer().handle());
-    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 6, m_scene->materialBuffer().handle());
+    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 0, m_scene->vertexBuffer());
+    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 1, m_scene->instanceBuffer());
+    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 2, m_scene->indexBuffer());
+    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 3, m_scene->meshletBuffer());
+    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 4, m_scene->meshletVertexBuffer());
+    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 5, m_scene->meshletTriangleBuffer());
+    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 6, m_scene->materialBuffer());
     m_desc.mesh.writeStorageBufferHandle(*m_ctx, 7, prevVisBufFinal);
     m_desc.mesh.writeStorageBufferHandle(*m_ctx, 8, currVisBufFinal);
     m_desc.mesh.writeSampledImage(*m_ctx, 9, m_gpu.hiZPass.sampledView(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     m_desc.mesh.writeStorageBufferHandle(*m_ctx, 10, compactInstBuf);
-    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 11, m_scene->instanceTransformBuffer().handle());
+    m_desc.mesh.writeStorageBufferHandle(*m_ctx, 11, m_scene->instanceTransformBuffer());
 
     // Mat set (set 1)
-    m_desc.mat.writeStorageBufferHandle(*m_ctx, 0, m_scene->materialBuffer().handle());
-    m_desc.mat.writeStorageBufferHandle(*m_ctx, 1, m_scene->lightBuffer().handle());
-    m_desc.mat.writeStorageBufferHandle(*m_ctx, 2, m_scene->emissiveTriangleBuffer().handle());
-    m_desc.mat.writeStorageBufferHandle(*m_ctx, 3, tileLightCountsBuf);
-    m_desc.mat.writeStorageBufferHandle(*m_ctx, 4, tileLightIndicesBuf);
+    m_desc.mat.writeStorageBufferHandle(*m_ctx, 0, m_scene->materialBuffer());
+    m_desc.mat.writeStorageBufferHandle(*m_ctx, 1, m_scene->lightBuffer());
+    m_desc.mat.writeStorageBufferHandle(*m_ctx, 2, m_scene->emissiveTriangleBuffer());
+    writeOptional(m_desc.mat, 3, tileLightCountsBuf);
+    writeOptional(m_desc.mat, 4, tileLightIndicesBuf);
     m_desc.mat.writeAccelerationStructure(*m_ctx, 5, sceneTlas);
 
     // IBL set (set 2) — bindings 3,4 written in setEnvironment(); 6,7 here.
-    m_desc.ibl.writeStorageBufferHandle(*m_ctx, 6, envMarginalCdfBuf);
-    m_desc.ibl.writeStorageBufferHandle(*m_ctx, 7, envConditionalCdfBuf);
+    writeOptional(m_desc.ibl, 6, envMarginalCdfBuf);
+    writeOptional(m_desc.ibl, 7, envConditionalCdfBuf);
 
     if (m_scene != m_desc.texturesBoundFor) {
         const auto& sceneTextures = m_scene->textures();

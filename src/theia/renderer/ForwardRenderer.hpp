@@ -74,8 +74,8 @@ class ForwardRenderer {
     [[nodiscard]] VkSampler envSampler() const noexcept { return m_envSampler; }
     // VK14: no dummyEnvView — nullDescriptor handles absent env.
     /// Bind env-importance CDF buffers used by transparent-path stochastic env sampling.
-    void setEnvImportanceSampling(VkBuffer marginalCdf,
-                                  VkBuffer conditionalCdf,
+    void setEnvImportanceSampling(const harmonia::Buffer* marginalCdf,
+                                  const harmonia::Buffer* conditionalCdf,
                                   std::uint32_t width,
                                   std::uint32_t height) noexcept {
         m_envMarginalCdf = marginalCdf;
@@ -121,7 +121,10 @@ class ForwardRenderer {
 
     /// Update tile light list buffers (called by LightCuller each frame before recordFrame).
     void
-    setTileBuffers(VkBuffer tileLightCounts, VkBuffer tileLightIndices, std::uint32_t tilesX, std::uint32_t tilesY);
+    setTileBuffers(const harmonia::Buffer& tileLightCounts,
+                   const harmonia::Buffer& tileLightIndices,
+                   std::uint32_t tilesX,
+                   std::uint32_t tilesY);
 
     /// Record scene geometry rendering into cmd.
     /// Transitions hdrImage UNDEFINED/GENERAL -> ATTACHMENT_OPTIMAL, renders, leaves it there.
@@ -267,8 +270,8 @@ class ForwardRenderer {
 
     VkDescriptorImageInfo m_envSamplerInfo{};
     VkDescriptorImageInfo m_envRawInfo{};
-    VkBuffer m_envMarginalCdf = VK_NULL_HANDLE;
-    VkBuffer m_envConditionalCdf = VK_NULL_HANDLE;
+    const harmonia::Buffer* m_envMarginalCdf = nullptr;
+    const harmonia::Buffer* m_envConditionalCdf = nullptr;
     std::uint32_t m_envImportanceWidth = 0;
     std::uint32_t m_envImportanceHeight = 0;
     float m_envUnitNits = 1.0f; ///< env_unit_nits for the raw-env sky background
@@ -278,8 +281,8 @@ class ForwardRenderer {
     // VK14: no dummy resources.
 
     // Tile-based light culling buffers (set by LightCuller before each recordFrame).
-    VkBuffer m_tileLightCountsBuf = VK_NULL_HANDLE;
-    VkBuffer m_tileLightIndicesBuf = VK_NULL_HANDLE;
+    const harmonia::Buffer* m_tileLightCountsBuf = nullptr;
+    const harmonia::Buffer* m_tileLightIndicesBuf = nullptr;
     std::uint32_t m_tilesX = 0;
     std::uint32_t m_tilesY = 0;
     // Dummy 1-element buffers bound when no tile data is available (fallback to full light loop).

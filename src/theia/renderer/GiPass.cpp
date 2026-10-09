@@ -56,8 +56,8 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx,
     m_texturesBoundFor = nullptr;
     m_boundEnvMapView = VK_NULL_HANDLE;
     m_boundEnvSampler = VK_NULL_HANDLE;
-    m_boundEnvMarginalCdf = VK_NULL_HANDLE;
-    m_boundEnvConditionalCdf = VK_NULL_HANDLE;
+    m_boundEnvMarginalCdf = nullptr;
+    m_boundEnvConditionalCdf = nullptr;
     m_boundGradientVarianceView = VK_NULL_HANDLE;
     // VK14/nullDescriptor: bindings 15 (gradient/variance) and 18 (motion vectors) no
     // longer need 1×1 dummy images — VK_NULL_HANDLE is bound and the shader reads return
@@ -156,8 +156,8 @@ void GiPass::shutdown() {
     m_texturesBoundFor = nullptr;
     m_boundEnvMapView = VK_NULL_HANDLE;
     m_boundEnvSampler = VK_NULL_HANDLE;
-    m_boundEnvMarginalCdf = VK_NULL_HANDLE;
-    m_boundEnvConditionalCdf = VK_NULL_HANDLE;
+    m_boundEnvMarginalCdf = nullptr;
+    m_boundEnvConditionalCdf = nullptr;
     m_boundGradientVarianceView = VK_NULL_HANDLE;
 }
 
@@ -236,7 +236,7 @@ bool GiPass::createDescriptors() {
 
     // GI-ENH pairing maps (binding 22) are static after creation — write once per slot.
     for (std::uint32_t si = 0; si < kDescriptorSlots; ++si) {
-        m_descWriters[si].writeStorageBufferHandle(*m_ctx, 22, m_pairingOffsetBuf.handle());
+        m_descWriters[si].writeStorageBufferHandle(*m_ctx, 22, m_pairingOffsetBuf);
     }
     return true;
 }
@@ -294,10 +294,11 @@ void GiPass::updateDescriptors(const FrameParams& params) {
 
     // Env CDF buffers may be absent (no env map); bind the material buffer as a harmless
     // placeholder so the descriptor stays valid — the shader gates all reads on hasEnvMap.
-    const VkBuffer cdfFallback = scene->materialBuffer().handle();
-    const VkBuffer marginalCdf = (params.envMarginalCdf != VK_NULL_HANDLE) ? params.envMarginalCdf : cdfFallback;
-    const VkBuffer conditionalCdf =
-        (params.envConditionalCdf != VK_NULL_HANDLE) ? params.envConditionalCdf : cdfFallback;
+    const harmonia::Buffer& cdfFallback = scene->materialBuffer();
+    const harmonia::Buffer& marginalCdf =
+        (params.envMarginalCdf != nullptr) ? *params.envMarginalCdf : cdfFallback;
+    const harmonia::Buffer& conditionalCdf =
+        (params.envConditionalCdf != nullptr) ? *params.envConditionalCdf : cdfFallback;
 
     // Scene bindings are frame-independent — write them into EVERY slot's descriptor buffer.
     const bool texturesDirty = (m_texturesBoundFor != scene);
@@ -310,16 +311,16 @@ void GiPass::updateDescriptors(const FrameParams& params) {
         w.writeSampledImage(*m_ctx, 3, m_cfg.gbufferView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         w.writeSampledImage(*m_ctx, 4, params.envMapView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         w.writeSampler(*m_ctx, 5, params.envSampler);
-        w.writeStorageBufferHandle(*m_ctx, 6, scene->materialBuffer().handle());
-        w.writeStorageBufferHandle(*m_ctx, 7, scene->vertexBuffer().handle());
-        w.writeStorageBufferHandle(*m_ctx, 8, scene->instanceBuffer().handle());
-        w.writeStorageBufferHandle(*m_ctx, 9, scene->indexBuffer().handle());
-        w.writeStorageBufferHandle(*m_ctx, 10, scene->emissiveTriangleBuffer().handle());
+        w.writeStorageBufferHandle(*m_ctx, 6, scene->materialBuffer());
+        w.writeStorageBufferHandle(*m_ctx, 7, scene->vertexBuffer());
+        w.writeStorageBufferHandle(*m_ctx, 8, scene->instanceBuffer());
+        w.writeStorageBufferHandle(*m_ctx, 9, scene->indexBuffer());
+        w.writeStorageBufferHandle(*m_ctx, 10, scene->emissiveTriangleBuffer());
         w.writeStorageBufferHandle(*m_ctx, 11, marginalCdf);
         w.writeStorageBufferHandle(*m_ctx, 12, conditionalCdf);
-        w.writeStorageBufferHandle(*m_ctx, 14, scene->emissiveCdfBuffer().handle());
+        w.writeStorageBufferHandle(*m_ctx, 14, scene->emissiveCdfBuffer());
         w.writeSampledImage(*m_ctx, 15, params.gradientVarianceView, VK_IMAGE_LAYOUT_GENERAL);
-        w.writeStorageBufferHandle(*m_ctx, 19, scene->instanceTransformBuffer().handle());
+        w.writeStorageBufferHandle(*m_ctx, 19, scene->instanceTransformBuffer());
 
         // Bindless textures (binding 13) — write when scene changes.
         if (texturesDirty) {
@@ -353,11 +354,11 @@ void GiPass::updateRestirDescriptors(const FrameParams& params, std::uint32_t sl
     const std::uint32_t pathPrev = 1u - m_pathReservoirPingPong;
 
     // MOD1: typed descriptor buffer writes.
-    w.writeStorageBufferHandle(*m_ctx, 16, m_reservoirBuf[cur].handle());
-    w.writeStorageBufferHandle(*m_ctx, 17, m_reservoirBuf[prev].handle());
+    w.writeStorageBufferHandle(*m_ctx, 16, m_reservoirBuf[cur]);
+    w.writeStorageBufferHandle(*m_ctx, 17, m_reservoirBuf[prev]);
     w.writeSampledImage(*m_ctx, 18, params.motionVectorView, VK_IMAGE_LAYOUT_GENERAL);
-    w.writeStorageBufferHandle(*m_ctx, 20, m_pathReservoirBuf[pathCur].handle());
-    w.writeStorageBufferHandle(*m_ctx, 21, m_pathReservoirBuf[pathPrev].handle());
+    w.writeStorageBufferHandle(*m_ctx, 20, m_pathReservoirBuf[pathCur]);
+    w.writeStorageBufferHandle(*m_ctx, 21, m_pathReservoirBuf[pathPrev]);
     m_boundMotionVectorView = params.motionVectorView;
 }
 
