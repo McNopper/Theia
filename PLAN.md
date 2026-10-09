@@ -193,7 +193,26 @@ low-spp reference).
 
 ## Baseline
 
-- **v0.7.8** (current): **estimator-pure capture — the extended two-tier contract.**
+- **v0.7.11** (current; consumes Harmonia v0.7.10 + transitive slang-math v0.3.0): **dual-OS
+  CI; refactoring wave 1 (T-01/T-02); I6; descriptor-range fix; regenerated gallery.**
+  Build-only CI on windows-latest + ubuntu-26.04 (the GPU suites stay local); portable env
+  reads + the GCC missing-field-initializer mirror blocks. **T-01:** shared
+  `buildGiFrameParams`/`buildMotionVectorParams` — every GI-ENH/PERF5 parameter lands once
+  instead of twice (async vs single-queue drift becomes impossible). **T-02:**
+  `createOneSetLayout` + the all-zero binding-flags arrays dropped (spec-equivalent to
+  omitting the flags chain; `PARTIALLY_BOUND` kept for the bindless texture set). **I6**
+  documented: `--frames-per-flip <N>` (shared parser; N = 1 byte-identical classic cadence).
+  **Fix** (`range-08045` follow-through): descriptor writes carry buffer creation sizes;
+  optional tile-light / env-CDF resources became non-owning `const Buffer*` (absent = null
+  descriptor, unchanged). README gallery regenerated at release settings — **pixel-identical
+  to the v0.7.10 gallery (MAD = 0 on all 30 scenes)**, hard evidence the wave is image-neutral.
+  18/18 ctest green on both OSes; interactive `--validation` clean.
+- **v0.7.10** (consumes Harmonia v0.7.9): **reconnection shift made faithful to ReSTIR PT
+  Enhanced (adaptive k, mode-gated selection, invertibility).** (Entry backfilled 2026-10-09
+  from the release commit.)
+- **v0.7.9** (consumes Harmonia v0.7.9): **Theia matches Hyperion (bias floor 5.11 FAIL ->
+  2.22 PASS).** (Entry backfilled 2026-10-09 from the release commit.)
+- **v0.7.8**: **estimator-pure capture — the extended two-tier contract.**
   `--output` now disables every presentation aid — A-SVGF/TAA (v0.7.4), the firefly clamps
   (`forward_render.frag.slang` + `gi.comp.slang`; `fireflyClampEnabled` = rngFlags bit2 /
   GiPC field) and the A3(a) secondary-bounce roughness regularization — and forces camera
