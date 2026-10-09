@@ -98,6 +98,9 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
                             const sm::float4x4& view,
                             const sm::float4x4& curViewProj) noexcept;
     void submitSingleQueueGI(VkCommandBuffer cmd, const sm::float4x4& view, const sm::float4x4& curViewProj) noexcept;
+    [[nodiscard]] GiPass::FrameParams buildGiFrameParams(const sm::float4x4& view,
+                                                         const sm::float4x4& curViewProj) const noexcept;
+    [[nodiscard]] MotionVectorPass::FrameParams buildMotionVectorParams(const sm::float4x4& curViewProj) const noexcept;
 
     /// True in offscreen capture mode (--output set). Offscreen rendering integrates many
     /// jittered/stochastic samples via progressive accumulation, which is incompatible with

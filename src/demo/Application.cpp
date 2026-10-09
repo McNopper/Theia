@@ -472,12 +472,8 @@ void Application::transitionGbuffersForRecord(VkCommandBuffer cmd, VkImage hdrIm
     harmonia::pipelineBarrier(cmd, guideToGeneral);
 }
 
-void Application::submitAsyncCompute(VkCommandBuffer cmd,
-                                     const harmonia::RenderTarget& target,
-                                     const sm::float4x4& view,
-                                     const sm::float4x4& curViewProj) noexcept {
-    const std::uint32_t slot = frameIndex() % 2U;
-
+GiPass::FrameParams Application::buildGiFrameParams(const sm::float4x4& view,
+                                                    const sm::float4x4& curViewProj) const noexcept {
     GiPass::FrameParams gp{};
     gp.scene = m_scene.get();
     m_env.fill(gp);
@@ -497,10 +493,26 @@ void Application::submitAsyncCompute(VkCommandBuffer cmd,
     gp.fireflyClampEnabled = !m_pureEstimatorCapture;
     gp.reconnectShiftEnabled = m_reconnectShiftEnabled;
     gp.motionVectorView = VK_NULL_HANDLE;
-    m_pendingMvp.curViewProj = curViewProj;
-    m_pendingMvp.prevViewProj = m_prevViewProjValid ? m_prevViewProj : curViewProj;
-    m_pendingMvp.invCurViewProj = sm::inverse(curViewProj);
-    m_pendingMvp.prevInstanceTransformBuffer = m_scene->prevInstanceTransformBuffer().handle();
+    return gp;
+}
+
+MotionVectorPass::FrameParams Application::buildMotionVectorParams(const sm::float4x4& curViewProj) const noexcept {
+    MotionVectorPass::FrameParams mvp{};
+    mvp.curViewProj = curViewProj;
+    mvp.prevViewProj = m_prevViewProjValid ? m_prevViewProj : curViewProj;
+    mvp.invCurViewProj = sm::inverse(curViewProj);
+    mvp.prevInstanceTransformBuffer = m_scene->prevInstanceTransformBuffer().handle();
+    return mvp;
+}
+
+void Application::submitAsyncCompute(VkCommandBuffer cmd,
+                                     const harmonia::RenderTarget& target,
+                                     const sm::float4x4& view,
+                                     const sm::float4x4& curViewProj) noexcept {
+    const std::uint32_t slot = frameIndex() % 2U;
+
+    GiPass::FrameParams gp = buildGiFrameParams(view, curViewProj);
+    m_pendingMvp = buildMotionVectorParams(curViewProj);
 
     const std::uint32_t gfxFamily = deviceContext().graphicsFamily;
     const std::uint32_t asyncFamily = deviceContext().asyncComputeQueueFamily;
@@ -667,33 +679,11 @@ void Application::submitSingleQueueGI(VkCommandBuffer cmd,
         return;
     }
 
-    GiPass::FrameParams gp{};
-    gp.scene = m_scene.get();
-    m_env.fill(gp);
-    gp.view = view;
-    gp.cameraPos = m_camera.position;
-    gp.exposure = m_camera.physical.exposure();
-    gp.prevViewProj = m_prevViewProjValid ? m_prevViewProj : curViewProj;
-    gp.frameSampleIndex = frameIndex();
-    gp.rngBaseSeed = config().rngSeed;
-    gp.maxDepth = m_sceneMaxDepth;
-    gp.useA3Regularization = !m_pureEstimatorCapture;
-    gp.gradientVarianceView = denoiserGradientImageView();
-    gp.adaptiveMaxSamples = 4;
-    gp.useRestirDi = m_useRestirDi && !m_useRestirPt;
-    gp.useRestirPt = m_useRestirPt;
-    gp.useRestirPtPath = m_useRestirPtPath && m_useRestirPt;
-    gp.fireflyClampEnabled = !m_pureEstimatorCapture;
-    gp.reconnectShiftEnabled = m_reconnectShiftEnabled;
-    gp.motionVectorView = VK_NULL_HANDLE;
+    GiPass::FrameParams gp = buildGiFrameParams(view, curViewProj);
     m_giPass.record(cmd, gp);
 
     if (m_motionVectorPass.isInitialized()) {
-        MotionVectorPass::FrameParams mvp{};
-        mvp.curViewProj = curViewProj;
-        mvp.prevViewProj = m_prevViewProjValid ? m_prevViewProj : curViewProj;
-        mvp.invCurViewProj = sm::inverse(curViewProj);
-        mvp.prevInstanceTransformBuffer = m_scene->prevInstanceTransformBuffer().handle();
+        const MotionVectorPass::FrameParams mvp = buildMotionVectorParams(curViewProj);
         m_motionVectorPass.record(cmd, mvp);
     }
     if (m_taaPass.isInitialized() && m_useTaa && m_cameraMoving) {
