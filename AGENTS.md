@@ -63,7 +63,8 @@ build/theia.exe --scene shaderball_base                               # interact
 ```
 
 CLI flags: `--scene/-s`, `--output/-o` (headless EXR+PNG), `--width`, `--height`,
-`--offscreen-frames <n>` (accumulation count), `--validation`/`--no-validation`,
+`--offscreen-frames <n>` (accumulation count), `--frames-per-flip <n>` (interactive
+accumulation frames per swapchain flip, default 1 — I6), `--validation`/`--no-validation`,
 `--no-restir-di` (ReSTIR DI off), `--taa`/`--no-taa`, `--no-camera-jitter` (interactive
 only — `--output` capture forces jitter ON, see below),
 `--indirect-ambient <f>`. RT-GI is always on (it is the renderer â€” no GI-off path).
