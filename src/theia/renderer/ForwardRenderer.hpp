@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <span>
 #include <slang-math/slang-math.hpp>
 
 #include "harmonia/DeviceContext.hpp"
@@ -166,6 +167,10 @@ class ForwardRenderer {
     bool createDepthTarget();
     bool createPipeline();
     bool createDescriptorSetLayouts();
+    bool createOneSetLayout(std::span<const VkDescriptorSetLayoutBinding> bindings,
+                            std::span<const VkDescriptorBindingFlags> bindingFlags,
+                            const char* errorMessage,
+                            harmonia::UniqueDescriptorSetLayout& out);
     bool createPipelineLayouts();
     bool createOpaquePipeline();
     bool createTransparentPipeline();

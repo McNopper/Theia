@@ -468,6 +468,34 @@ bool ForwardRenderer::createPipeline() {
     return ok;
 }
 
+bool ForwardRenderer::createOneSetLayout(std::span<const VkDescriptorSetLayoutBinding> bindings,
+                                         std::span<const VkDescriptorBindingFlags> bindingFlags,
+                                         const char* errorMessage,
+                                         harmonia::UniqueDescriptorSetLayout& out) {
+    // An all-zero pBindingFlags is spec-equivalent to omitting the flags chain, so the
+    // chain is only included when per-binding flags are actually requested (MOD1: no
+    // UPDATE_AFTER_BIND — incompatible with DESCRIPTOR_BUFFER layouts).
+    const VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
+        .bindingCount = static_cast<std::uint32_t>(bindingFlags.size()),
+        .pBindingFlags = bindingFlags.data(),
+    };
+    const VkDescriptorSetLayoutCreateInfo layoutInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .pNext = bindingFlags.empty() ? nullptr : &flagsInfo,
+        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT,
+        .bindingCount = static_cast<std::uint32_t>(bindings.size()),
+        .pBindings = bindings.data(),
+    };
+    VkDescriptorSetLayout layout{};
+    if (vkCreateDescriptorSetLayout(m_ctx->device, &layoutInfo, nullptr, &layout) != VK_SUCCESS) {
+        harmonia::Logger::error("{}", errorMessage);
+        return false;
+    }
+    out = harmonia::UniqueDescriptorSetLayout{m_ctx->device, layout};
+    return true;
+}
+
 bool ForwardRenderer::createDescriptorSetLayouts() {
     constexpr VkShaderStageFlags kTaskAndMeshStages = VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT;
     constexpr VkShaderStageFlags kTaskMeshFragStages =
@@ -497,25 +525,10 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
                                      VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                      nullptr},
     };
-    const std::array<VkDescriptorBindingFlags, 12> meshBindingFlags{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-    const VkDescriptorSetLayoutBindingFlagsCreateInfo meshBindingFlagsInfo{
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
-        .bindingCount = static_cast<std::uint32_t>(meshBindingFlags.size()),
-        .pBindingFlags = meshBindingFlags.data(),
-    };
-    const VkDescriptorSetLayoutCreateInfo meshSetLayoutInfo{
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .pNext = &meshBindingFlagsInfo,
-        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT,
-        .bindingCount = static_cast<std::uint32_t>(meshBindings.size()),
-        .pBindings = meshBindings.data(),
-    };
-    VkDescriptorSetLayout meshSetLayout{};
-    if (vkCreateDescriptorSetLayout(m_ctx->device, &meshSetLayoutInfo, nullptr, &meshSetLayout) != VK_SUCCESS) {
-        harmonia::Logger::error("Failed to create mesh descriptor set layout");
+    if (!createOneSetLayout(meshBindings, {}, "Failed to create mesh descriptor set layout",
+                            m_desc.meshSetLayout)) {
         return false;
     }
-    m_desc.meshSetLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, meshSetLayout};
 
     const std::array<VkDescriptorSetLayoutBinding, 6> matBindings{
         VkDescriptorSetLayoutBinding{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
@@ -526,26 +539,11 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
         VkDescriptorSetLayoutBinding{
             5, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
     };
-    const std::array<VkDescriptorBindingFlags, 6> matBindingFlags{0, 0, 0, 0, 0, 0};
-    const VkDescriptorSetLayoutBindingFlagsCreateInfo matBindingFlagsInfo{
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
-        .bindingCount = static_cast<std::uint32_t>(matBindingFlags.size()),
-        .pBindingFlags = matBindingFlags.data(),
-    };
-    const VkDescriptorSetLayoutCreateInfo matSetLayoutInfo{
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .pNext = &matBindingFlagsInfo,
-        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT,
-        .bindingCount = static_cast<std::uint32_t>(matBindings.size()),
-        .pBindings = matBindings.data(),
-    };
-    VkDescriptorSetLayout matSetLayout{};
-    if (vkCreateDescriptorSetLayout(m_ctx->device, &matSetLayoutInfo, nullptr, &matSetLayout) != VK_SUCCESS) {
-        harmonia::Logger::error("Failed to create material descriptor set layout");
+    if (!createOneSetLayout(matBindings, {}, "Failed to create material descriptor set layout",
+                            m_desc.matSetLayout)) {
         m_desc.meshSetLayout.reset();
         return false;
     }
-    m_desc.matSetLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, matSetLayout};
 
     // Set 2: environment resources. Indirect lighting is supplied by the RT-GI compute
     // stage; the forward pass keeps only the linear sampler (3), the raw env panorama (4)
@@ -556,59 +554,32 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
         VkDescriptorSetLayoutBinding{6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
     };
-    const std::array<VkDescriptorBindingFlags, 4> iblBindingFlags{0, 0, 0, 0};
-    const VkDescriptorSetLayoutBindingFlagsCreateInfo iblBindingFlagsInfo{
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
-        .bindingCount = static_cast<std::uint32_t>(iblBindingFlags.size()),
-        .pBindingFlags = iblBindingFlags.data(),
-    };
-    const VkDescriptorSetLayoutCreateInfo iblSetLayoutInfo{
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .pNext = &iblBindingFlagsInfo,
-        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT,
-        .bindingCount = static_cast<std::uint32_t>(iblBindings.size()),
-        .pBindings = iblBindings.data(),
-    };
-    VkDescriptorSetLayout iblSetLayout{};
-    if (vkCreateDescriptorSetLayout(m_ctx->device, &iblSetLayoutInfo, nullptr, &iblSetLayout) != VK_SUCCESS) {
-        harmonia::Logger::error("Failed to create IBL descriptor set layout");
+    if (!createOneSetLayout(iblBindings, {}, "Failed to create IBL descriptor set layout",
+                            m_desc.iblSetLayout)) {
         m_desc.matSetLayout.reset();
         m_desc.meshSetLayout.reset();
         return false;
     }
-    m_desc.iblSetLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, iblSetLayout};
 
-    const VkDescriptorSetLayoutBinding textureBinding{
-        0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-    const VkDescriptorBindingFlags textureBindingFlags =
-        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT; // MOD1: no UPDATE_AFTER_BIND (incompatible with DESCRIPTOR_BUFFER)
-    const VkDescriptorSetLayoutBindingFlagsCreateInfo textureBindingFlagsInfo{
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
-        .bindingCount = 1,
-        .pBindingFlags = &textureBindingFlags,
-    };
-    const VkDescriptorSetLayoutCreateInfo textureSetLayoutInfo{
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .pNext = &textureBindingFlagsInfo,
-        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT,
-        .bindingCount = 1,
-        .pBindings = &textureBinding,
-    };
-    VkDescriptorSetLayout textureSetLayout{};
-    if (vkCreateDescriptorSetLayout(m_ctx->device, &textureSetLayoutInfo, nullptr, &textureSetLayout) != VK_SUCCESS) {
-        harmonia::Logger::error("Failed to create bindless texture descriptor set layout");
+    const std::array<VkDescriptorSetLayoutBinding, 1> textureBindings{
+        VkDescriptorSetLayoutBinding{
+            0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};
+    const std::array<VkDescriptorBindingFlags, 1> textureBindingFlags{
+        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT}; // MOD1: no UPDATE_AFTER_BIND (incompatible with DESCRIPTOR_BUFFER)
+    if (!createOneSetLayout(textureBindings, textureBindingFlags,
+                            "Failed to create bindless texture descriptor set layout",
+                            m_desc.textureSetLayout)) {
         m_desc.iblSetLayout.reset();
         m_desc.matSetLayout.reset();
         m_desc.meshSetLayout.reset();
         return false;
     }
-    m_desc.textureSetLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, textureSetLayout};
 
     // MOD1: descriptor buffers (replaces the pool + allocated sets).
-    if (!m_desc.mesh.init(*m_ctx, meshSetLayout, 12, "theia.fwd.mesh.descBuf") ||
-        !m_desc.mat.init(*m_ctx, matSetLayout, 6, "theia.fwd.mat.descBuf") ||
-        !m_desc.ibl.init(*m_ctx, iblSetLayout, 8, "theia.fwd.ibl.descBuf") ||
-        !m_desc.texture.init(*m_ctx, textureSetLayout, 1, "theia.fwd.texture.descBuf")) {
+    if (!m_desc.mesh.init(*m_ctx, m_desc.meshSetLayout.get(), 12, "theia.fwd.mesh.descBuf") ||
+        !m_desc.mat.init(*m_ctx, m_desc.matSetLayout.get(), 6, "theia.fwd.mat.descBuf") ||
+        !m_desc.ibl.init(*m_ctx, m_desc.iblSetLayout.get(), 8, "theia.fwd.ibl.descBuf") ||
+        !m_desc.texture.init(*m_ctx, m_desc.textureSetLayout.get(), 1, "theia.fwd.texture.descBuf")) {
         harmonia::Logger::error("Failed to create descriptor buffers");
         m_desc.mesh.shutdown();
         m_desc.mat.shutdown();
