@@ -193,6 +193,15 @@ low-spp reference).
 
 ## Baseline
 
+- **v0.7.12** (current; consumes Harmonia v0.7.11): **range-08045 residual fix + VK15
+  consumption.** LightCuller binding 0 (lights) and GpuCullPass bindings 0/1 (instances +
+  bounds) still wrote descriptor ranges from `vkGetBufferMemoryRequirements().size` — the
+  rounded *memory* size; both `dispatch()` entry points now take `const harmonia::Buffer&`
+  through the shared writer's creation-size overloads and the memReq boilerplate is deleted
+  (caught by the `shaderball_checker` validation smoke — a 400-byte storage buffer reported
+  unbacked). Consumes Harmonia **v0.7.11** (VK15 — opacity micromap on the KHR AS API; the
+  OMM cutout path proven image-identical, MAD = 0 vs the release gallery). 18/18 ctest on
+  Windows and Linux; **zero validation errors and warnings** (interactive + offscreen).
 - **v0.7.11** (current; consumes Harmonia v0.7.10 + transitive slang-math v0.3.0): **dual-OS
   CI; refactoring wave 1 (T-01/T-02); I6; descriptor-range fix; regenerated gallery.**
   Build-only CI on windows-latest + ubuntu-26.04 (the GPU suites stay local); portable env
