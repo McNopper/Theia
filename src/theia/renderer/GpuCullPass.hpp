@@ -72,8 +72,8 @@ class GpuCullPass {
     /// a pipeline barrier on compactInstanceListBuffer() and indirectDrawBuffer()
     /// from COMPUTE_SHADER_WRITE → (TASK_SHADER_READ, INDIRECT_COMMAND_READ).
     void dispatch(VkCommandBuffer cmd,
-                  VkBuffer instanceBuf,
-                  VkBuffer instanceBoundsBuf,
+                  const harmonia::Buffer& instanceBuf,
+                  const harmonia::Buffer& instanceBoundsBuf,
                   std::uint32_t instanceCount,
                   const sm::float4x4& viewProj);
 

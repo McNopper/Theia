@@ -413,7 +413,7 @@ Application::CameraMatrices Application::computeCameraMatrices(const harmonia::R
 void Application::dispatchLightCull(VkCommandBuffer cmd, const sm::float4x4& proj, const sm::float4x4& view) noexcept {
     if (m_scene && m_scene->lightCount() > 0 && m_lightCuller.tilesX() > 0) {
         m_lightCuller.dispatch(cmd,
-                               m_scene->lightBuffer().handle(),
+                               m_scene->lightBuffer(),
                                m_scene->lightCount(),
                                proj,
                                view,

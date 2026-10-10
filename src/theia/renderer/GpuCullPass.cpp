@@ -186,8 +186,8 @@ void GpuCullPass::shutdown() {
 }
 
 void GpuCullPass::dispatch(VkCommandBuffer cmd,
-                           VkBuffer instanceBuf,
-                           VkBuffer instanceBoundsBuf,
+                           const harmonia::Buffer& instanceBuf,
+                           const harmonia::Buffer& instanceBoundsBuf,
                            std::uint32_t instanceCount,
                            const sm::float4x4& viewProj) {
     if (!m_ctx || m_pipeline == VK_NULL_HANDLE || instanceCount == 0)
@@ -216,21 +216,10 @@ void GpuCullPass::dispatch(VkCommandBuffer cmd,
     vkCmdPipelineBarrier2(cmd, &fillDep);
 
     // MOD1: update scene-bound input descriptors (bindings 0–1) via the descriptor buffer writer.
-    {
-        const VkBufferDeviceAddressInfo bufAddrInfo0{
-            .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO, .pNext = nullptr, .buffer = instanceBuf};
-        VkMemoryRequirements memReq0{};
-        vkGetBufferMemoryRequirements(m_ctx->device, instanceBuf, &memReq0);
-        m_descWriter.writeStorageBuffer(*m_ctx, 0, vkGetBufferDeviceAddress(m_ctx->device, &bufAddrInfo0),
-                                        memReq0.size);
-
-        const VkBufferDeviceAddressInfo bufAddrInfo1{
-            .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO, .pNext = nullptr, .buffer = instanceBoundsBuf};
-        VkMemoryRequirements memReq1{};
-        vkGetBufferMemoryRequirements(m_ctx->device, instanceBoundsBuf, &memReq1);
-        m_descWriter.writeStorageBuffer(*m_ctx, 1, vkGetBufferDeviceAddress(m_ctx->device, &bufAddrInfo1),
-                                        memReq1.size);
-    }
+    // The Buffer overloads carry the true creation sizes (VUID-VkDescriptorAddressInfoEXT-
+    // range-08045 — never the rounded memory-requirement size).
+    m_descWriter.writeStorageBufferHandle(*m_ctx, 0, instanceBuf);
+    m_descWriter.writeStorageBufferHandle(*m_ctx, 1, instanceBoundsBuf);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
     // MOD1: bind the descriptor buffer (replaces vkCmdBindDescriptorSets).

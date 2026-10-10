@@ -205,13 +205,13 @@ void LightCuller::shutdown() {
 }
 
 void LightCuller::dispatch(VkCommandBuffer cmd,
-                           VkBuffer lightBuffer,
+                           const harmonia::Buffer& lightBuffer,
                            std::uint32_t lightCount,
                            const sm::float4x4& proj,
                            const sm::float4x4& view,
                            float nearZ,
                            float farZ) {
-    if (!m_ctx || m_pipeline == VK_NULL_HANDLE || lightBuffer == VK_NULL_HANDLE)
+    if (!m_ctx || m_pipeline == VK_NULL_HANDLE || !lightBuffer.isValid())
         return;
 
     // Zero tile light counts so we accumulate fresh this frame.
@@ -236,14 +236,8 @@ void LightCuller::dispatch(VkCommandBuffer cmd,
     vkCmdPipelineBarrier2(cmd, &dep);
 
     // MOD1: update binding 0 (light buffer) via the descriptor buffer writer.
-    {
-        const VkBufferDeviceAddressInfo bufAddrInfo{
-            .sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO, .pNext = nullptr, .buffer = lightBuffer};
-        VkMemoryRequirements memReq{};
-        vkGetBufferMemoryRequirements(m_ctx->device, lightBuffer, &memReq);
-        m_descWriter.writeStorageBuffer(*m_ctx, 0, vkGetBufferDeviceAddress(m_ctx->device, &bufAddrInfo),
-                                        memReq.size);
-    }
+    // The Buffer overload carries the true creation size (range-08045).
+    m_descWriter.writeStorageBufferHandle(*m_ctx, 0, lightBuffer);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
     // MOD1: bind the descriptor buffer (replaces vkCmdBindDescriptorSets).

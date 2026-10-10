@@ -45,7 +45,7 @@ class LightCuller {
     /// lightBuffer: scene light SSBO; lightCount: number of active lights.
     /// projView: projection and view matrices for this frame.
     void dispatch(VkCommandBuffer cmd,
-                  VkBuffer lightBuffer,
+                  const harmonia::Buffer& lightBuffer,
                   std::uint32_t lightCount,
                   const sm::float4x4& proj,
                   const sm::float4x4& view,

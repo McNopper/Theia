@@ -55,7 +55,7 @@ void GpuDrivenState::dispatchCull(VkCommandBuffer cmd,
         return;
     }
     gpuCullPass.dispatch(
-        cmd, scene.instanceBuffer().handle(), scene.instanceBoundsBuffer().handle(), instanceCount, viewProj);
+        cmd, scene.instanceBuffer(), scene.instanceBoundsBuffer(), instanceCount, viewProj);
     const std::array cullBarriers{
         VkBufferMemoryBarrier2{
             .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,

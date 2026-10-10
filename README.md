@@ -87,7 +87,7 @@ All parameters follow the [OpenPBR spec](https://academysoftwarefoundation.githu
 | Thin-film | `thin_film_weight`, `thin_film_thickness`, `thin_film_ior` | ✅ |
 | Transmission | `transmission_weight`, `transmission_color`, `transmission_depth` | ✅ |
 | Subsurface | `subsurface_weight`, `subsurface_color`, `subsurface_radius`, `subsurface_radius_scale`, `subsurface_scatter_anisotropy` | ✅ real volumetric random walk (shared with Hyperion, run in the RT-GI compute stage) |
-| Geometry | `geometry_opacity`, `map_opacity` | ✅ true presence weight (`mix(ambient-medium, surface, α)`, spec §Opacity/Transparency), not a BRDF-weight approximation — the rasterizer draws a stochastic coverage sample per fragment (discarding with probability 1-α) and the RT-GI/shadow paths resolve the identical α through the shared estimator's pass-through gate + `∏(1-α)` shadow transmittance. `VK_EXT_opacity_micromap` accelerates a textured mask's RT traversal (`shaderball_checker`) without changing the result |
+| Geometry | `geometry_opacity`, `map_opacity` | ✅ true presence weight (`mix(ambient-medium, surface, α)`, spec §Opacity/Transparency), not a BRDF-weight approximation — the rasterizer draws a stochastic coverage sample per fragment (discarding with probability 1-α) and the RT-GI/shadow paths resolve the identical α through the shared estimator's pass-through gate + `∏(1-α)` shadow transmittance. `VK_KHR_opacity_micromap` accelerates a textured mask's RT traversal (`shaderball_checker`) without changing the result |
 
 Conductor reflectance (F82), thin-film iridescence (`mx_fresnel_airy`), fuzz/sheen (LTC),
 and the chromatic volumetric subsurface/transmission random walk are implemented once in
