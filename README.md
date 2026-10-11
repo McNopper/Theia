@@ -165,14 +165,14 @@ flowchart LR
 | Repository | Role |
 |------------|------|
 | [Aether](https://github.com/McNopper/Aether) | GPU-agnostic file formats & scene data (`.scene.toml` / `.materials.toml` / OBJ → plain CPU structs); no Vulkan |
-| [Harmonia](https://github.com/McNopper/Harmonia) | Shared Vulkan foundation reused **1:1** by both renderers — `harmonia::App` host, core/context, presentation, color management, tonemapping, bindless textures, shared GPU types, Slang shader build |
+| [Harmonia](https://github.com/McNopper/Harmonia) | Shared Vulkan foundation reused **1:1** by both renderers — `harmonia::app::App` host, core/context, presentation, color management, tonemapping, bindless textures, shared GPU types, Slang shader build |
 | [Hyperion](https://github.com/McNopper/Hyperion) | Offline path tracer (ground truth) |
 | **Theia** | This repo — GPU-driven accumulation path-traced renderer |
 
 Theia consumes Aether and Harmonia via CMake `FetchContent`. The demo application is a
-thin subclass of the shared **`harmonia::App`** host: Harmonia owns the window, swapchain,
+thin subclass of the shared **`harmonia::app::App`** host: Harmonia owns the window, swapchain,
 HDR target, tonemapping/presentation, IBL probe and scene loading, while Theia injects its
-renderer through the `harmonia::IRenderer` seam (Hyperion does the same). Slang shaders
+renderer through the `harmonia::app::IRenderer` seam (Hyperion does the same). Slang shaders
 are compiled at build time by Harmonia's shared `compile_slang_shaders` CMake rule
 (`shaders/*.slang` → `build/shaders/*.spv`) and loaded through Harmonia's SPIR-V loader.
 The **GPU scene layout is renderer-specific**: Theia owns its own `Scene`, `GpuInstance`
@@ -266,7 +266,7 @@ RT-GI is the single unified indirect + transmission provider and drives both the
 | Library | Purpose |
 |---------|---------|
 | [Aether](https://github.com/McNopper/Aether) | Scene & material file formats (`.scene.toml` / `.materials.toml` / OBJ) — GPU-agnostic CPU data |
-| [Harmonia](https://github.com/McNopper/Harmonia) | Shared Vulkan foundation (`harmonia::App` host, core, presentation, color, tonemapping, shared GPU types) |
+| [Harmonia](https://github.com/McNopper/Harmonia) | Shared Vulkan foundation (`harmonia::app::App` host, core, presentation, color, tonemapping, shared GPU types) |
 | [Vulkan SDK](https://vulkan.lunarg.com/) | Modern Vulkan 1.4 API |
 | [volk](https://github.com/zeux/volk) | Vulkan loader |
 | [VMA](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) | GPU memory allocation (via Harmonia) |

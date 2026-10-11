@@ -45,7 +45,7 @@ class LightCuller {
     /// lightBuffer: scene light SSBO; lightCount: number of active lights.
     /// projView: projection and view matrices for this frame.
     void dispatch(VkCommandBuffer cmd,
-                  const harmonia::Buffer& lightBuffer,
+                  const harmonia::core::Buffer& lightBuffer,
                   std::uint32_t lightCount,
                   const sm::float4x4& proj,
                   const sm::float4x4& view,
@@ -53,22 +53,22 @@ class LightCuller {
                   float farZ);
 
     // GPU buffers read by ForwardRenderer
-    [[nodiscard]] const harmonia::Buffer& tileLightCountsBuffer() const noexcept { return m_tileLightCountsBuf; }
-    [[nodiscard]] const harmonia::Buffer& tileLightIndicesBuffer() const noexcept { return m_tileLightIndicesBuf; }
+    [[nodiscard]] const harmonia::core::Buffer& tileLightCountsBuffer() const noexcept { return m_tileLightCountsBuf; }
+    [[nodiscard]] const harmonia::core::Buffer& tileLightIndicesBuffer() const noexcept { return m_tileLightIndicesBuf; }
     [[nodiscard]] std::uint32_t tilesX() const noexcept { return m_tilesX; }
     [[nodiscard]] std::uint32_t tilesY() const noexcept { return m_tilesY; }
 
   private:
     const harmonia::DeviceContext* m_ctx = nullptr;
 
-    harmonia::UniquePipeline m_pipeline;
-    harmonia::UniquePipelineLayout m_pipelineLayout;
-    harmonia::UniqueDescriptorSetLayout m_setLayout;
+    harmonia::core::UniquePipeline m_pipeline;
+    harmonia::core::UniquePipelineLayout m_pipelineLayout;
+    harmonia::core::UniqueDescriptorSetLayout m_setLayout;
     /// MOD1: descriptor buffer writer replaces the pool + allocated set.
-    harmonia::DescriptorBufferWriter m_descWriter;
+    harmonia::core::DescriptorBufferWriter m_descWriter;
 
-    harmonia::Buffer m_tileLightCountsBuf;  // uint[tilesX*tilesY]
-    harmonia::Buffer m_tileLightIndicesBuf; // uint[tilesX*tilesY * kMaxLightsPerTile]
+    harmonia::core::Buffer m_tileLightCountsBuf;  // uint[tilesX*tilesY]
+    harmonia::core::Buffer m_tileLightIndicesBuf; // uint[tilesX*tilesY * kMaxLightsPerTile]
 
     std::uint32_t m_tilesX = 0;
     std::uint32_t m_tilesY = 0;

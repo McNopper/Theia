@@ -52,8 +52,8 @@ class GiPass {
         const Scene* scene = nullptr;
         VkImageView envMapView = VK_NULL_HANDLE; ///< env panorama (or a harmless placeholder when no env)
         VkSampler envSampler = VK_NULL_HANDLE;
-        const harmonia::Buffer* envMarginalCdf = nullptr;    ///< may be nullptr (no env importance)
-        const harmonia::Buffer* envConditionalCdf = nullptr; ///< may be nullptr
+        const harmonia::core::Buffer* envMarginalCdf = nullptr;    ///< may be nullptr (no env importance)
+        const harmonia::core::Buffer* envConditionalCdf = nullptr; ///< may be nullptr
         std::uint32_t envImportanceWidth = 0;
         std::uint32_t envImportanceHeight = 0;
         bool hasEnvMap = false;
@@ -126,7 +126,7 @@ class GiPass {
 
     [[nodiscard]] bool initialize(const harmonia::DeviceContext& ctx,
                                   const Config& cfg,
-                                  const harmonia::CommandPool& uploadPool,
+                                  const harmonia::core::CommandPool& uploadPool,
                                   const char* giSpv = "gi.comp.spv");
     void shutdown();
 
@@ -191,27 +191,27 @@ class GiPass {
     const harmonia::DeviceContext* m_ctx = nullptr;
     Config m_cfg{};
 
-    /// One descriptor buffer writer PER FRAME SLOT (== harmonia::FrameSync::kFrameSlots):
+    /// One descriptor buffer writer PER FRAME SLOT (== harmonia::app::FrameSync::kFrameSlots):
     /// frames run pipelined, so a single mutable descriptor buffer would let frame N+1's
     /// per-frame Cur/Prev rebinding race frame N's in-flight dispatch (the run-to-run
     /// nondeterminism root-caused 2026-09). Each slot has its own descriptor buffer.
     static constexpr std::uint32_t kDescriptorSlots = 2;
 
-    harmonia::UniqueDescriptorSetLayout m_setLayout;
+    harmonia::core::UniqueDescriptorSetLayout m_setLayout;
     /// MOD1: descriptor buffer writers replace the pool + allocated sets (ping-pong slots).
-    std::array<harmonia::DescriptorBufferWriter, kDescriptorSlots> m_descWriters{};
+    std::array<harmonia::core::DescriptorBufferWriter, kDescriptorSlots> m_descWriters{};
     std::uint32_t m_activeSlot = 0;
 
-    harmonia::UniquePipelineLayout m_pipelineLayout;
-    harmonia::UniquePipeline m_pipeline;
+    harmonia::core::UniquePipelineLayout m_pipelineLayout;
+    harmonia::core::UniquePipeline m_pipeline;
 
     bool m_hdrFirstUse = true;
     const Scene* m_boundScene = nullptr;
     const Scene* m_texturesBoundFor = nullptr;
     VkImageView m_boundEnvMapView = VK_NULL_HANDLE;
     VkSampler m_boundEnvSampler = VK_NULL_HANDLE;
-    const harmonia::Buffer* m_boundEnvMarginalCdf = nullptr;
-    const harmonia::Buffer* m_boundEnvConditionalCdf = nullptr;
+    const harmonia::core::Buffer* m_boundEnvMarginalCdf = nullptr;
+    const harmonia::core::Buffer* m_boundEnvConditionalCdf = nullptr;
     VkImageView m_boundGradientVarianceView = VK_NULL_HANDLE;
 
     /// A3(b): 1×1 R32G32F placeholder bound to binding 15 when no A-SVGF
@@ -223,7 +223,7 @@ class GiPass {
     // is allocated generously (kReservoirStride) so it covers whichever std430-ish struct
     // layout Slang picks — the CPU never indexes the contents.
     static constexpr VkDeviceSize kReservoirStride = 64; ///< >= Slang Reservoir stride (float3 may be 16-aligned)
-    harmonia::Buffer m_reservoirBuf[2]{};
+    harmonia::core::Buffer m_reservoirBuf[2]{};
     std::uint32_t m_reservoirPingPong = 0; ///< index of the buffer written THIS frame
     bool m_reservoirsCleared = false;      ///< one-time zero-fill of both reservoir buffers
     /// GI2 full PT: path reservoir ping-pong buffers (bindings 20 = cur, 21 = prev).
@@ -231,11 +231,11 @@ class GiPass {
     /// ~288 B with Slang's 16-byte float3 alignment — the CPU never indexes the contents, so
     /// generous over-allocation is the policy; too small = out-of-bounds struct reads).
     static constexpr VkDeviceSize kPathReservoirStride = 512; // GI-ENH k≥3: ReconnectionCapture grew ~64B
-    harmonia::Buffer m_pathReservoirBuf[2]{};
+    harmonia::core::Buffer m_pathReservoirBuf[2]{};
     std::uint32_t m_pathReservoirPingPong = 0;
     bool m_pathReservoirsCleared = false;
     /// GI-ENH: Gaussian paired-neighbor pairing maps (binding 22, static after init).
-    harmonia::Buffer m_pairingOffsetBuf{};
+    harmonia::core::Buffer m_pairingOffsetBuf{};
 
     VkImageView m_boundMotionVectorView = VK_NULL_HANDLE;
 };

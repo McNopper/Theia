@@ -28,8 +28,8 @@ flowchart LR
     H --> T["<b>Theia</b><br/>accumulation renderer (this repo)"]
 ```
 
-Consumes Aether + Harmonia via CMake FetchContent. The demo is a thin `harmonia::App`
-subclass injecting `harmonia::IRenderer`. GPU-optimized scene upload / meshlet layouts are
+Consumes Aether + Harmonia via CMake FetchContent. The demo is a thin `harmonia::app::App`
+subclass injecting `harmonia::app::IRenderer`. GPU-optimized scene upload / meshlet layouts are
 Theia-specific (not in Harmonia).
 
 ## Algorithm strategy (drives every technique decision)

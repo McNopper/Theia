@@ -30,14 +30,14 @@ class GpuDrivenState {
     // indirect draw command; ForwardRenderer consumes it via vkCmdDrawMeshTasksIndirectEXT
     // (GD3) or vkCmdExecuteGeneratedCommandsEXT (GD6 DGC path).
     GpuCullPass gpuCullPass;
-    harmonia::UniqueIndirectCommandsLayout dgcLayout; ///< DRAW_MESH_TASKS_EXT token, stride=12
+    harmonia::core::UniqueIndirectCommandsLayout dgcLayout; ///< DRAW_MESH_TASKS_EXT token, stride=12
     VkBuffer dgcPreprocessBuf = VK_NULL_HANDLE;       ///< vkCmdExecuteGeneratedCommandsEXT scratch
     VmaAllocation dgcPreprocessAlloc = VK_NULL_HANDLE;
     VkDeviceAddress dgcPreprocessAddr = 0;
     VkDeviceSize dgcPreprocessSize = 0;
 
     HiZPass hiZPass;                       ///< current-frame depth pyramid builder (B4)
-    harmonia::Buffer meshletVisibility[2]; ///< ping-pong per-meshlet visibility (uint/meshlet)
+    harmonia::core::Buffer meshletVisibility[2]; ///< ping-pong per-meshlet visibility (uint/meshlet)
     std::uint32_t visFrame = 0;            ///< index of PREVIOUS-frame visibility buffer
     std::uint32_t visMeshletCount = 0;     ///< meshlet count the visibility buffers were sized for
     const Scene* visBuiltFor = nullptr;    ///< scene the visibility buffers were built for

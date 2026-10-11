@@ -27,11 +27,11 @@ namespace theia {
 
 /// GPU-driven forward renderer using Vulkan 1.4 features.
 /// - Dynamic rendering (no render passes)
-/// - harmonia::Mesh shaders (VK_EXT_mesh_shader) for GPU-driven geometry
+/// - harmonia::scene::Mesh shaders (VK_EXT_mesh_shader) for GPU-driven geometry
 /// - Depth pre-pass ready (depth target owned here)
 ///
 /// The HDR color target is owned by Application (same as Hyperion''s hdrImage)
-/// and passed in via Config so harmonia::ToneMapper can read it as a storage image.
+/// and passed in via Config so harmonia::presentation::ToneMapper can read it as a storage image.
 class ForwardRenderer {
   public:
     struct Config {
@@ -42,11 +42,11 @@ class ForwardRenderer {
         VkImageView hdrImageView = VK_NULL_HANDLE;
     };
 
-    /// harmonia::Camera parameters. Uses the shared harmonia::Camera::Params so both
+    /// harmonia::renderer::Camera parameters. Uses the shared harmonia::renderer::Camera::Params so both
     /// Hyperion and Theia describe their cameras with the same type.
     /// ForwardRenderer reads: position, target, up, vfovDeg, nearPlane,
     /// farPlane, and physical.ev100() for exposure.
-    using CameraParams = harmonia::Camera::Params;
+    using CameraParams = harmonia::renderer::Camera::Params;
 
     ForwardRenderer() = default;
     ~ForwardRenderer();
@@ -74,8 +74,8 @@ class ForwardRenderer {
     [[nodiscard]] VkSampler envSampler() const noexcept { return m_envSampler; }
     // VK14: no dummyEnvView — nullDescriptor handles absent env.
     /// Bind env-importance CDF buffers used by transparent-path stochastic env sampling.
-    void setEnvImportanceSampling(const harmonia::Buffer* marginalCdf,
-                                  const harmonia::Buffer* conditionalCdf,
+    void setEnvImportanceSampling(const harmonia::core::Buffer* marginalCdf,
+                                  const harmonia::core::Buffer* conditionalCdf,
                                   std::uint32_t width,
                                   std::uint32_t height) noexcept {
         m_envMarginalCdf = marginalCdf;
@@ -121,14 +121,14 @@ class ForwardRenderer {
 
     /// Update tile light list buffers (called by LightCuller each frame before recordFrame).
     void
-    setTileBuffers(const harmonia::Buffer& tileLightCounts,
-                   const harmonia::Buffer& tileLightIndices,
+    setTileBuffers(const harmonia::core::Buffer& tileLightCounts,
+                   const harmonia::core::Buffer& tileLightIndices,
                    std::uint32_t tilesX,
                    std::uint32_t tilesY);
 
     /// Record scene geometry rendering into cmd.
     /// Transitions hdrImage UNDEFINED/GENERAL -> ATTACHMENT_OPTIMAL, renders, leaves it there.
-    /// Application::mainLoop() will barrier it to GENERAL before the harmonia::ToneMapper.
+    /// Application::mainLoop() will barrier it to GENERAL before the harmonia::presentation::ToneMapper.
     void recordFrame(VkCommandBuffer cmd);
 
     // Thin GBuffer (RGBA16F: xyz=view-space normal [0,1], w=roughness) for SSR.
@@ -173,7 +173,7 @@ class ForwardRenderer {
     bool createOneSetLayout(std::span<const VkDescriptorSetLayoutBinding> bindings,
                             std::span<const VkDescriptorBindingFlags> bindingFlags,
                             const char* errorMessage,
-                            harmonia::UniqueDescriptorSetLayout& out);
+                            harmonia::core::UniqueDescriptorSetLayout& out);
     bool createPipelineLayouts();
     bool createOpaquePipeline();
     bool createTransparentPipeline();
@@ -212,16 +212,16 @@ class ForwardRenderer {
     const Scene* m_scene = nullptr;
 
     // Depth-only target (color target is externally owned)
-    harmonia::Image m_depthTarget;
+    harmonia::core::Image m_depthTarget;
     // Thin GBuffer target (RGBA16F: view-space normal + roughness)
-    harmonia::Image m_gbufferTarget;
+    harmonia::core::Image m_gbufferTarget;
     // GI GBuffer target (RGBA32F: world-space primary hit position + material index)
-    harmonia::Image m_giBufferTarget;
+    harmonia::core::Image m_giBufferTarget;
 
-    // harmonia::Mesh + fragment graphics pipeline
-    harmonia::UniquePipelineLayout m_pipelineLayout;
-    harmonia::UniquePipeline m_graphicsPipeline;
-    harmonia::UniquePipeline m_graphicsPipelineTransparent;
+    // harmonia::scene::Mesh + fragment graphics pipeline
+    harmonia::core::UniquePipelineLayout m_pipelineLayout;
+    harmonia::core::UniquePipeline m_graphicsPipeline;
+    harmonia::core::UniquePipeline m_graphicsPipelineTransparent;
 
     // Sky/background fullscreen pipeline (samples env panorama, or black).
     struct SkyPushConstants {
@@ -233,8 +233,8 @@ class ForwardRenderer {
         std::uint32_t _pad1 = 0;
     };
     static_assert(sizeof(SkyPushConstants) == 96);
-    harmonia::UniquePipelineLayout m_skyPipelineLayout;
-    harmonia::UniquePipeline m_skyPipeline;
+    harmonia::core::UniquePipelineLayout m_skyPipelineLayout;
+    harmonia::core::UniquePipeline m_skyPipeline;
     bool m_hasEnv = false;
     sm::float3 m_sunDir{0.0f, 1.0f, 0.0f}; ///< world dir toward dominant IBL light
     float m_sunStrength = 0.0f;            ///< [0,1] ray-traced sun shadow strength
@@ -257,32 +257,32 @@ class ForwardRenderer {
     /// (geometry / material+light / IBL / bindless-texture) + their layouts + the pool.
     /// MOD1: descriptor buffer writers replace pool + allocated sets.
     struct DescriptorState {
-        harmonia::UniqueDescriptorSetLayout meshSetLayout; ///< set 0: geometry buffers
-        harmonia::UniqueDescriptorSetLayout matSetLayout;  ///< set 1: material/lighting buffers
-        harmonia::UniqueDescriptorSetLayout iblSetLayout;  ///< set 2: IBL textures + samplers
-        harmonia::UniqueDescriptorSetLayout textureSetLayout; ///< set 3: bindless material textures
-        harmonia::DescriptorBufferWriter mesh;
-        harmonia::DescriptorBufferWriter mat;
-        harmonia::DescriptorBufferWriter ibl;
-        harmonia::DescriptorBufferWriter texture;
+        harmonia::core::UniqueDescriptorSetLayout meshSetLayout; ///< set 0: geometry buffers
+        harmonia::core::UniqueDescriptorSetLayout matSetLayout;  ///< set 1: material/lighting buffers
+        harmonia::core::UniqueDescriptorSetLayout iblSetLayout;  ///< set 2: IBL textures + samplers
+        harmonia::core::UniqueDescriptorSetLayout textureSetLayout; ///< set 3: bindless material textures
+        harmonia::core::DescriptorBufferWriter mesh;
+        harmonia::core::DescriptorBufferWriter mat;
+        harmonia::core::DescriptorBufferWriter ibl;
+        harmonia::core::DescriptorBufferWriter texture;
         const Scene* texturesBoundFor = nullptr; ///< scene the bindless set was last written for
     } m_desc;
 
     VkDescriptorImageInfo m_envSamplerInfo{};
     VkDescriptorImageInfo m_envRawInfo{};
-    const harmonia::Buffer* m_envMarginalCdf = nullptr;
-    const harmonia::Buffer* m_envConditionalCdf = nullptr;
+    const harmonia::core::Buffer* m_envMarginalCdf = nullptr;
+    const harmonia::core::Buffer* m_envConditionalCdf = nullptr;
     std::uint32_t m_envImportanceWidth = 0;
     std::uint32_t m_envImportanceHeight = 0;
     float m_envUnitNits = 1.0f; ///< env_unit_nits for the raw-env sky background
 
     // VK14: no dummy env/tile resources — nullDescriptor handles absent bindings.
-    harmonia::UniqueSampler m_envSampler;
+    harmonia::core::UniqueSampler m_envSampler;
     // VK14: no dummy resources.
 
     // Tile-based light culling buffers (set by LightCuller before each recordFrame).
-    const harmonia::Buffer* m_tileLightCountsBuf = nullptr;
-    const harmonia::Buffer* m_tileLightIndicesBuf = nullptr;
+    const harmonia::core::Buffer* m_tileLightCountsBuf = nullptr;
+    const harmonia::core::Buffer* m_tileLightIndicesBuf = nullptr;
     std::uint32_t m_tilesX = 0;
     std::uint32_t m_tilesY = 0;
     // Dummy 1-element buffers bound when no tile data is available (fallback to full light loop).

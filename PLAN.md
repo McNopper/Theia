@@ -33,8 +33,10 @@ Harmonia; this file tracks what Theia owns or consumes. Sibling plans: `Harmonia
 
 **Shipped GI state (orientation):** Theia's interactive GI runs **ReSTIR PT** — one unified
 reservoir driven by the shared path integrator, which **absorbs DI** (`useRestirDi` is forced
-false whenever PT is on, `src/demo/Application.cpp:440` and `:617`; the DI candidate path lives
-inside the same reservoir, `GiPass.cpp:776-780`) — plus spatial-only path reuse (see the
+false whenever PT is on — the `gp.useRestirDi = m_useRestirDi && !m_useRestirPt` assignment in
+`buildGiFrameParams` (`src/demo/Application.cpp`) and the GI record path; the DI candidate
+path lives inside the same reservoir — the reservoir writes in `GiPass.cpp`
+`updateDescriptors`) — plus spatial-only path reuse (see the
 no-temporal-merge guardrail) and A-SVGF as an interactive-only presentation stage (identity
 for offscreen capture). Stage order is **GI → MotionVector → TAA → Accumulation → Denoiser →
 ToneMap** (renderer-side record order in `src/demo/Application.cpp` — GI `:549`/`:621`,
@@ -193,10 +195,18 @@ low-spp reference).
 
 ## Baseline
 
-- **v0.7.12** (current; consumes Harmonia v0.7.11): **range-08045 residual fix + VK15
+- **v0.7.13** (current; consumes Harmonia v0.7.12): **the layering wave.** Every `harmonia::`
+  reference now names its layer (`harmonia::core::Buffer`, `harmonia::scene::SceneBase`,
+  `harmonia::app::App`, …) to match Harmonia v0.7.12's layered namespaces; `theia::` is
+  unchanged. Docs re-verified (names + citations). README gallery regenerated from this code
+  — pixel-identical (MAD = 0) to the previous set; the 7 noise-prone shaderball scenes were
+  refreshed (sub-1/255 accumulation nondeterminism). 18/18 ctest on Windows and Linux; zero
+  validation errors and warnings.
+
+- **v0.7.12** (consumes Harmonia v0.7.11): **range-08045 residual fix + VK15
   consumption.** LightCuller binding 0 (lights) and GpuCullPass bindings 0/1 (instances +
   bounds) still wrote descriptor ranges from `vkGetBufferMemoryRequirements().size` — the
-  rounded *memory* size; both `dispatch()` entry points now take `const harmonia::Buffer&`
+  rounded *memory* size; both `dispatch()` entry points now take `const harmonia::core::Buffer&`
   through the shared writer's creation-size overloads and the memReq boilerplate is deleted
   (caught by the `shaderball_checker` validation smoke — a 400-byte storage buffer reported
   unbacked). Consumes Harmonia **v0.7.11** (VK15 — opacity micromap on the KHR AS API; the

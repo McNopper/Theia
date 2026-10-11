@@ -47,7 +47,7 @@ GiPass::~GiPass() {
 
 bool GiPass::initialize(const harmonia::DeviceContext& ctx,
                         const Config& cfg,
-                        const harmonia::CommandPool& uploadPool,
+                        const harmonia::core::CommandPool& uploadPool,
                         const char* giSpv) {
     m_ctx = &ctx;
     m_cfg = cfg;
@@ -71,14 +71,14 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx,
         static_cast<VkDeviceSize>(cfg.width) * static_cast<VkDeviceSize>(cfg.height) * kReservoirStride;
     if (reservoirBytes > 0) {
         for (auto& slot : m_reservoirBuf) {
-            auto buf = harmonia::Buffer::create(ctx,
+            auto buf = harmonia::core::Buffer::create(ctx,
                                                 reservoirBytes,
                                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                                 VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
                                                 "theia.gi.restirReservoir");
             if (!buf) {
-                harmonia::Logger::error("GiPass: failed to create ReSTIR reservoir buffer: VkResult {}",
+                harmonia::core::Logger::error("GiPass: failed to create ReSTIR reservoir buffer: VkResult {}",
                                         static_cast<int>(buf.error()));
                 return false;
             }
@@ -88,14 +88,14 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx,
         const VkDeviceSize pathReservoirBytes =
             static_cast<VkDeviceSize>(cfg.width) * static_cast<VkDeviceSize>(cfg.height) * kPathReservoirStride;
         for (auto& slot : m_pathReservoirBuf) {
-            auto buf = harmonia::Buffer::create(ctx,
+            auto buf = harmonia::core::Buffer::create(ctx,
                                                 pathReservoirBytes,
                                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
                                                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                                 VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
                                                 "theia.gi.restirPathReservoir");
             if (!buf) {
-                harmonia::Logger::error("GiPass: failed to create ReSTIR path reservoir buffer: VkResult {}",
+                harmonia::core::Logger::error("GiPass: failed to create ReSTIR path reservoir buffer: VkResult {}",
                                         static_cast<int>(buf.error()));
                 return false;
             }
@@ -107,14 +107,14 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx,
     // built deterministically on the CPU, uploaded once, read-only at runtime).
     {
         const std::vector<std::uint32_t> packed = theia::pairing::buildPackedOffsets(kPairingSeed);
-        auto buf = harmonia::Buffer::upload(ctx,
+        auto buf = harmonia::core::Buffer::upload(ctx,
                                             uploadPool,
                                             std::as_bytes(std::span<const std::uint32_t>(packed)),
                                             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
                                                 VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                             "theia.gi.pairingOffsets");
         if (!buf) {
-            harmonia::Logger::error("GiPass: failed to upload pairing offsets: VkResult {}",
+            harmonia::core::Logger::error("GiPass: failed to upload pairing offsets: VkResult {}",
                                     static_cast<int>(buf.error()));
             return false;
         }
@@ -219,16 +219,16 @@ bool GiPass::createDescriptors() {
     };
     VkDescriptorSetLayout setLayout{};
     if (vkCreateDescriptorSetLayout(m_ctx->device, &setInfo, nullptr, &setLayout) != VK_SUCCESS) {
-        harmonia::Logger::error("GiPass: failed to create descriptor set layout");
+        harmonia::core::Logger::error("GiPass: failed to create descriptor set layout");
         return false;
     }
-    m_setLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, setLayout};
+    m_setLayout = harmonia::core::UniqueDescriptorSetLayout{m_ctx->device, setLayout};
 
     // MOD1: descriptor buffers (replaces the pool + allocated sets).
     for (std::uint32_t si = 0; si < kDescriptorSlots; ++si) {
         if (!m_descWriters[si].init(*m_ctx, setLayout, 25,
                                     si == 0 ? "theia.gi.descBuf0" : "theia.gi.descBuf1")) {
-            harmonia::Logger::error("GiPass: failed to create descriptor buffer slot {}", si);
+            harmonia::core::Logger::error("GiPass: failed to create descriptor buffer slot {}", si);
             for (std::uint32_t j = 0; j <= si; ++j) m_descWriters[j].shutdown();
             return false;
         }
@@ -256,14 +256,14 @@ bool GiPass::createPipeline(const char* giSpv) {
     };
     VkPipelineLayout pipelineLayout{};
     if (vkCreatePipelineLayout(m_ctx->device, &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
-        harmonia::Logger::error("GiPass: failed to create pipeline layout");
+        harmonia::core::Logger::error("GiPass: failed to create pipeline layout");
         return false;
     }
-    m_pipelineLayout = harmonia::UniquePipelineLayout{m_ctx->device, pipelineLayout};
+    m_pipelineLayout = harmonia::core::UniquePipelineLayout{m_ctx->device, pipelineLayout};
 
-    auto module = harmonia::createShaderModule(m_ctx->device, shaderPath(giSpv));
+    auto module = harmonia::core::createShaderModule(m_ctx->device, shaderPath(giSpv));
     if (!module) {
-        harmonia::Logger::error("GiPass: cannot load shader: {}", giSpv);
+        harmonia::core::Logger::error("GiPass: cannot load shader: {}", giSpv);
         return false;
     }
 
@@ -280,10 +280,10 @@ bool GiPass::createPipeline(const char* giSpv) {
     const VkResult res = vkCreateComputePipelines(m_ctx->device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &pipeline);
     vkDestroyShaderModule(m_ctx->device, *module, nullptr);
     if (res != VK_SUCCESS) {
-        harmonia::Logger::error("GiPass: failed to create compute pipeline");
+        harmonia::core::Logger::error("GiPass: failed to create compute pipeline");
         return false;
     }
-    m_pipeline = harmonia::UniquePipeline{m_ctx->device, pipeline};
+    m_pipeline = harmonia::core::UniquePipeline{m_ctx->device, pipeline};
     return true;
 }
 
@@ -294,10 +294,10 @@ void GiPass::updateDescriptors(const FrameParams& params) {
 
     // Env CDF buffers may be absent (no env map); bind the material buffer as a harmless
     // placeholder so the descriptor stays valid — the shader gates all reads on hasEnvMap.
-    const harmonia::Buffer& cdfFallback = scene->materialBuffer();
-    const harmonia::Buffer& marginalCdf =
+    const harmonia::core::Buffer& cdfFallback = scene->materialBuffer();
+    const harmonia::core::Buffer& marginalCdf =
         (params.envMarginalCdf != nullptr) ? *params.envMarginalCdf : cdfFallback;
-    const harmonia::Buffer& conditionalCdf =
+    const harmonia::core::Buffer& conditionalCdf =
         (params.envConditionalCdf != nullptr) ? *params.envConditionalCdf : cdfFallback;
 
     // Scene bindings are frame-independent — write them into EVERY slot's descriptor buffer.
@@ -483,21 +483,21 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
     // ---- Barriers: forward attachments -> compute inputs/outputs ----
     if (!skipPreBarriers) {
         const std::array<VkImageMemoryBarrier2, 3> preBarriers{{
-            harmonia::imageBarrier(m_cfg.giBufferImage,
+            harmonia::core::imageBarrier(m_cfg.giBufferImage,
                                    VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                    VK_ACCESS_2_SHADER_READ_BIT),
-            harmonia::imageBarrier(m_cfg.gbufferImage,
+            harmonia::core::imageBarrier(m_cfg.gbufferImage,
                                    VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                                    VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                                    VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                    VK_ACCESS_2_SHADER_READ_BIT),
-            harmonia::imageBarrier(m_cfg.hdrImage,
+            harmonia::core::imageBarrier(m_cfg.hdrImage,
                                    VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
                                    VK_IMAGE_LAYOUT_GENERAL,
                                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,

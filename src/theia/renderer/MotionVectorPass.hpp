@@ -85,11 +85,11 @@ class MotionVectorPass {
     const harmonia::DeviceContext* m_ctx = nullptr;
     Config m_cfg{};
 
-    harmonia::UniqueDescriptorSetLayout m_setLayout;
-    harmonia::UniquePipelineLayout m_pipelineLayout;
-    harmonia::UniquePipeline m_pipeline;
+    harmonia::core::UniqueDescriptorSetLayout m_setLayout;
+    harmonia::core::UniquePipelineLayout m_pipelineLayout;
+    harmonia::core::UniquePipeline m_pipeline;
 
-    harmonia::Image m_motionVectorImage{};
+    harmonia::core::Image m_motionVectorImage{};
     bool m_firstUse = true;
 };
 

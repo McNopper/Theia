@@ -22,7 +22,7 @@
 namespace theia {
 
 /// Theia demo: the real-time forward renderer injected into the shared
-/// harmonia::App host.
+/// harmonia::app::App host.
 ///
 /// The host owns window/context/swapchain/HDR image/tonemap/present; this
 /// class owns only what is rasterizer specific — ForwardRenderer, Forward+
@@ -30,7 +30,7 @@ namespace theia {
 /// controller.  Per the host contract, record() produces a linear image in
 /// the scene-referred working color space and leaves it in
 /// VK_IMAGE_LAYOUT_GENERAL.
-class Application final : public harmonia::App, public harmonia::IRenderer {
+class Application final : public harmonia::app::App, public harmonia::app::IRenderer {
   public:
     ~Application() override;
     void setCameraJitterEnabled(bool enabled) noexcept { m_cameraJitterEnabled = enabled; }
@@ -45,8 +45,8 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     /// (default on, only effective with PT). Off → per-sample multi-bounce walk.
     void setRestirPtPathEnabled(bool enabled) noexcept { m_useRestirPtPath = enabled; }
     void setTaaEnabled(bool enabled) noexcept { m_useTaa = enabled; }
-    // harmonia::IRenderer
-    void record(VkCommandBuffer cmd, const harmonia::RenderTarget& target) noexcept override;
+    // harmonia::app::IRenderer
+    void record(VkCommandBuffer cmd, const harmonia::app::RenderTarget& target) noexcept override;
     void onResize(VkExtent2D extent) noexcept override;
     [[nodiscard]] VkPipelineStageFlags2 outputStageMask() const noexcept override {
         // Must name the *actual* final producer of the HDR write this frame.
@@ -68,11 +68,11 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     [[nodiscard]] const char* name() const noexcept override { return "Theia ForwardRenderer"; }
 
   protected:
-    // harmonia::App hooks
-    [[nodiscard]] harmonia::IRenderer& renderer() noexcept override { return *this; }
-    [[nodiscard]] harmonia::ISceneBuilder& sceneBuilder() noexcept override { return *m_scene; }
+    // harmonia::app::App hooks
+    [[nodiscard]] harmonia::app::IRenderer& renderer() noexcept override { return *this; }
+    [[nodiscard]] harmonia::scene::ISceneBuilder& sceneBuilder() noexcept override { return *m_scene; }
     [[nodiscard]] bool onInitialize() override;
-    [[nodiscard]] bool onSceneLoaded(const harmonia::SceneLoader::SceneConfig& sceneConfig) override;
+    [[nodiscard]] bool onSceneLoaded(const harmonia::scene::SceneLoader::SceneConfig& sceneConfig) override;
     void onSceneUnload() override;
     bool onEvent(const SDL_Event& event) override;
     void onUpdate(float dtSeconds) override;
@@ -90,11 +90,11 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
         sm::float4x4 view;
         sm::float4x4 viewProj;
     };
-    [[nodiscard]] CameraMatrices computeCameraMatrices(const harmonia::RenderTarget& target) const noexcept;
+    [[nodiscard]] CameraMatrices computeCameraMatrices(const harmonia::app::RenderTarget& target) const noexcept;
     void dispatchLightCull(VkCommandBuffer cmd, const sm::float4x4& proj, const sm::float4x4& view) noexcept;
     void transitionGbuffersForRecord(VkCommandBuffer cmd, VkImage hdrImage, bool giEnabled) noexcept;
     void submitAsyncCompute(VkCommandBuffer cmd,
-                            const harmonia::RenderTarget& target,
+                            const harmonia::app::RenderTarget& target,
                             const sm::float4x4& view,
                             const sm::float4x4& curViewProj) noexcept;
     void submitSingleQueueGI(VkCommandBuffer cmd, const sm::float4x4& view, const sm::float4x4& curViewProj) noexcept;
@@ -163,7 +163,7 @@ class Application final : public harmonia::App, public harmonia::IRenderer {
     float m_prevEv100 = 0.0f;
     bool m_viewSigValid = false;
 
-    // harmonia::Camera-cut detection for two-pass Hi-Z occlusion culling: on a large view change the
+    // harmonia::renderer::Camera-cut detection for two-pass Hi-Z occlusion culling: on a large view change the
     // previous-frame visibility set is stale, so the Hi-Z test is disabled for that frame and
     // all remaining meshlets are drawn conservatively (prevents culling disoccluded geometry).
     sm::float3 m_hiZPrevPos{0.0f, 0.0f, 0.0f};

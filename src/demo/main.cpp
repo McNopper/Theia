@@ -10,8 +10,8 @@ constexpr float kRestirPtDenoiserStrength = 0.55F;
 } // namespace
 
 int main(int argc, char* const argv[]) {
-    harmonia::Logger::setTag("THEIA");
-    harmonia::App::Config config;
+    harmonia::core::Logger::setTag("THEIA");
+    harmonia::app::App::Config config;
     config.title = "Theia \xe2\x80\x94 Real-Time Renderer";
     config.width = 1024;
     config.height = 768;
@@ -63,8 +63,8 @@ int main(int argc, char* const argv[]) {
             taaForcedOn = true;
             continue;
         }
-        if (!harmonia::CliParser::applyCommonArg(config, i, argc, argv)) {
-            harmonia::Logger::error("Unknown argument: '{}'", argv[i]);
+        if (!harmonia::app::CliParser::applyCommonArg(config, i, argc, argv)) {
+            harmonia::core::Logger::error("Unknown argument: '{}'", argv[i]);
             return 2;
         }
     }
@@ -75,7 +75,7 @@ int main(int argc, char* const argv[]) {
     // filters the result (blurring/ghosting). TAA and offscreen accumulation cannot both
     // be active, so an *explicit* --taa together with --output is not allowed.
     if (taaForcedOn && !config.outputFile.empty()) {
-        harmonia::Logger::error("--taa is incompatible with offscreen capture (--output): offscreen rendering uses "
+        harmonia::core::Logger::error("--taa is incompatible with offscreen capture (--output): offscreen rendering uses "
                                 "progressive accumulation for anti-aliasing, and TAA would double-filter it. Drop "
                                 "--taa for offscreen capture, or omit --output for interactive TAA.");
         return 2;

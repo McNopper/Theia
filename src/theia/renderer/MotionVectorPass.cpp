@@ -31,7 +31,7 @@ bool MotionVectorPass::initialize(const harmonia::DeviceContext& ctx, const Conf
 
     if (cfg.width == 0 || cfg.height == 0 || cfg.giBufferImage == VK_NULL_HANDLE ||
         cfg.giBufferView == VK_NULL_HANDLE) {
-        harmonia::Logger::error("MotionVectorPass: invalid Config");
+        harmonia::core::Logger::error("MotionVectorPass: invalid Config");
         return false;
     }
 
@@ -55,14 +55,14 @@ void MotionVectorPass::shutdown() {
 }
 
 bool MotionVectorPass::createImage() noexcept {
-    auto img = harmonia::Image::create(*m_ctx,
+    auto img = harmonia::core::Image::create(*m_ctx,
                                        {m_cfg.width, m_cfg.height},
                                        VK_FORMAT_R32G32_SFLOAT,
                                        VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                        VK_IMAGE_ASPECT_COLOR_BIT,
                                        "theia.motionVectors");
     if (!img) {
-        harmonia::Logger::error("MotionVectorPass: failed to create motion vector image: VkResult {}",
+        harmonia::core::Logger::error("MotionVectorPass: failed to create motion vector image: VkResult {}",
                                 static_cast<int>(img.error()));
         return false;
     }
@@ -106,10 +106,10 @@ bool MotionVectorPass::createPipeline(const char* spvName) noexcept {
     };
     VkDescriptorSetLayout setLayout{};
     if (vkCreateDescriptorSetLayout(m_ctx->device, &setInfo, nullptr, &setLayout) != VK_SUCCESS) {
-        harmonia::Logger::error("MotionVectorPass: failed to create descriptor set layout");
+        harmonia::core::Logger::error("MotionVectorPass: failed to create descriptor set layout");
         return false;
     }
-    m_setLayout = harmonia::UniqueDescriptorSetLayout{m_ctx->device, setLayout};
+    m_setLayout = harmonia::core::UniqueDescriptorSetLayout{m_ctx->device, setLayout};
 
     const VkPushConstantRange pcRange{
         .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
@@ -127,14 +127,14 @@ bool MotionVectorPass::createPipeline(const char* spvName) noexcept {
     };
     VkPipelineLayout pipelineLayout{};
     if (vkCreatePipelineLayout(m_ctx->device, &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
-        harmonia::Logger::error("MotionVectorPass: failed to create pipeline layout");
+        harmonia::core::Logger::error("MotionVectorPass: failed to create pipeline layout");
         return false;
     }
-    m_pipelineLayout = harmonia::UniquePipelineLayout{m_ctx->device, pipelineLayout};
+    m_pipelineLayout = harmonia::core::UniquePipelineLayout{m_ctx->device, pipelineLayout};
 
-    auto module = harmonia::createShaderModule(m_ctx->device, shaderPath(spvName));
+    auto module = harmonia::core::createShaderModule(m_ctx->device, shaderPath(spvName));
     if (!module) {
-        harmonia::Logger::error("MotionVectorPass: cannot load shader: {}", spvName);
+        harmonia::core::Logger::error("MotionVectorPass: cannot load shader: {}", spvName);
         return false;
     }
 
@@ -154,10 +154,10 @@ bool MotionVectorPass::createPipeline(const char* spvName) noexcept {
     const VkResult res = vkCreateComputePipelines(m_ctx->device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &pipeline);
     vkDestroyShaderModule(m_ctx->device, *module, nullptr);
     if (res != VK_SUCCESS) {
-        harmonia::Logger::error("MotionVectorPass: failed to create compute pipeline");
+        harmonia::core::Logger::error("MotionVectorPass: failed to create compute pipeline");
         return false;
     }
-    m_pipeline = harmonia::UniquePipeline{m_ctx->device, pipeline};
+    m_pipeline = harmonia::core::UniquePipeline{m_ctx->device, pipeline};
 
     m_ctx->setDebugName(VK_OBJECT_TYPE_PIPELINE, m_pipeline.get(), "theia.motionVectors.pipeline");
     return true;

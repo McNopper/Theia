@@ -68,14 +68,14 @@ class TaaPass {
     const harmonia::DeviceContext* m_ctx = nullptr;
     Config m_cfg{};
 
-    harmonia::UniqueSampler m_sampler;
-    harmonia::Image m_history{};   ///< previous TAA output  (R32G32B32A32, SAMPLED | TRANSFER_DST)
-    harmonia::Image m_taaOutput{}; ///< current TAA result   (R32G32B32A32, STORAGE | TRANSFER_SRC)
+    harmonia::core::UniqueSampler m_sampler;
+    harmonia::core::Image m_history{};   ///< previous TAA output  (R32G32B32A32, SAMPLED | TRANSFER_DST)
+    harmonia::core::Image m_taaOutput{}; ///< current TAA result   (R32G32B32A32, STORAGE | TRANSFER_SRC)
     bool m_firstUse = true;
 
-    harmonia::UniqueDescriptorSetLayout m_setLayout;
-    harmonia::UniquePipelineLayout m_pipeLayout;
-    harmonia::UniquePipeline m_pipeline;
+    harmonia::core::UniqueDescriptorSetLayout m_setLayout;
+    harmonia::core::UniquePipelineLayout m_pipeLayout;
+    harmonia::core::UniquePipeline m_pipeline;
 
     std::uint32_t m_frameCount = 0;
 };

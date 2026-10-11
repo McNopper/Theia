@@ -35,7 +35,7 @@ bool ForwardRenderer::initialize(const harmonia::DeviceContext& ctx, const Confi
     m_ctx = &ctx;
 
     if (!createDepthTarget()) {
-        harmonia::Logger::error("Failed to create depth target");
+        harmonia::core::Logger::error("Failed to create depth target");
         return false;
     }
 
@@ -45,7 +45,7 @@ bool ForwardRenderer::initialize(const harmonia::DeviceContext& ctx, const Confi
     // (catastrophic / OOM) is fatal.
     (void)m_gpu.hiZPass.initialize(ctx, config.width, config.height);
     if (m_gpu.hiZPass.sampledView() == VK_NULL_HANDLE) {
-        harmonia::Logger::error("Failed to create Hi-Z image");
+        harmonia::core::Logger::error("Failed to create Hi-Z image");
         return false;
     }
 
@@ -53,7 +53,7 @@ bool ForwardRenderer::initialize(const harmonia::DeviceContext& ctx, const Confi
     // (the rasterizer is mesh-shader based), so the indirect draw (GD3) is always available
     // and the cull pass must succeed — there is no CPU-count draw to fall back to.
     if (!m_gpu.gpuCullPass.initialize(ctx)) {
-        harmonia::Logger::error("GpuCullPass: initialization failed");
+        harmonia::core::Logger::error("GpuCullPass: initialization failed");
         return false;
     }
 
@@ -61,10 +61,10 @@ bool ForwardRenderer::initialize(const harmonia::DeviceContext& ctx, const Confi
     // vkCmdDrawMeshTasksIndirectEXT (GD3) draw path. Used to isolate DGC-specific regressions.
     bool forceGd3 = false;
     {
-        if (const auto forceGd3Raw = harmonia::getEnvString("THEIA_FORCE_GD3")) {
+        if (const auto forceGd3Raw = harmonia::core::getEnvString("THEIA_FORCE_GD3")) {
             forceGd3 = ((!forceGd3Raw->empty() && (*forceGd3Raw)[0] != '0'));
             if (forceGd3) {
-                harmonia::Logger::info("THEIA_FORCE_GD3 set — DGC disabled, using indirect draw fallback");
+                harmonia::core::Logger::info("THEIA_FORCE_GD3 set — DGC disabled, using indirect draw fallback");
             }
         }
     }
@@ -89,14 +89,14 @@ bool ForwardRenderer::initialize(const harmonia::DeviceContext& ctx, const Confi
         };
         VkIndirectCommandsLayoutEXT dgcLayout{};
         if (vkCreateIndirectCommandsLayoutEXT(ctx.device, &dgcLayoutCI, nullptr, &dgcLayout) != VK_SUCCESS) {
-            harmonia::Logger::warn("ForwardRenderer: vkCreateIndirectCommandsLayoutEXT failed — GD3 fallback");
+            harmonia::core::Logger::warn("ForwardRenderer: vkCreateIndirectCommandsLayoutEXT failed — GD3 fallback");
         } else {
-            m_gpu.dgcLayout = harmonia::UniqueIndirectCommandsLayout{ctx.device, dgcLayout};
+            m_gpu.dgcLayout = harmonia::core::UniqueIndirectCommandsLayout{ctx.device, dgcLayout};
         }
     }
 
     if (!createPipeline()) {
-        harmonia::Logger::error("Failed to create pipeline");
+        harmonia::core::Logger::error("Failed to create pipeline");
         return false;
     }
 
@@ -147,33 +147,33 @@ bool ForwardRenderer::initialize(const harmonia::DeviceContext& ctx, const Confi
                 };
                 m_gpu.dgcPreprocessAddr = vkGetBufferDeviceAddress(ctx.device, &addrInfo);
             } else {
-                harmonia::Logger::warn("ForwardRenderer: failed to allocate DGC preprocess buffer — GD3 fallback");
+                harmonia::core::Logger::warn("ForwardRenderer: failed to allocate DGC preprocess buffer — GD3 fallback");
                 m_gpu.dgcLayout.reset();
                 m_gpu.dgcPreprocessSize = 0;
             }
         }
     }
 
-    if (const auto debugModeRaw = harmonia::getEnvString("THEIA_DEBUG_RAY_HIT_MODE")) {
+    if (const auto debugModeRaw = harmonia::core::getEnvString("THEIA_DEBUG_RAY_HIT_MODE")) {
         m_render.debugRayHitMode = std::clamp(std::strtof(debugModeRaw->c_str(), nullptr), 0.0f, 6.0f);
         if (m_render.debugRayHitMode > 0.0f) {
-            harmonia::Logger::info("THEIA_DEBUG_RAY_HIT_MODE = {:.1f}", m_render.debugRayHitMode);
+            harmonia::core::Logger::info("THEIA_DEBUG_RAY_HIT_MODE = {:.1f}", m_render.debugRayHitMode);
         }
     }
 
     // Debug/A-B toggle: set THEIA_DISABLE_HIZ to draw all meshlets (two passes, no occlusion
     // test). Used to verify Hi-Z culling is visually equivalent to the uncullered path.
-    if (const auto hiZDisableRaw = harmonia::getEnvString("THEIA_DISABLE_HIZ")) {
+    if (const auto hiZDisableRaw = harmonia::core::getEnvString("THEIA_DISABLE_HIZ")) {
         m_gpu.hiZDebugDisabled = ((!hiZDisableRaw->empty() && (*hiZDisableRaw)[0] != '0'));
         if (m_gpu.hiZDebugDisabled) {
-            harmonia::Logger::info("THEIA_DISABLE_HIZ set — Hi-Z occlusion test disabled");
+            harmonia::core::Logger::info("THEIA_DISABLE_HIZ set — Hi-Z occlusion test disabled");
         }
     }
 
-    if (const auto singlePassRaw = harmonia::getEnvString("THEIA_SINGLE_PASS")) {
+    if (const auto singlePassRaw = harmonia::core::getEnvString("THEIA_SINGLE_PASS")) {
         m_gpu.forceSinglePass = ((!singlePassRaw->empty() && (*singlePassRaw)[0] != '0'));
         if (m_gpu.forceSinglePass) {
-            harmonia::Logger::info("THEIA_SINGLE_PASS set — two-pass Hi-Z bypassed (single draw pass)");
+            harmonia::core::Logger::info("THEIA_SINGLE_PASS set — two-pass Hi-Z bypassed (single draw pass)");
         }
     }
 
@@ -202,17 +202,17 @@ bool ForwardRenderer::initialize(const harmonia::DeviceContext& ctx, const Confi
     };
     VkSampler envSampler = VK_NULL_HANDLE;
     if (vkCreateSampler(ctx.device, &envSamplerInfo, nullptr, &envSampler) != VK_SUCCESS) {
-        harmonia::Logger::error("ForwardRenderer: failed to create env sampler");
+        harmonia::core::Logger::error("ForwardRenderer: failed to create env sampler");
         return false;
     }
-    m_envSampler = harmonia::UniqueSampler{ctx.device, envSampler};
+    m_envSampler = harmonia::core::UniqueSampler{ctx.device, envSampler};
 
     // VK14: nullDescriptor — env view binds VK_NULL_HANDLE when absent (no 1×1 placeholder).
 
     m_initialized = true;
     m_hdrFirstUse = true;
     const char* drawPath = m_gpu.dgcLayout != VK_NULL_HANDLE ? "DGC" : "indirect";
-    harmonia::Logger::info(
+    harmonia::core::Logger::info(
         "GPU-driven forward renderer initialized ({}x{}) [{}]", config.width, config.height, drawPath);
     return true;
 }
@@ -297,8 +297,8 @@ bool ForwardRenderer::resize(std::uint32_t width,
     return createDepthTarget();
 }
 
-void ForwardRenderer::setTileBuffers(const harmonia::Buffer& tileLightCounts,
-                                     const harmonia::Buffer& tileLightIndices,
+void ForwardRenderer::setTileBuffers(const harmonia::core::Buffer& tileLightCounts,
+                                     const harmonia::core::Buffer& tileLightIndices,
                                      std::uint32_t tilesX,
                                      std::uint32_t tilesY) {
     m_tileLightCountsBuf = &tileLightCounts;
@@ -327,28 +327,28 @@ void ForwardRenderer::setEnvironment(VkImageView rawEnvView, float envUnitNits) 
 bool ForwardRenderer::createDepthTarget() {
     VkExtent2D extent{m_config.width, m_config.height};
     // SAMPLED_BIT so SSR can read depth after the forward pass.
-    auto depthResult = harmonia::Image::create(*m_ctx,
+    auto depthResult = harmonia::core::Image::create(*m_ctx,
                                                extent,
                                                VK_FORMAT_D32_SFLOAT,
                                                VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                                VK_IMAGE_ASPECT_DEPTH_BIT,
                                                "theia.depth");
     if (!depthResult) {
-        harmonia::Logger::error("Failed to create depth target");
+        harmonia::core::Logger::error("Failed to create depth target");
         return false;
     }
     m_depthTarget = std::move(*depthResult);
 
     // GBuffer: RGBA16F — view-space normal (xyz * 0.5 + 0.5) + roughness (w).
     // SAMPLED_BIT so SSR compute can sample it; STORAGE_BIT reserved for future post-process.
-    auto gbufResult = harmonia::Image::create(*m_ctx,
+    auto gbufResult = harmonia::core::Image::create(*m_ctx,
                                               extent,
                                               VK_FORMAT_R16G16B16A16_SFLOAT,
                                               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                               VK_IMAGE_ASPECT_COLOR_BIT,
                                               "theia.gbuffer");
     if (!gbufResult) {
-        harmonia::Logger::error("Failed to create GBuffer target");
+        harmonia::core::Logger::error("Failed to create GBuffer target");
         return false;
     }
     m_gbufferTarget = std::move(*gbufResult);
@@ -357,14 +357,14 @@ bool ForwardRenderer::createDepthTarget() {
     // encoded as asfloat(materialIdx + 1); 0 = background). RGBA32F keeps the integer
     // material index bit-exact and the world position at full precision for ray seeding.
     // SAMPLED_BIT so the GI compute stage can fetch it via texelFetch (Texture2D.Load).
-    auto giBufResult = harmonia::Image::create(*m_ctx,
+    auto giBufResult = harmonia::core::Image::create(*m_ctx,
                                                extent,
                                                VK_FORMAT_R32G32B32A32_SFLOAT,
                                                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                                VK_IMAGE_ASPECT_COLOR_BIT,
                                                "theia.gibuffer");
     if (!giBufResult) {
-        harmonia::Logger::error("Failed to create GI GBuffer target");
+        harmonia::core::Logger::error("Failed to create GI GBuffer target");
         return false;
     }
     m_giBufferTarget = std::move(*giBufResult);
@@ -382,9 +382,9 @@ void ForwardRenderer::drawOpaque(VkCommandBuffer cmd,
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_graphicsPipeline);
     // MOD1: bind descriptor buffers (replaces vkCmdBindDescriptorSets).
     {
-        const std::array<harmonia::DescriptorBufferWriter*, 4> writers{
+        const std::array<harmonia::core::DescriptorBufferWriter*, 4> writers{
             &m_desc.mesh, &m_desc.mat, &m_desc.ibl, &m_desc.texture};
-        harmonia::DescriptorBufferWriter::bindSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0,
+        harmonia::core::DescriptorBufferWriter::bindSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0,
                                                     writers);
     }
     auto pc = pcBase;
@@ -401,9 +401,9 @@ void ForwardRenderer::drawOpaque(VkCommandBuffer cmd,
 }
 
 VkShaderModule ForwardRenderer::loadShaderModule(const char* filename) {
-    auto module = harmonia::createShaderModule(m_ctx->device, shaderPath(filename));
+    auto module = harmonia::core::createShaderModule(m_ctx->device, shaderPath(filename));
     if (!module) {
-        harmonia::Logger::error("Failed to load shader: {}", filename);
+        harmonia::core::Logger::error("Failed to load shader: {}", filename);
         return VK_NULL_HANDLE;
     }
     return *module;
@@ -471,7 +471,7 @@ bool ForwardRenderer::createPipeline() {
 bool ForwardRenderer::createOneSetLayout(std::span<const VkDescriptorSetLayoutBinding> bindings,
                                          std::span<const VkDescriptorBindingFlags> bindingFlags,
                                          const char* errorMessage,
-                                         harmonia::UniqueDescriptorSetLayout& out) {
+                                         harmonia::core::UniqueDescriptorSetLayout& out) {
     // An all-zero pBindingFlags is spec-equivalent to omitting the flags chain, so the
     // chain is only included when per-binding flags are actually requested (MOD1: no
     // UPDATE_AFTER_BIND — incompatible with DESCRIPTOR_BUFFER layouts).
@@ -489,10 +489,10 @@ bool ForwardRenderer::createOneSetLayout(std::span<const VkDescriptorSetLayoutBi
     };
     VkDescriptorSetLayout layout{};
     if (vkCreateDescriptorSetLayout(m_ctx->device, &layoutInfo, nullptr, &layout) != VK_SUCCESS) {
-        harmonia::Logger::error("{}", errorMessage);
+        harmonia::core::Logger::error("{}", errorMessage);
         return false;
     }
-    out = harmonia::UniqueDescriptorSetLayout{m_ctx->device, layout};
+    out = harmonia::core::UniqueDescriptorSetLayout{m_ctx->device, layout};
     return true;
 }
 
@@ -580,7 +580,7 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
         !m_desc.mat.init(*m_ctx, m_desc.matSetLayout.get(), 6, "theia.fwd.mat.descBuf") ||
         !m_desc.ibl.init(*m_ctx, m_desc.iblSetLayout.get(), 8, "theia.fwd.ibl.descBuf") ||
         !m_desc.texture.init(*m_ctx, m_desc.textureSetLayout.get(), 1, "theia.fwd.texture.descBuf")) {
-        harmonia::Logger::error("Failed to create descriptor buffers");
+        harmonia::core::Logger::error("Failed to create descriptor buffers");
         m_desc.mesh.shutdown();
         m_desc.mat.shutdown();
         m_desc.ibl.shutdown();
@@ -611,7 +611,7 @@ bool ForwardRenderer::createPipelineLayouts() {
     };
     VkPipelineLayout pipelineLayout{};
     if (vkCreatePipelineLayout(m_ctx->device, &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
-        harmonia::Logger::error("Failed to create graphics pipeline layout");
+        harmonia::core::Logger::error("Failed to create graphics pipeline layout");
         m_desc.mesh.shutdown();
     m_desc.mat.shutdown();
     m_desc.ibl.shutdown();
@@ -622,7 +622,7 @@ bool ForwardRenderer::createPipelineLayouts() {
         m_desc.meshSetLayout.reset();
         return false;
     }
-    m_pipelineLayout = harmonia::UniquePipelineLayout{m_ctx->device, pipelineLayout};
+    m_pipelineLayout = harmonia::core::UniquePipelineLayout{m_ctx->device, pipelineLayout};
     return true;
 }
 
@@ -687,7 +687,7 @@ bool ForwardRenderer::createOpaquePipeline() {
     VkPipeline graphicsPipeline{};
     if (vkCreateGraphicsPipelines(m_ctx->device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline) !=
         VK_SUCCESS) {
-        harmonia::Logger::error("Failed to create graphics pipeline");
+        harmonia::core::Logger::error("Failed to create graphics pipeline");
         m_pipelineLayout.reset();
         m_desc.mesh.shutdown();
     m_desc.mat.shutdown();
@@ -698,7 +698,7 @@ bool ForwardRenderer::createOpaquePipeline() {
         m_desc.meshSetLayout.reset();
         return false;
     }
-    m_graphicsPipeline = harmonia::UniquePipeline{m_ctx->device, graphicsPipeline};
+    m_graphicsPipeline = harmonia::core::UniquePipeline{m_ctx->device, graphicsPipeline};
     return true;
 }
 
@@ -767,7 +767,7 @@ bool ForwardRenderer::createTransparentPipeline() {
     if (vkCreateGraphicsPipelines(
             m_ctx->device, VK_NULL_HANDLE, 1, &transparentPipelineInfo, nullptr, &graphicsPipelineTransparent) !=
         VK_SUCCESS) {
-        harmonia::Logger::error("Failed to create transparent graphics pipeline");
+        harmonia::core::Logger::error("Failed to create transparent graphics pipeline");
         m_graphicsPipeline.reset();
         m_pipelineLayout.reset();
         m_desc.mesh.shutdown();
@@ -780,7 +780,7 @@ bool ForwardRenderer::createTransparentPipeline() {
         m_desc.meshSetLayout.reset();
         return false;
     }
-    m_graphicsPipelineTransparent = harmonia::UniquePipeline{m_ctx->device, graphicsPipelineTransparent};
+    m_graphicsPipelineTransparent = harmonia::core::UniquePipeline{m_ctx->device, graphicsPipelineTransparent};
     return true;
 }
 
@@ -789,7 +789,7 @@ bool ForwardRenderer::createSkyPipeline() {
     VkShaderModule skyVert = loadShaderModule("sky.vert.spv");
     VkShaderModule skyFrag = loadShaderModule("sky.frag.spv");
     if (skyVert == VK_NULL_HANDLE || skyFrag == VK_NULL_HANDLE) {
-        harmonia::Logger::error("Failed to load sky shader modules");
+        harmonia::core::Logger::error("Failed to load sky shader modules");
         if (skyVert)
             vkDestroyShaderModule(m_ctx->device, skyVert, nullptr);
         if (skyFrag)
@@ -811,12 +811,12 @@ bool ForwardRenderer::createSkyPipeline() {
     };
     VkPipelineLayout skyPipelineLayout{};
     if (vkCreatePipelineLayout(m_ctx->device, &skyLayoutInfo, nullptr, &skyPipelineLayout) != VK_SUCCESS) {
-        harmonia::Logger::error("Failed to create sky pipeline layout");
+        harmonia::core::Logger::error("Failed to create sky pipeline layout");
         vkDestroyShaderModule(m_ctx->device, skyVert, nullptr);
         vkDestroyShaderModule(m_ctx->device, skyFrag, nullptr);
         return false;
     }
-    m_skyPipelineLayout = harmonia::UniquePipelineLayout{m_ctx->device, skyPipelineLayout};
+    m_skyPipelineLayout = harmonia::core::UniquePipelineLayout{m_ctx->device, skyPipelineLayout};
 
     const std::array<VkPipelineShaderStageCreateInfo, 2> skyStages{
         VkPipelineShaderStageCreateInfo{
@@ -877,10 +877,10 @@ bool ForwardRenderer::createSkyPipeline() {
     vkDestroyShaderModule(m_ctx->device, skyVert, nullptr);
     vkDestroyShaderModule(m_ctx->device, skyFrag, nullptr);
     if (skyRes != VK_SUCCESS) {
-        harmonia::Logger::error("Failed to create sky pipeline");
+        harmonia::core::Logger::error("Failed to create sky pipeline");
         return false;
     }
-    m_skyPipeline = harmonia::UniquePipeline{m_ctx->device, skyPipeline};
+    m_skyPipeline = harmonia::core::UniquePipeline{m_ctx->device, skyPipeline};
     return true;
 }
 
@@ -898,7 +898,7 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
 
     updateSceneDescriptors(cmd);
 
-    // harmonia::Camera matrices + push constants (needed before rendering so the two Hi-Z passes and
+    // harmonia::renderer::Camera matrices + push constants (needed before rendering so the two Hi-Z passes and
     // the Hi-Z occlusion test share the same projection).
     sm::float4x4 proj = sm::perspective(sm::radians(m_camera.vfovDeg),
                                         static_cast<float>(m_config.width) / static_cast<float>(m_config.height),
@@ -1104,7 +1104,7 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
 
 void ForwardRenderer::prepareAttachments(VkCommandBuffer cmd) {
     const std::array imageBarriers{
-        harmonia::imageBarrier(m_config.hdrImage,
+        harmonia::core::imageBarrier(m_config.hdrImage,
                                m_hdrFirstUse ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL,
                                VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
                                m_hdrFirstUse ? VK_PIPELINE_STAGE_2_NONE : VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
@@ -1125,14 +1125,14 @@ void ForwardRenderer::prepareAttachments(VkCommandBuffer cmd) {
             .image = m_depthTarget.handle(),
             .subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1},
         },
-        harmonia::imageBarrier(m_gbufferTarget.handle(),
+        harmonia::core::imageBarrier(m_gbufferTarget.handle(),
                                VK_IMAGE_LAYOUT_UNDEFINED,
                                VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
                                VK_PIPELINE_STAGE_2_NONE,
                                0,
                                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT),
-        harmonia::imageBarrier(m_giBufferTarget.handle(),
+        harmonia::core::imageBarrier(m_giBufferTarget.handle(),
                                VK_IMAGE_LAYOUT_UNDEFINED,
                                VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
                                VK_PIPELINE_STAGE_2_NONE,
@@ -1152,25 +1152,25 @@ void ForwardRenderer::prepareAttachments(VkCommandBuffer cmd) {
 void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
     // MOD1: fallback buffer handles for optional resources (env CDFs, tile lights, visibility).
     // VK14 nullDescriptor: bind a null descriptor when buffers are absent (shader gates on hasTileData).
-    const harmonia::Buffer* tileLightCountsBuf = m_tileLightCountsBuf;
-    const harmonia::Buffer* tileLightIndicesBuf = m_tileLightIndicesBuf;
-    const harmonia::Buffer* envMarginalCdfBuf = m_envMarginalCdf;
-    const harmonia::Buffer* envConditionalCdfBuf = m_envConditionalCdf;
+    const harmonia::core::Buffer* tileLightCountsBuf = m_tileLightCountsBuf;
+    const harmonia::core::Buffer* tileLightIndicesBuf = m_tileLightIndicesBuf;
+    const harmonia::core::Buffer* envMarginalCdfBuf = m_envMarginalCdf;
+    const harmonia::core::Buffer* envConditionalCdfBuf = m_envConditionalCdf;
 
     const VkAccelerationStructureKHR sceneTlas = m_scene->tlas();
 
-    const harmonia::Buffer& visFallbackBuf = m_scene->meshletBuffer();
-    const harmonia::Buffer& prevVisBuf = m_gpu.meshletVisibility[m_gpu.visFrame];
-    const harmonia::Buffer& currVisBuf = m_gpu.meshletVisibility[m_gpu.visFrame ^ 1u];
-    const harmonia::Buffer& prevVisBufFinal = prevVisBuf.isValid() ? prevVisBuf : visFallbackBuf;
-    const harmonia::Buffer& currVisBufFinal = currVisBuf.isValid() ? currVisBuf : visFallbackBuf;
-    const harmonia::Buffer& compactInstBuf = m_gpu.gpuCullPass.compactInstanceListBuffer();
+    const harmonia::core::Buffer& visFallbackBuf = m_scene->meshletBuffer();
+    const harmonia::core::Buffer& prevVisBuf = m_gpu.meshletVisibility[m_gpu.visFrame];
+    const harmonia::core::Buffer& currVisBuf = m_gpu.meshletVisibility[m_gpu.visFrame ^ 1u];
+    const harmonia::core::Buffer& prevVisBufFinal = prevVisBuf.isValid() ? prevVisBuf : visFallbackBuf;
+    const harmonia::core::Buffer& currVisBufFinal = currVisBuf.isValid() ? currVisBuf : visFallbackBuf;
+    const harmonia::core::Buffer& compactInstBuf = m_gpu.gpuCullPass.compactInstanceListBuffer();
 
     // MOD1: write all descriptors via the descriptor buffer writers.
     // Optional buffers (tile lights, env CDFs) may be absent — bind a null descriptor
     // (VK14 nullDescriptor; the shaders gate reads on hasTileData/hasEnvMap).
-    const auto writeOptional = [this](harmonia::DescriptorBufferWriter& w, std::uint32_t binding,
-                                      const harmonia::Buffer* buf) {
+    const auto writeOptional = [this](harmonia::core::DescriptorBufferWriter& w, std::uint32_t binding,
+                                      const harmonia::core::Buffer* buf) {
         if (buf != nullptr) {
             w.writeStorageBufferHandle(*m_ctx, binding, *buf);
         } else {
@@ -1262,9 +1262,9 @@ void ForwardRenderer::beginSceneRendering(VkCommandBuffer cmd, VkAttachmentLoadO
 void ForwardRenderer::bindMeshSets(VkCommandBuffer cmd) {
     // MOD1: bind descriptor buffers (replaces vkCmdBindDescriptorSets).
     {
-        const std::array<harmonia::DescriptorBufferWriter*, 4> writers{
+        const std::array<harmonia::core::DescriptorBufferWriter*, 4> writers{
             &m_desc.mesh, &m_desc.mat, &m_desc.ibl, &m_desc.texture};
-        harmonia::DescriptorBufferWriter::bindSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0,
+        harmonia::core::DescriptorBufferWriter::bindSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0,
                                                     writers);
     }
 }
@@ -1319,7 +1319,7 @@ void ForwardRenderer::recordOpaquePass(VkCommandBuffer cmd, const MeshPushConsta
     const std::uint32_t instanceCount = m_scene->instanceCount();
     const bool canDraw = (instanceCount > 0) && (vkCmdDrawMeshTasksEXT != nullptr);
     if (instanceCount > 0 && vkCmdDrawMeshTasksEXT == nullptr) {
-        harmonia::Logger::error("vkCmdDrawMeshTasksEXT is NULL - mesh shader extension not loaded!");
+        harmonia::core::Logger::error("vkCmdDrawMeshTasksEXT is NULL - mesh shader extension not loaded!");
     }
     m_gpu.hiZPass.prepareForSampling(cmd);
     beginSceneRendering(cmd, VK_ATTACHMENT_LOAD_OP_CLEAR);

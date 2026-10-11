@@ -71,14 +71,14 @@ bool Application::onInitialize() {
                                     .hdrImage = hdrImage().handle(),
                                     .hdrImageView = hdrImage().view(),
                                 })) {
-        harmonia::Logger::error("Failed to initialize ForwardRenderer");
+        harmonia::core::Logger::error("Failed to initialize ForwardRenderer");
         return false;
     }
     m_renderer->setIndirectAmbient(config().indirectAmbient);
     m_renderer->setRngDebug(config().rngDebug);
     m_renderer->setCameraJitterEnabled(m_cameraJitterEnabled);
     if (!m_cameraJitterEnabled) {
-        harmonia::Logger::info("harmonia::Camera jitter disabled (--no-camera-jitter)");
+        harmonia::core::Logger::info("harmonia::renderer::Camera jitter disabled (--no-camera-jitter)");
     }
 
     // Two-tier output contract (extended): an offscreen capture (--output) is the
@@ -96,16 +96,16 @@ bool Application::onInitialize() {
     //       bit1 (2) = k>=3 hybrid reconnection shift
     // Default (unset) = all features on (mask 3).
     {
-        if (const auto noReconnectRaw = harmonia::getEnvString("THEIA_NO_RECONNECTION")) {
+        if (const auto noReconnectRaw = harmonia::core::getEnvString("THEIA_NO_RECONNECTION")) {
             m_reconnectShiftEnabled = !((!noReconnectRaw->empty() && (*noReconnectRaw)[0] != '0')) ? 3u : 0u;
             if (m_reconnectShiftEnabled == 0u) {
-                harmonia::Logger::info("THEIA_NO_RECONNECTION set — reconnection shift disabled (replay-only)");
+                harmonia::core::Logger::info("THEIA_NO_RECONNECTION set — reconnection shift disabled (replay-only)");
             }
         }
-        if (const auto shiftMaskRaw = harmonia::getEnvString("THEIA_SHIFT_MASK")) {
+        if (const auto shiftMaskRaw = harmonia::core::getEnvString("THEIA_SHIFT_MASK")) {
             m_reconnectShiftEnabled =
                 static_cast<std::uint32_t>(std::strtoul(shiftMaskRaw->c_str(), nullptr, 0)) & 3u;
-            harmonia::Logger::info("THEIA_SHIFT_MASK = {} (k2={} k3={})",
+            harmonia::core::Logger::info("THEIA_SHIFT_MASK = {} (k2={} k3={})",
                 m_reconnectShiftEnabled,
                 (m_reconnectShiftEnabled & 1u) != 0u,
                 (m_reconnectShiftEnabled & 2u) != 0u);
@@ -113,12 +113,12 @@ bool Application::onInitialize() {
     }
     if (m_pureEstimatorCapture) {
         if (!m_cameraJitterEnabled) {
-            harmonia::Logger::info("harmonia::Camera jitter forced ON for capture (--output): parity pixel sampling");
+            harmonia::core::Logger::info("harmonia::renderer::Camera jitter forced ON for capture (--output): parity pixel sampling");
         }
         m_cameraJitterEnabled = true;
         m_renderer->setCameraJitterEnabled(true);
         m_renderer->setFireflyClampEnabled(false);
-        harmonia::Logger::info("harmonia::Estimator-pure capture (--output): firefly clamps off, A3(a) regularization "
+        harmonia::core::Logger::info("harmonia::Estimator-pure capture (--output): firefly clamps off, A3(a) regularization "
                                "off, camera jitter on");
     }
 
@@ -132,7 +132,7 @@ bool Application::onInitialize() {
 
     // LightCuller (Forward+ tile-based light culling)
     if (!m_lightCuller.initialize(deviceContext(), swapchain().extent().width, swapchain().extent().height)) {
-        harmonia::Logger::warn("LightCuller failed to initialize — direct loop fallback active");
+        harmonia::core::Logger::warn("LightCuller failed to initialize — direct loop fallback active");
     } else {
         m_renderer->setTileBuffers(m_lightCuller.tileLightCountsBuffer(),
                                    m_lightCuller.tileLightIndicesBuffer(),
@@ -155,7 +155,7 @@ bool Application::onInitialize() {
             .gbufferView = m_renderer->gbufferView(),
         };
         if (!m_giPass.initialize(deviceContext(), giCfg, commandPool())) {
-            harmonia::Logger::warn("GiPass failed to initialize — ray-query GI disabled");
+            harmonia::core::Logger::warn("GiPass failed to initialize — ray-query GI disabled");
         }
         // The forward pass emits direct + emission only; GiPass supplies the indirect term.
         // When ReSTIR DI OR ReSTIR PT is active, GiPass owns emissive-triangle direct
@@ -173,7 +173,7 @@ bool Application::onInitialize() {
                 .giBufferView = m_renderer->giBufferView(),
             };
             if (!m_motionVectorPass.initialize(deviceContext(), mvCfg)) {
-                harmonia::Logger::warn("MotionVectorPass failed to initialize — static history fallback active");
+                harmonia::core::Logger::warn("MotionVectorPass failed to initialize — static history fallback active");
             }
         }
     }
@@ -191,9 +191,9 @@ bool Application::onInitialize() {
             .motionVecView = m_motionVectorPass.motionVectorImageView(),
         };
         if (!m_taaPass.initialize(deviceContext(), taaCfg)) {
-            harmonia::Logger::warn("TaaPass failed to initialize — TAA disabled");
+            harmonia::core::Logger::warn("TaaPass failed to initialize — TAA disabled");
         } else {
-            harmonia::Logger::info("TaaPass initialized (cross-vendor TAA, alpha=0.1)");
+            harmonia::core::Logger::info("TaaPass initialized (cross-vendor TAA, alpha=0.1)");
         }
     }
 
@@ -261,9 +261,9 @@ bool Application::onInitialize() {
 
         if (ok) {
             m_asyncComputeEnabled = true;
-            harmonia::Logger::info("Async compute queue available — GI + denoiser will overlap with raster");
+            harmonia::core::Logger::info("Async compute queue available — GI + denoiser will overlap with raster");
         } else {
-            harmonia::Logger::warn("Async compute setup failed — falling back to single-queue path");
+            harmonia::core::Logger::warn("Async compute setup failed — falling back to single-queue path");
         }
     }
 
@@ -277,9 +277,9 @@ void Application::onSceneUnload() {
     m_scene = std::make_unique<Scene>();
 }
 
-bool Application::onSceneLoaded(const harmonia::SceneLoader::SceneConfig& sceneConfig) {
+bool Application::onSceneLoaded(const harmonia::scene::SceneLoader::SceneConfig& sceneConfig) {
     if (m_scene->build(deviceContext(), commandPool()) != VK_SUCCESS) {
-        harmonia::Logger::error("Failed to build scene TLAS");
+        harmonia::core::Logger::error("Failed to build scene TLAS");
         return false;
     }
     m_renderer->setScene(m_scene.get());
@@ -290,19 +290,19 @@ bool Application::onSceneLoaded(const harmonia::SceneLoader::SceneConfig& sceneC
         m_camera.up = sceneConfig.cameraUp.value_or(sm::float3{0.0f, 1.0f, 0.0f});
         m_camera.vfovDeg = sceneConfig.cameraVfov.value_or(45.0f);
     }
-    // Physical camera exposure — shared factory from harmonia::Camera.
+    // Physical camera exposure — shared factory from harmonia::renderer::Camera.
     {
         const float ev100 = sceneConfig.cameraEv100.value_or(7.0f);
-        m_camera.physical = harmonia::Camera::PhysicalCamera::fromEv100(ev100);
+        m_camera.physical = harmonia::renderer::Camera::PhysicalCamera::fromEv100(ev100);
     }
     // Reset camera controller orientation to match the new target.
     const sm::float3 dir = sm::normalize(m_camera.target - m_camera.position);
     CameraController::directionToYawPitch(dir, m_camCtrl.yaw, m_camCtrl.pitch);
 
-    // Scene-scale-aware near/far — shared helper from harmonia::Camera.
+    // Scene-scale-aware near/far — shared helper from harmonia::renderer::Camera.
     const float camDist = sm::length(m_camera.target - m_camera.position);
-    std::tie(m_camera.nearPlane, m_camera.farPlane) = harmonia::Camera::nearFarFromDistance(camDist);
-    // harmonia::Camera move speed also scales with the scene (5× the camera distance, so navigating
+    std::tie(m_camera.nearPlane, m_camera.farPlane) = harmonia::renderer::Camera::nearFarFromDistance(camDist);
+    // harmonia::renderer::Camera move speed also scales with the scene (5× the camera distance, so navigating
     // a scene feels responsive rather than crawling); mouse-wheel still adjusts on top.
     m_camCtrl.speed = std::max(0.1f, camDist * 2.5f);
 
@@ -310,7 +310,7 @@ bool Application::onSceneLoaded(const harmonia::SceneLoader::SceneConfig& sceneC
     m_sceneMaxDepth = sceneConfig.maxDepth.value_or(3u);
     m_renderer->setTransparentMaxDepth(sceneConfig.maxDepth.value_or(2u));
 
-    harmonia::Logger::info("Loaded scene: {} instances, {} bytes vb, {} bytes ib",
+    harmonia::core::Logger::info("Loaded scene: {} instances, {} bytes vb, {} bytes ib",
                            m_scene->instanceCount(),
                            m_scene->vertexBuffer().size(),
                            m_scene->indexBuffer().size());
@@ -322,8 +322,8 @@ bool Application::onSceneLoaded(const harmonia::SceneLoader::SceneConfig& sceneC
     const VkImageView envView = hasEnv ? iblProbe()->imageView() : VK_NULL_HANDLE;
     const VkSampler envSampler = hasEnv ? iblProbe()->sampler() : VK_NULL_HANDLE;
     const float envNits = sceneConfig.envUnitNits.value_or(1.0f);
-    const harmonia::Buffer* marginalCdf = hasEnv ? &iblProbe()->marginalCdfBuffer() : nullptr;
-    const harmonia::Buffer* conditionalCdf = hasEnv ? &iblProbe()->conditionalCdfBuffer() : nullptr;
+    const harmonia::core::Buffer* marginalCdf = hasEnv ? &iblProbe()->marginalCdfBuffer() : nullptr;
+    const harmonia::core::Buffer* conditionalCdf = hasEnv ? &iblProbe()->conditionalCdfBuffer() : nullptr;
     const std::uint32_t cdfW = hasEnv ? iblProbe()->cdfWidth() : 0u;
     const std::uint32_t cdfH = hasEnv ? iblProbe()->cdfHeight() : 0u;
 
@@ -350,7 +350,7 @@ bool Application::onSceneLoaded(const harmonia::SceneLoader::SceneConfig& sceneC
     return true;
 }
 
-void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& target) noexcept {
+void Application::record(VkCommandBuffer cmd, const harmonia::app::RenderTarget& target) noexcept {
     m_renderer->setRngState(frameIndex(), config().rngSeed, config().deterministicReplay);
 
     const CameraMatrices cam = computeCameraMatrices(target);
@@ -358,7 +358,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
     const sm::float4x4& view = cam.view;
     const sm::float4x4& curViewProj = cam.viewProj;
 
-    // harmonia::Camera-cut detection: disable the Hi-Z occlusion test for one frame after a large view
+    // harmonia::renderer::Camera-cut detection: disable the Hi-Z occlusion test for one frame after a large view
     // change so newly disoccluded meshlets (whose stale visibility is 0) are drawn instead of
     // wrongly culled. Uses view-direction angle + focus-relative translation (scale-independent).
     {
@@ -399,7 +399,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::RenderTarget& targ
     transitionGbuffersForRecord(cmd, target.image, giEnabled);
 }
 
-Application::CameraMatrices Application::computeCameraMatrices(const harmonia::RenderTarget& target) const noexcept {
+Application::CameraMatrices Application::computeCameraMatrices(const harmonia::app::RenderTarget& target) const noexcept {
     const float aspect = static_cast<float>(target.extent.width) / static_cast<float>(target.extent.height);
     sm::float4x4 proj = sm::perspective(sm::radians(m_camera.vfovDeg), aspect, m_camera.nearPlane, m_camera.farPlane);
     proj[1][1] *= -1.0f;
@@ -424,14 +424,14 @@ void Application::dispatchLightCull(VkCommandBuffer cmd, const sm::float4x4& pro
 
 void Application::transitionGbuffersForRecord(VkCommandBuffer cmd, VkImage hdrImage, bool giEnabled) noexcept {
     if (!giEnabled) {
-        const std::array hdrToGeneral{harmonia::imageBarrier(hdrImage,
+        const std::array hdrToGeneral{harmonia::core::imageBarrier(hdrImage,
                                                              VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
                                                              VK_IMAGE_LAYOUT_GENERAL,
                                                              VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                                                              VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
                                                              VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                                                              VK_ACCESS_2_SHADER_READ_BIT)};
-        harmonia::pipelineBarrier(cmd, hdrToGeneral);
+        harmonia::core::pipelineBarrier(cmd, hdrToGeneral);
     }
 
     VkImageLayout gbufferOld = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL;
@@ -447,7 +447,7 @@ void Application::transitionGbuffersForRecord(VkCommandBuffer cmd, VkImage hdrIm
         gbufferSrcAccess = VK_ACCESS_2_SHADER_READ_BIT;
     }
 
-    const VkImageMemoryBarrier2 gbufferToGeneral = harmonia::imageBarrier(m_renderer->gbufferImage(),
+    const VkImageMemoryBarrier2 gbufferToGeneral = harmonia::core::imageBarrier(m_renderer->gbufferImage(),
                                                                           gbufferOld,
                                                                           VK_IMAGE_LAYOUT_GENERAL,
                                                                           gbufferSrcStage,
@@ -469,7 +469,7 @@ void Application::transitionGbuffersForRecord(VkCommandBuffer cmd, VkImage hdrIm
         .subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1},
     };
     const std::array guideToGeneral{gbufferToGeneral, depthToGeneral};
-    harmonia::pipelineBarrier(cmd, guideToGeneral);
+    harmonia::core::pipelineBarrier(cmd, guideToGeneral);
 }
 
 GiPass::FrameParams Application::buildGiFrameParams(const sm::float4x4& view,
@@ -506,7 +506,7 @@ MotionVectorPass::FrameParams Application::buildMotionVectorParams(const sm::flo
 }
 
 void Application::submitAsyncCompute(VkCommandBuffer cmd,
-                                     const harmonia::RenderTarget& target,
+                                     const harmonia::app::RenderTarget& target,
                                      const sm::float4x4& view,
                                      const sm::float4x4& curViewProj) noexcept {
     const std::uint32_t slot = frameIndex() % 2U;
@@ -555,7 +555,7 @@ void Application::submitAsyncCompute(VkCommandBuffer cmd,
          .image = target.image,
          .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
     }};
-    harmonia::pipelineBarrier(cmd, gfxRelease);
+    harmonia::core::pipelineBarrier(cmd, gfxRelease);
 
     // MOD2: wait for the same slot's PREVIOUS async-compute completion (2 frames ago)
     // via the timeline semaphore. Signal value is monotonic — no reset needed.
@@ -570,10 +570,10 @@ void Application::submitAsyncCompute(VkCommandBuffer cmd,
             .pValues = &waitValue,
         };
         if (const VkResult r = vkWaitSemaphores(deviceContext().device, &waitInfo, UINT64_MAX); r != VK_SUCCESS)
-            harmonia::Logger::error("async compute timeline wait failed: {}", static_cast<std::int32_t>(r));
+            harmonia::core::Logger::error("async compute timeline wait failed: {}", static_cast<std::int32_t>(r));
     }
     if (const VkResult r = vkResetCommandBuffer(m_asyncCmdBufs[slot], 0); r != VK_SUCCESS)
-        harmonia::Logger::error("async compute reset command buffer failed: {}", static_cast<std::int32_t>(r));
+        harmonia::core::Logger::error("async compute reset command buffer failed: {}", static_cast<std::int32_t>(r));
     constexpr VkCommandBufferBeginInfo asyncBegin{
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         .pNext = nullptr,
@@ -581,7 +581,7 @@ void Application::submitAsyncCompute(VkCommandBuffer cmd,
         .pInheritanceInfo = nullptr,
     };
     if (const VkResult r = vkBeginCommandBuffer(m_asyncCmdBufs[slot], &asyncBegin); r != VK_SUCCESS)
-        harmonia::Logger::error("async compute begin command buffer failed: {}", static_cast<std::int32_t>(r));
+        harmonia::core::Logger::error("async compute begin command buffer failed: {}", static_cast<std::int32_t>(r));
     const VkCommandBuffer asyncCmd = m_asyncCmdBufs[slot];
 
     const std::array<VkImageMemoryBarrier2, 3> asyncAcquire{{
@@ -622,7 +622,7 @@ void Application::submitAsyncCompute(VkCommandBuffer cmd,
          .image = target.image,
          .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
     }};
-    harmonia::pipelineBarrier(asyncCmd, asyncAcquire);
+    harmonia::core::pipelineBarrier(asyncCmd, asyncAcquire);
 
     m_giPass.record(asyncCmd, gp, /*skipPreBarriers=*/true);
 
@@ -664,9 +664,9 @@ void Application::submitAsyncCompute(VkCommandBuffer cmd,
          .image = target.image,
          .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
     }};
-    harmonia::pipelineBarrier(asyncCmd, asyncRelease);
+    harmonia::core::pipelineBarrier(asyncCmd, asyncRelease);
     if (const VkResult r = vkEndCommandBuffer(asyncCmd); r != VK_SUCCESS)
-        harmonia::Logger::error("async compute end command buffer failed: {}", static_cast<std::int32_t>(r));
+        harmonia::core::Logger::error("async compute end command buffer failed: {}", static_cast<std::int32_t>(r));
 
     m_prevViewProj = curViewProj;
     m_prevViewProjValid = true;
@@ -709,14 +709,14 @@ void Application::onResize(VkExtent2D extent) noexcept {
     // Resize ForwardRenderer: recreates depth/GBuffer at new extent, updates
     // the HDR image handles (App::handleResize has already recreated the HDR image).
     if (!m_renderer->resize(extent.width, extent.height, hdrImage().handle(), hdrImage().view())) {
-        harmonia::Logger::error("ForwardRenderer resize failed");
+        harmonia::core::Logger::error("ForwardRenderer resize failed");
         return;
     }
 
     // Reinitialize LightCuller for the new tile grid.
     m_lightCuller.shutdown();
     if (!m_lightCuller.initialize(deviceContext(), extent.width, extent.height)) {
-        harmonia::Logger::warn("LightCuller resize failed — direct loop fallback active");
+        harmonia::core::Logger::warn("LightCuller resize failed — direct loop fallback active");
     } else {
         m_renderer->setTileBuffers(m_lightCuller.tileLightCountsBuffer(),
                                    m_lightCuller.tileLightIndicesBuffer(),
@@ -737,7 +737,7 @@ void Application::onResize(VkExtent2D extent) noexcept {
             .gbufferView = m_renderer->gbufferView(),
         };
         if (!m_giPass.initialize(deviceContext(), giCfg, commandPool())) {
-            harmonia::Logger::warn("GiPass resize failed — ray-query GI disabled");
+            harmonia::core::Logger::warn("GiPass resize failed — ray-query GI disabled");
         }
         m_renderer->setRestirDiActive(giActive() && (m_useRestirDi || m_useRestirPt));
 
@@ -750,7 +750,7 @@ void Application::onResize(VkExtent2D extent) noexcept {
                 .giBufferView = m_renderer->giBufferView(),
             };
             if (!m_motionVectorPass.initialize(deviceContext(), mvCfg)) {
-                harmonia::Logger::warn("MotionVectorPass resize failed — static history fallback active");
+                harmonia::core::Logger::warn("MotionVectorPass resize failed — static history fallback active");
             }
         }
     }
@@ -765,7 +765,7 @@ void Application::onResize(VkExtent2D extent) noexcept {
             .motionVecView = m_motionVectorPass.motionVectorImageView(),
         };
         if (!m_taaPass.initialize(deviceContext(), taaCfg)) {
-            harmonia::Logger::warn("TaaPass resize failed — TAA disabled");
+            harmonia::core::Logger::warn("TaaPass resize failed — TAA disabled");
         }
     }
 
@@ -812,7 +812,7 @@ std::pair<VkCommandBuffer, VkSemaphore> Application::onBeforeSceneStages(VkComma
     };
     if (const VkResult r = vkQueueSubmit2(deviceContext().graphicsQueue, 1, &gfxSubmit, VK_NULL_HANDLE);
         r != VK_SUCCESS)
-        harmonia::Logger::error("async compute graphics submit failed: {}", static_cast<std::int32_t>(r));
+        harmonia::core::Logger::error("async compute graphics submit failed: {}", static_cast<std::int32_t>(r));
 
     // ── Submit 2: async compute (GI + MotionVector) ──
     const VkCommandBufferSubmitInfo asyncCmdInfo{
@@ -862,7 +862,7 @@ std::pair<VkCommandBuffer, VkSemaphore> Application::onBeforeSceneStages(VkComma
     };
     if (const VkResult r = vkQueueSubmit2(deviceContext().asyncComputeQueue, 1, &asyncSubmit, VK_NULL_HANDLE);
         r != VK_SUCCESS)
-        harmonia::Logger::error("async compute submit failed: {}", static_cast<std::int32_t>(r));
+        harmonia::core::Logger::error("async compute submit failed: {}", static_cast<std::int32_t>(r));
 
     // ── Open m_stagesCmdBufs[slot] (graphics family) for scene stages ──
     VkCommandBuffer stagesCmd = m_stagesCmdBufs[slot];
@@ -937,7 +937,7 @@ std::pair<VkCommandBuffer, VkSemaphore> Application::onBeforeSceneStages(VkComma
     };
 
     const std::array<VkImageMemoryBarrier2, 4> gfxAcquire{hdrAcquire, gbufferAcquire, giBufferAcquire, depthToGeneral};
-    harmonia::pipelineBarrier(stagesCmd, gfxAcquire);
+    harmonia::core::pipelineBarrier(stagesCmd, gfxAcquire);
 
     // MotionVectorPass runs on the graphics queue so motionVectorImage stays in the
     // graphics family. giBuffer is now SHADER_READ_ONLY_OPTIMAL on the graphics queue.
@@ -996,14 +996,14 @@ bool Application::onEvent(const SDL_Event& event) {
             if (down) {
                 const float ev100 = m_camera.physical.ev100() - 0.5f;
                 m_camera.physical.shutterSpeedHz = std::pow(2.0f, ev100);
-                harmonia::Logger::info("EV100 = {:.1f}", m_camera.physical.ev100());
+                harmonia::core::Logger::info("EV100 = {:.1f}", m_camera.physical.ev100());
             }
             return true;
         case SDL_SCANCODE_RIGHTBRACKET:
             if (down) {
                 const float ev100 = m_camera.physical.ev100() + 0.5f;
                 m_camera.physical.shutterSpeedHz = std::pow(2.0f, ev100);
-                harmonia::Logger::info("EV100 = {:.1f}", m_camera.physical.ev100());
+                harmonia::core::Logger::info("EV100 = {:.1f}", m_camera.physical.ev100());
             }
             return true;
         default:

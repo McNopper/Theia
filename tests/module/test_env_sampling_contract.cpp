@@ -105,14 +105,14 @@ TEST(TheiaEnvSamplingContract, DeterministicReplayProducesStableSequence) {
         1.0F,
     };
 
-    std::uint32_t s0 = harmonia::Rng::composeSeed({19U, 7U}, 3U, 2U, 123U);
-    std::uint32_t s1 = harmonia::Rng::composeSeed({19U, 7U}, 3U, 2U, 123U);
+    std::uint32_t s0 = harmonia::utils::Rng::composeSeed({19U, 7U}, 3U, 2U, 123U);
+    std::uint32_t s1 = harmonia::utils::Rng::composeSeed({19U, 7U}, 3U, 2U, 123U);
 
     for (std::size_t i = 0; i < 32; ++i) {
         float p0 = 0.0F;
         float p1 = 0.0F;
-        const sm::float3 d0 = sampleEnvImportanceDir(marginal, conditional, W, H, harmonia::Rng::nextFloat2(s0), p0);
-        const sm::float3 d1 = sampleEnvImportanceDir(marginal, conditional, W, H, harmonia::Rng::nextFloat2(s1), p1);
+        const sm::float3 d0 = sampleEnvImportanceDir(marginal, conditional, W, H, harmonia::utils::Rng::nextFloat2(s0), p0);
+        const sm::float3 d1 = sampleEnvImportanceDir(marginal, conditional, W, H, harmonia::utils::Rng::nextFloat2(s1), p1);
         EXPECT_NEAR(d0.x, d1.x, 1.0e-6F);
         EXPECT_NEAR(d0.y, d1.y, 1.0e-6F);
         EXPECT_NEAR(d0.z, d1.z, 1.0e-6F);
@@ -135,11 +135,11 @@ TEST(TheiaEnvSamplingContract, PdfEvaluationMatchesSampledDirections) {
         }
     }
 
-    std::uint32_t state = harmonia::Rng::composeSeed({3U, 5U}, 2U, 1U, 77U);
+    std::uint32_t state = harmonia::utils::Rng::composeSeed({3U, 5U}, 2U, 1U, 77U);
     for (std::size_t i = 0; i < 64; ++i) {
         float sampledPdf = 0.0F;
         const sm::float3 dir =
-            sampleEnvImportanceDir(marginal, conditional, W, H, harmonia::Rng::nextFloat2(state), sampledPdf);
+            sampleEnvImportanceDir(marginal, conditional, W, H, harmonia::utils::Rng::nextFloat2(state), sampledPdf);
         const float evalPdf = evalEnvImportancePdfDir(marginal, conditional, W, H, dir);
         EXPECT_TRUE(std::isfinite(sampledPdf));
         EXPECT_TRUE(std::isfinite(evalPdf));

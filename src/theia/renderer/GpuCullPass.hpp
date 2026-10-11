@@ -72,14 +72,14 @@ class GpuCullPass {
     /// a pipeline barrier on compactInstanceListBuffer() and indirectDrawBuffer()
     /// from COMPUTE_SHADER_WRITE → (TASK_SHADER_READ, INDIRECT_COMMAND_READ).
     void dispatch(VkCommandBuffer cmd,
-                  const harmonia::Buffer& instanceBuf,
-                  const harmonia::Buffer& instanceBoundsBuf,
+                  const harmonia::core::Buffer& instanceBuf,
+                  const harmonia::core::Buffer& instanceBoundsBuf,
                   std::uint32_t instanceCount,
                   const sm::float4x4& viewProj);
 
     /// GPU buffer of visible instance indices (uint[kMaxInstances]).
     /// Bind to ForwardRenderer set 0, binding 10 for the task shader to read.
-    [[nodiscard]] const harmonia::Buffer& compactInstanceListBuffer() const noexcept { return m_compactInstanceListBuf; }
+    [[nodiscard]] const harmonia::core::Buffer& compactInstanceListBuffer() const noexcept { return m_compactInstanceListBuf; }
 
     /// Single VkDrawMeshTasksIndirectCommandEXT entry: {visibleCount, 1, 1}.
     /// GD3: pass to vkCmdDrawMeshTasksIndirectEXT (drawCount=1, stride=12).
@@ -93,14 +93,14 @@ class GpuCullPass {
   private:
     const harmonia::DeviceContext* m_ctx = nullptr;
 
-    harmonia::UniquePipeline m_pipeline;
-    harmonia::UniquePipelineLayout m_pipelineLayout;
-    harmonia::UniqueDescriptorSetLayout m_setLayout;
+    harmonia::core::UniquePipeline m_pipeline;
+    harmonia::core::UniquePipelineLayout m_pipelineLayout;
+    harmonia::core::UniqueDescriptorSetLayout m_setLayout;
     /// MOD1: descriptor buffer writer replaces the pool + allocated set.
-    harmonia::DescriptorBufferWriter m_descWriter;
+    harmonia::core::DescriptorBufferWriter m_descWriter;
 
-    harmonia::Buffer m_compactInstanceListBuf; ///< uint[kMaxInstances]  STORAGE
-    harmonia::Buffer m_indirectDrawBuf; ///< single VkDrawMeshTasksIndirectCommandEXT  STORAGE | INDIRECT | DEVICE_ADDR
+    harmonia::core::Buffer m_compactInstanceListBuf; ///< uint[kMaxInstances]  STORAGE
+    harmonia::core::Buffer m_indirectDrawBuf; ///< single VkDrawMeshTasksIndirectCommandEXT  STORAGE | INDIRECT | DEVICE_ADDR
 };
 
 } // namespace theia
