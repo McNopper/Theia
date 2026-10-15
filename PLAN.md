@@ -65,6 +65,15 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
 | MOD4 | **Swapchain recreate on resize → `VK_KHR_swapchain_maintenance1`** — `VkSwapchainPresentScalingCreateInfoEXT` lets the driver scale to extent changes without the full teardown/rebuild in `Swapchain::recreate` (`handleResize`). A behavior decision (render-at-fixed-extent + scale vs current exact-match recreate), so recreate-on-resize is kept for now; the present-pacing half shipped as VK6 (v0.7.6). **Hardware now verified present** (2026-09 vulkaninfo); the decision is behavioral only. | — | backlog |
 | SM6-Theia | **slang-math v0.3.0 migration slice** — replace hand-rolled sites (`src/theia/scene/Scene.cpp:530` saturate; per-component trig in `src/theia/renderer/CameraController.hpp:36,78` → SM2 functions); bump the FetchContent pin in this repo's release commit. Track origin: slang-math/PLAN.md SM6. | slang-math v0.3.0 tag | backlog |
 
+### Code health (check-arch smell harvest)
+
+| ID | Task | Deps | Status |
+|----|------|------|--------|
+| CH-T1 | **Review `theia/renderer` for an internal split** — 23 files / 5093 lines, the family's largest module (check-arch `large module` proxy, 1.2.0). Candidate seams: the mesh-shader geometry path vs GI (`GiPass`) vs the post-fx cluster (TAA / A-SVGF / MotionVector). Review verdict first: split only where a seam is real; otherwise record accepted. | — | backlog |
+
+Accepted by design (reviewed 2026-10-15, no action): the `demo -> theia/renderer -> theia/scene`
+chain measures as a pass-through/Middle-Man proxy — it is the designed layer chain.
+
 ### ReSTIR-PT refinements (GI-ENH — core landed; exploitation remains)
 
 ### ReSTIR-PT refinements (GI-ENH — all exploitation landed)
