@@ -29,7 +29,7 @@ SEPARATION OF CONCERNS (one document, two kinds of content):
 LAYERS (the stack):
   `layer core` declares a layer; the DECLARATION ORDER is the stack,
   bottom-up (the first layer depends on nothing above it). A module
-  joins a layer with `module theia/scene in theia`. The stack is LAW:
+  joins a layer with `module core/loader in core`. The stack is LAW:
   a declared edge that runs from a higher layer DOWN-REFERENCING is the
   only legal direction - an edge from layer X to a layer ABOVE X is a
   violation even though it is declared. Modules without a layer are
@@ -39,7 +39,9 @@ THE THREE-STEP MODEL:
   1. ANALYZE  `--derive` scans the sources, builds the measured include
      graph and emits a draft ARCHITECTURE.md: the modules AS THEY ARE,
      the layers AS THEY MEASURE, the dependencies AS THEY ARE (cycles
-     reported for fixing first).
+     reported for fixing first). Vendored / non-source directories
+     (third_party, vendor, external, deps, downloads, packages, ports,
+     vcpkg) are QUARANTINED - never architecture, always noise.
   2. DEFINE   the reviewed (and tightened) document becomes the checked-in
      contract: "this is the architecture".
   3. CHECK    the default mode proves the code against that contract on
@@ -55,10 +57,20 @@ repo, no layer name, no namespace):
   extensions: .hpp, .cpp         # scanned source extensions
   exclude: build, _deps, .git    # substring-excluded directories
   unclassified: error            # error | ignore - files off the module map
-  external: harmonia, slang-math # other-repo includes (reported, allowed)
+  external: libfoo, libbar       # other-repo includes (reported, allowed)
   forbidden:                     # hard violations (e.g. sibling repos)
   quotes_relative: true          # quoted includes resolve includer-relative
   repo_fallback: false           # ... then against the repo root
+  quotes_resolve:                # explicit chain (overrides the 2x2 above):
+                                 # includer | root | includer-then-root |
+                                 # root-then-includer
+  within_layer: deny             # deny | allow | warn - undeclared edges
+                                 # between modules of the SAME layer
+  smells: report                 # off | report | warn - the refactoring-
+                                 # catalog smell proxies (report: in
+                                 # --report/--json only; warn: also as
+                                 # warning lines; never findings)
+  smell_limits:                  # fan=8 mutual=3 files=12 lines=1000
   cycles: true                   # the file-level cycle gate
   graph: regex                   # regex | scan-deps - the graph source
   db: build/ninja/compile_commands.json   # scan-deps: the compile database
@@ -96,6 +108,17 @@ REFUSED (exit 2), and every compiled TU must be scanned or the run fails
 forbidden/external match against the resolved repo-relative paths, and
 `resolve`/`unresolved` do not apply (the graph is exact).
 
+THE SMELL PROXIES (refactoring.guru catalog, the deterministic tier):
+smells are REPORT-ONLY queue items for the review cadence - never findings
+(the thresholds are judgment, a smell can never fail a run): island /
+orphan module (Speculative Generality / Dead Code / Lazy Class),
+pass-through module (Middle Man), mutual pair (Inappropriate Intimacy),
+hub module (Shotgun Surgery / Divergent Change), large module (Large
+Class). The AST-level catalog smells (Long Method, Long Parameter List,
+Data Clumps, Primitive Obsession, Feature Envy, Switch Statements, ...)
+belong to the lint matrix (clang-tidy / cppcheck), not this tool; the
+rest of the catalog is review judgment.
+
 Exit codes: 0 clean - 1 violations - 2 config/usage error - 77 skipped.
 Usage: python tools/check_arch.py [--doc FILE] [--report] [--diagram]
                                   [--derive [--scan DIRS] [--out FILE]]
@@ -108,6 +131,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from shutil import which
@@ -120,7 +144,7 @@ EXIT_VIOLATIONS = 1
 EXIT_USAGE = 2
 EXIT_SKIP = 77
 
-CHECK_ARCH_VERSION = "1.0.0"
+CHECK_ARCH_VERSION = "1.2.0"
 
 INCLUDE_RE = re.compile(r'^\s*#\s*include\s*([<"])([^>"]+)[>"]', re.MULTILINE)
 ARCH_BLOCK_RE = re.compile(r"```arch[ \t]*\r?\n(.*?)```", re.DOTALL)
@@ -133,10 +157,19 @@ VSWHERE = r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe
 
 KNOB_KEYS = {
     "scan", "extensions", "exclude", "unclassified", "external", "forbidden",
-    "quotes_relative", "repo_fallback", "cycles", "graph", "db", "clang_scan_deps",
-    "nesting", "unresolved",
+    "quotes_relative", "repo_fallback", "quotes_resolve", "within_layer",
+    "cycles", "graph", "db", "clang_scan_deps", "nesting", "unresolved",
+    "smells", "smell_limits",
     "namespace_root", "namespace_module", "namespace_require",
 }
+
+# derive quarantines these directory names - vendored / non-source trees are
+# never architecture (ecosystem convention, not any repo's naming)
+VENDOR_DIRS = {"third_party", "thirdparty", "vendor", "external", "deps",
+               "downloads", "packages", "ports", "vcpkg", "_deps"}
+
+# the smell-proxy thresholds and their documented defaults (smell_limits)
+SMELL_LIMIT_DEFAULTS = {"fan": 8, "mutual": 3, "files": 12, "lines": 1000}
 
 
 class ContractError(Exception):
@@ -265,6 +298,47 @@ class Contract:
         self.unresolved_policy = knobs.get("unresolved") or "info"
         if self.unresolved_policy not in ("info", "error"):
             raise ContractError(f"{path}: unresolved: info|error expected")
+        self.quotes_resolve = knobs.get("quotes_resolve") or None
+        if self.quotes_resolve and self.quotes_resolve not in (
+                "includer", "root", "includer-then-root", "root-then-includer"):
+            raise ContractError(f"{path}: quotes_resolve: includer | root | "
+                                "includer-then-root | root-then-includer expected")
+        self.within_layer = knobs.get("within_layer") or "deny"
+        if self.within_layer not in ("deny", "allow", "warn"):
+            raise ContractError(f"{path}: within_layer: deny|allow|warn expected")
+        self.smells = knobs.get("smells") or "report"
+        if self.smells not in ("off", "report", "warn"):
+            raise ContractError(f"{path}: smells: off|report|warn expected")
+        self.smell_limits = dict(SMELL_LIMIT_DEFAULTS)
+        lim = knobs.get("smell_limits")
+        if lim:
+            for item in lim.replace(",", " ").split():
+                if "=" not in item:
+                    raise ContractError(f"{path}: smell_limits: key=value expected, "
+                                        f"got {item!r}")
+                k, v = item.split("=", 1)
+                if k not in SMELL_LIMIT_DEFAULTS:
+                    raise ContractError(f"{path}: smell_limits: unknown limit {k!r} "
+                                        f"(known: {sorted(SMELL_LIMIT_DEFAULTS)})")
+                if not v.isdigit():
+                    raise ContractError(f"{path}: smell_limits: {k}: integer "
+                                        f"expected, got {v!r}")
+                self.smell_limits[k] = int(v)
+
+    def quote_chain(self):
+        """How a quoted include resolves, in order: 'includer' = relative to
+        the includer's directory, 'root' = against the repo root. The
+        explicit `quotes_resolve` knob wins; else the 2x2 of
+        quotes_relative/repo_fallback."""
+        if self.quotes_resolve:
+            return self.quotes_resolve
+        if self.relative_quotes and self.repo_fallback:
+            return "includer-then-root"
+        if self.relative_quotes:
+            return "includer"
+        if self.repo_fallback:
+            return "root"
+        return ""
 
     def module_of(self, rel):
         """File (posix, scan-root-stripped) -> declared module (longest prefix)."""
@@ -440,7 +514,9 @@ def load_contract_text(repo, doc_arg):
                                 + "; run check_arch.py --derive to draft one)")
     if not os.path.isfile(p):
         raise ContractError(f"contract document not found: {p}")
-    with open(p, encoding="utf-8") as fh:
+    # newline="": the document's own line endings survive the round trip -
+    # a CRLF working tree must not be silently normalized to LF
+    with open(p, encoding="utf-8", newline="") as fh:
         return p, fh.read()
 
 
@@ -464,7 +540,7 @@ def scan_files(contract, repo):
 def _prefix_bases(contract, repo):
     """Rooted-include bases derived from the scan roots: a first segment that
     is a real directory under a scan root maps to that root
-    (`aether/types.hpp` with src/aether/ -> src/)."""
+    (`proj/types.hpp` with src/proj/ -> src/)."""
     if not hasattr(contract, "_pbases"):
         pbases = []
         for root in contract.roots:
@@ -483,14 +559,19 @@ def resolve(contract, repo, inc, kind, from_file, files):
         if inc.startswith(prefix):
             t = os.path.normpath(os.path.join(repo, base, inc))
             return t if t in files else None
-    if kind == '"' and contract.relative_quotes:
-        t = os.path.normpath(os.path.join(os.path.dirname(from_file), inc))
+    if kind != '"':
+        return None
+    chain = contract.quote_chain()
+    if not chain:
+        return None
+    steps = ["root", "includer"] if chain == "root-then-includer" else chain.split("-")
+    for step in steps:
+        if step == "includer":
+            t = os.path.normpath(os.path.join(os.path.dirname(from_file), inc))
+        else:
+            t = os.path.normpath(os.path.join(repo, inc))
         if t in files:
             return t
-        if contract.repo_fallback:
-            t = os.path.normpath(os.path.join(repo, inc))
-            if t in files:
-                return t
     return None
 
 
@@ -539,8 +620,8 @@ def build_graph(contract, repo, files):
 
 def parse_make_deps(text):
     """clang-scan-deps make-style output -> {tu: set(include paths)}.
-    (Ported from GameBits' proven parser: $-continued dependency blocks,
-    the TU first, headers below.)"""
+    (A proven make-style parser: $-continued dependency blocks, the TU
+    first, headers below.)"""
     deps = {}
     current = None
     for raw in text.splitlines():
@@ -611,8 +692,8 @@ def build_graph_scan_deps(contract, repo, files):
             return (None, EXIT_USAGE,
                     [f"stale compile database: {norm} vanished (reconfigure first)"])
     csd = find_clang_scan_deps(contract.clang_scan_deps)
-    if csd != "clang-scan-deps" and not os.path.isfile(csd):
-        return None, EXIT_USAGE, [f"clang-scan-deps not found: {csd}"]
+    # a missing tool is caught at the subprocess below: exit 77, never a
+    # traceback (A2) - a missing dependency is a SKIP, not a failure
     # CMake's C++ module scanning flags reference .modmap files that only
     # exist after a build; strip them so the scan works on a fresh tree.
     scrubbed = []
@@ -629,8 +710,14 @@ def build_graph_scan_deps(contract, repo, files):
                        "check_arch_scan_deps_db.json")
     with open(tmp, "w") as fh:
         json.dump(scrubbed, fh)
-    r = subprocess.run([csd, "-compilation-database=" + tmp],
-                       capture_output=True, text=True, check=False)
+    try:
+        r = subprocess.run([csd, "-compilation-database=" + tmp],
+                           capture_output=True, text=True, check=False)
+    except OSError:
+        # a missing tool is a SKIP, never a traceback (A2)
+        return (None, EXIT_SKIP,
+                [f"skip: clang-scan-deps not found ({csd}) - install the VS LLVM "
+                 "component, put it on PATH, or set clang_scan_deps:"])
     if r.returncode != 0 and not r.stdout:
         return (None, EXIT_USAGE,
                 [f"clang-scan-deps failed ({csd}): {r.stderr.strip()[-500:]}"])
@@ -643,6 +730,7 @@ def build_graph_scan_deps(contract, repo, files):
                 [f"incomplete scan: {len(unscanned)} of {len(tus)} translation units "
                  "not scanned"] + ["  " + p for p in rel])
     norm_to_file = {os.path.normpath(p): p for p in files}
+    resolved_tus = 0
     adj = {p: set() for p in files}
     file_mod = {}
     for p, rel in files.items():
@@ -654,6 +742,7 @@ def build_graph_scan_deps(contract, repo, files):
         tp = norm_to_file.get(os.path.normpath(tu))
         if tp is None:
             continue  # a TU outside the scan roots is not part of this contract
+        resolved_tus += 1
         a = file_mod[tp]
         for inc in sorted(incs):
             ip = norm_to_file.get(os.path.normpath(inc))
@@ -673,13 +762,21 @@ def build_graph_scan_deps(contract, repo, files):
             b = file_mod[ip]
             if a is not None and b is not None and a != b:
                 mod_edges[(a, b)] = mod_edges.get((a, b), 0) + 1
+    # a degraded graph is never green: the database knows TUs, none of them
+    # resolved into the scanned roots (A1 - e.g. a relative repo root or a
+    # path-form mismatch between the database and the scan)
+    if tus and resolved_tus == 0:
+        return (None, EXIT_USAGE,
+                [f"blind scan-deps graph: the database lists {len(tus)} translation "
+                 "units but none resolve into the scanned roots - a degraded run is "
+                 "never green (check the database's paths)"])
     return ((adj, file_mod, mod_edges, ext_counts, forbidden_hits, []), 0, [])
 
 
 def check_nesting(contract):
-    """THE NESTING LAW (GameBits): a module must not depend on its own
-    child module - the deeper namespace uses its shallower ancestors,
-    never the reverse (foo must not include foo/bar)."""
+    """THE NESTING LAW: a module must not depend on its own child module -
+    the deeper namespace uses its shallower ancestors, never the reverse
+    (foo must not include foo/bar)."""
     out = []
     for a, b in sorted(contract.edges):
         if b.startswith(a + "/"):
@@ -688,9 +785,87 @@ def check_nesting(contract):
     return out
 
 
+def compute_smells(contract, repo, files, file_mod, mod_edges):
+    """The refactoring-catalog proxies (refactoring.guru), deterministic over
+    the measured module graph. -> [{"kind", "subject", "note"}]: queue items
+    for the review cadence, NEVER findings - the thresholds are judgment,
+    so a smell can never fail a run. Module-level proxies, honestly named:
+    the catalog defines its smells at class/method level."""
+    lim = contract.smell_limits
+    targets = {}
+    sources = {}
+    for a, b in mod_edges:
+        targets.setdefault(a, set()).add(b)
+        sources.setdefault(b, set()).add(a)
+    mods = sorted({m for m in file_mod.values() if m is not None})
+    smells = []
+    done = set()
+    # exempt = the topmost occupied layer (entry points hang there by design)
+    top_layer = None
+    for lay in reversed(contract.stack):
+        if any(contract.layer_of.get(m) == lay for m in mods):
+            top_layer = lay
+            break
+    for m in mods:
+        fin, fout = sources.get(m, set()), targets.get(m, set())
+        if not fin and not fout:
+            smells.append({"kind": "island module", "subject": m,
+                           "note": "no consumers, no dependencies "
+                                   "(Speculative Generality / Dead Code proxy)"})
+            done.add(m)
+        elif not fin and top_layer and contract.layer_of.get(m) != top_layer:
+            smells.append({"kind": "orphan module", "subject": m,
+                           "note": "no consumer (Lazy Class / Dead Code proxy)"})
+            done.add(m)
+    for m in mods:
+        if m in done:
+            continue
+        fin, fout = sources.get(m, set()), targets.get(m, set())
+        if len(fin) == 1 and len(fout) == 1:
+            s, t = next(iter(fin)), next(iter(fout))
+            in_w = sum(n for (a, b), n in mod_edges.items() if a == s and b == m)
+            out_w = sum(n for (a, b), n in mod_edges.items() if a == m and b == t)
+            if s != t and in_w >= lim["mutual"] and out_w >= lim["mutual"]:
+                smells.append({"kind": "pass-through module", "subject": m,
+                               "note": f"all of it flows {s} -> {m} -> {t} "
+                                       "(Middle Man proxy)"})
+    for a, b in sorted(mod_edges):
+        if a < b and mod_edges[(a, b)] >= lim["mutual"] \
+                and mod_edges.get((b, a), 0) >= lim["mutual"]:
+            smells.append({"kind": "mutual pair", "subject": f"{a} <-> {b}",
+                           "note": f"x{mod_edges[(a, b)]} each way "
+                                   "(Inappropriate Intimacy proxy)"})
+    for m in mods:
+        fi, fo = len(sources.get(m, set())), len(targets.get(m, set()))
+        if fi >= lim["fan"] or fo >= lim["fan"]:
+            smells.append({"kind": "hub module", "subject": m,
+                           "note": f"fan-in {fi}, fan-out {fo} "
+                                   "(Shotgun Surgery / Divergent Change proxy)"})
+    mod_files = {}
+    mod_lines = {}
+    for p in files:
+        m = file_mod.get(p)
+        if m is None:
+            continue
+        mod_files[m] = mod_files.get(m, 0) + 1
+        with open(p, encoding="utf-8", errors="replace") as fh:
+            n = sum(1 for _ in fh)
+        mod_lines[m] = mod_lines.get(m, 0) + n
+    for m in mods:
+        f, l = mod_files.get(m, 0), mod_lines.get(m, 0)
+        if f >= lim["files"] or l >= lim["lines"]:
+            smells.append({"kind": "large module", "subject": m,
+                           "note": f"{f} files, {l} lines (Large Class proxy)"})
+    return smells
+
+
 def check_edges(contract, files, file_mod, mod_edges):
-    """DIRECTION (default deny) + CLASSIFICATION over the measured edges."""
+    """DIRECTION (default deny) + CLASSIFICATION over the measured edges.
+    -> (violations, warnings): an UNDECLARED edge between two modules of the
+    SAME layer obeys `within_layer` (deny | allow | warn); everything else
+    is a violation. Warnings never fail the run."""
     violations = []
+    warnings = []
     if contract.unclassified == "error":
         for p in sorted(files, key=lambda k: files[k]):
             if file_mod[p] is None:
@@ -699,9 +874,16 @@ def check_edges(contract, files, file_mod, mod_edges):
     for (a, b), n in sorted(mod_edges.items()):
         if a is None or b is None:
             continue  # unclassified sides are flagged per policy above
-        if (a, b) not in contract.edges:
-            violations.append(f"{a} must not include {b} (x{n}; edge not declared)")
-    return violations
+        if (a, b) in contract.edges:
+            continue
+        la, lb = contract.layer_of.get(a), contract.layer_of.get(b)
+        if la and la == lb and contract.within_layer in ("allow", "warn"):
+            if contract.within_layer == "warn":
+                warnings.append(f"{a} must not include {b} (x{n}; edge not declared, "
+                                f"within layer {la})")
+            continue
+        violations.append(f"{a} must not include {b} (x{n}; edge not declared)")
+    return violations, warnings
 
 
 def check_stack(contract):
@@ -755,7 +937,7 @@ def check_diagram(contract, text):
     b = text.find(DIAGRAM_END)
     if a < 0 or b < 0:
         return []  # no marked diagram = visualization not maintained by the tool
-    shown = text[a + len(DIAGRAM_BEGIN):b].strip()
+    shown = text[a + len(DIAGRAM_BEGIN):b].strip().replace("\r\n", "\n")
     want = contract.marked_diagram().strip()
     if shown != want:
         return ["DIAGRAM DRIFT: the diagram section is stale "
@@ -770,10 +952,11 @@ def write_diagram(doc_path, contract, text):
         return False
     section = contract.marked_diagram()
     # keep the document's own line-ending habit: a generated LF-only section
-    # inside a CRLF working tree would leave the file mixed
-    if text.count("\r\n") > (text.count("\n") - text.count("\r\n")):
+    # inside a CRLF working tree would leave the file mixed (the joiners too)
+    nl = "\r\n" if text.count("\r\n") > (text.count("\n") - text.count("\r\n")) else "\n"
+    if nl != "\n":
         section = section.replace("\n", "\r\n")
-    text = (text[:a + len(DIAGRAM_BEGIN)] + "\n" + section + "\n" + text[b:])
+    text = (text[:a + len(DIAGRAM_BEGIN)] + nl + section + nl + text[b:])
     with open(doc_path, "w", encoding="utf-8", newline="") as fh:
         fh.write(text)
     return True
@@ -833,7 +1016,8 @@ def derive_scan(repo, roots, extensions, excludes):
         for dirpath, dirnames, filenames in os.walk(base):
             dirnames[:] = sorted(
                 d for d in dirnames
-                if not any(x in os.path.join(dirpath, d) for x in excludes))
+                if d not in VENDOR_DIRS
+                and not any(x in os.path.join(dirpath, d) for x in excludes))
             for name in sorted(filenames):
                 if os.path.splitext(name)[1] in extensions:
                     p = os.path.normpath(os.path.join(dirpath, name))
@@ -879,6 +1063,7 @@ def derive(repo, roots, extensions, excludes):
     mod_edges = set()
     ext = set()
     unresolved = 0
+    unresolved_samples = []
     for p, rel in files.items():
         a = key_of.get(p)
         if a is None:
@@ -903,6 +1088,8 @@ def derive(repo, roots, extensions, excludes):
                     ext.add(first)
                 elif kind == '"':
                     unresolved += 1
+                    if len(unresolved_samples) < 5:
+                        unresolved_samples.append(f'{rel}: "{inc}"')
                 continue
             b = key_of.get(t)
             if a is not None and b is not None and a != b:
@@ -972,8 +1159,8 @@ def derive(repo, roots, extensions, excludes):
     out.append(DIAGRAM_END)
     out.append("")
     if unresolved:
-        warnings.append(f"{unresolved} quoted include(s) did not resolve - "
-                        "re-check after adoption")
+        warnings.append(f"{unresolved} quoted include(s) did not resolve - re-check "
+                        "after adoption; first: " + " | ".join(unresolved_samples))
     return out, warnings
 
 
@@ -1003,7 +1190,8 @@ def collect(repo, doc_path, report=False):
             contract, repo, files)
     violations = list(forbidden_hits)
     violations += check_stack(contract)
-    violations += check_edges(contract, files, file_mod, mod_edges)
+    edge_violations, warnings = check_edges(contract, files, file_mod, mod_edges)
+    violations += edge_violations
     if contract.nesting == "error":
         violations += check_nesting(contract)
     if contract.cycles:
@@ -1013,13 +1201,21 @@ def collect(repo, doc_path, report=False):
     if contract.unresolved_policy == "error" and unresolved:
         violations += [f"unresolved include: {u}" for u in unresolved]
     violations += check_diagram(contract, text)
+    smells = []
+    if contract.smells != "off":
+        smells = compute_smells(contract, repo, files, file_mod, mod_edges)
+        if contract.smells == "warn":
+            warnings += [f"SMELL {s['kind']}: {s['subject']} ({s['note']})"
+                         for s in smells]
 
     summary = {
-        "code": None, "doc": resolved, "graph": contract.graph, "files": len(files),
+        "schema": 1, "code": None, "doc": resolved, "graph": contract.graph,
+        "files": len(files),
         "modules": sorted(contract.modules), "layer_stack": list(contract.stack),
         "declared_edges": [list(e) for e in sorted(contract.edges)],
         "measured_edges": [[a, b, n] for (a, b), n in sorted(mod_edges.items())],
-        "external": ext_counts, "violations": violations, "clean": not violations,
+        "external": ext_counts, "violations": violations, "warnings": warnings,
+        "smells": smells, "clean": not violations,
     }
     lines = []
     if report:
@@ -1046,6 +1242,13 @@ def collect(repo, doc_path, report=False):
             lines.append("unresolved quoted includes (info only):")
             for u in unresolved[:10]:
                 lines.append("  " + u)
+        if contract.smells != "off":
+            lines.append(f"refactoring smells ({len(smells)}; report-only, "
+                         "never findings):")
+            for s in smells:
+                lines.append(f"  {s['kind']}: {s['subject']} ({s['note']})")
+    for w in warnings:
+        lines.append("warning: " + w)
     if violations:
         summary["code"] = EXIT_VIOLATIONS
         return (EXIT_VIOLATIONS,
@@ -1273,6 +1476,173 @@ allow top -> mid
         lines, warns = derive(td, ["src"], [".h"], DEFAULT_EXCLUDES)
         expect("derive: cycle reported", any("cycle" in w for w in warns), True)
 
+    # 12b the quoted resolution chains (the F1 chains)
+    b12 = ("scan: src\nquotes_resolve: root\n"
+           "module proj\nmodule proj/sub\nallow proj -> proj/sub\n")
+    files12 = {"src/proj/sub/s.h": "#pragma once\n",
+               "src/proj/r.h": '#include "src/proj/sub/s.h"\n'}
+    e, out = run(files12, contract(b12))
+    expect("quotes_resolve: root-relative chain",
+           (e, [v for v in out if "must" in v]), (0, []))
+    b12m = ("scan: src\nquotes_resolve: includer-then-root\n"
+            "module proj\nmodule proj/sub\nallow proj -> proj/sub\n")
+    files12m = {"src/proj/sub/s.h": "#pragma once\n",
+                "src/proj/a.h": '#include "sub/s.h"\n',
+                "src/proj/b.h": '#include "src/proj/sub/s.h"\n'}
+    e, out = run(files12m, contract(b12m))
+    expect("quotes_resolve: the mixed includer-then-root chain",
+           (e, [v for v in out if "must" in v]), (0, []))
+
+    # 12c within_layer: the same-layer policy for undeclared sibling edges
+    b12c = "scan: src\nlayer same\nmodule same/a in same\nmodule same/b in same\n"
+    files12c = {"src/same/a/x.h": "#pragma once\n",
+                "src/same/b/y.h": '#include "same/a/x.h"\n'}
+    e, out = run(files12c, contract(b12c))
+    expect("within_layer deny (default): sideways edge fires",
+           (e, any("same/b must not include same/a" in v for v in out)), (1, True))
+    e, out = run(files12c, contract(b12c + "within_layer: warn\n"))
+    expect("within_layer warn: reported, not failing",
+           (e, any("within layer same" in v for v in out)), (0, True))
+    e, out = run(files12c, contract(b12c + "within_layer: allow\n"))
+    expect("within_layer allow: silent",
+           (e, [v for v in out if "must not include" in v]), (0, []))
+
+    # 12d derive quarantines vendor dirs (F2)
+    with tempfile.TemporaryDirectory(prefix="check_arch_vendor_") as td:
+        write(td, {"src/mid/m.h": "#pragma once\n",
+                   "third_party/imgui/i.h": "#pragma once\n"})
+        expect("auto-detect skips vendor dirs", detect_roots(td), ["src"])
+
+    # 12e a CRLF document keeps its habit through --diagram (A3)
+    with tempfile.TemporaryDirectory(prefix="check_arch_crlf_") as td:
+        doc_text = diagram_of(b5).replace("\n", "\r\n")
+        p = os.path.join(td, "ARCHITECTURE.md")
+        with open(p, "w", encoding="utf-8", newline="") as fh:
+            fh.write(doc_text)
+        c5 = Contract(contract(b5), "doc")
+        assert write_diagram(p, c5, doc_text)
+        with open(p, "rb") as fh:
+            data = fh.read()
+        expect("CRLF doc stays CRLF through --diagram",
+               data.count(b"\r\n") > 10 and data.count(b"\n") == data.count(b"\r\n"),
+               True)
+        with open(p, encoding="utf-8", newline="") as fh:
+            reread = fh.read()
+        expect("CRLF doc passes the drift gate after the rewrite",
+               check_diagram(c5, reread) == [], True)
+
+    # 12f the scan-deps operational contract (A1/A2): a blind graph is loud,
+    # a missing tool is a skip - proven with a fake clang-scan-deps
+    if os.name == "nt":
+        outer = tempfile.mkdtemp(prefix="check_arch_sd_")
+        try:
+            other = os.path.join(outer, "elsewhere")
+            os.makedirs(other)
+            tu = os.path.join(other, "x.cpp")
+            with open(tu, "w") as fh:
+                fh.write("int x;\n")
+            fake = os.path.join(outer, "fake-csd.cmd")
+            with open(fake, "w") as fh:
+                fh.write('@echo off\r\necho ' + tu + ': \\\r\necho   ' + tu + '\r\n')
+            db_text = json.dumps([{"directory": outer, "command": "cl /c x.cpp",
+                                   "file": tu}])
+            sd = ("scan: src\ngraph: scan-deps\ndb: compile_commands.json\n"
+                  "clang_scan_deps: " + fake + "\nmodule src\n")
+            e, out = run({"src/a.cpp": "int x;\n",
+                          "compile_commands.json": db_text}, contract(sd))
+            expect("blind scan-deps graph is refused (exit 2), never green",
+                   (e, any("blind scan-deps graph" in v for v in out)), (2, True))
+            missing = ("scan: src\ngraph: scan-deps\ndb: compile_commands.json\n"
+                       "clang_scan_deps: " + os.path.join(outer, "no-such-tool.exe")
+                       + "\nmodule src\n")
+            e, out = run({"src/a.cpp": "int x;\n",
+                          "compile_commands.json": db_text}, contract(missing))
+            expect("missing clang-scan-deps is a skip (exit 77), no traceback",
+                   (e, any("clang-scan-deps not found" in v for v in out)), (77, True))
+        finally:
+            shutil.rmtree(outer, ignore_errors=True)
+
+    # 12g smells: orphan + island (report tier)
+    b12g = ("scan: src\nlayer base\nlayer mid\nlayer top\n"
+            "module base/a in base\nmodule base/b in base\nmodule base/c in base\n"
+            "module mid/m in mid\nmodule top/t in top\n"
+            "allow mid/m -> base/a\nallow top/t -> mid/m\n"
+            "allow base/b -> base/a\n")
+    files12g = {"src/base/a/x.h": "#pragma once\n",
+                "src/base/b/y.h": '#include "base/a/x.h"\n',
+                "src/base/c/z.h": "#pragma once\n",
+                "src/mid/m/m.h": '#include "base/a/x.h"\n',
+                "src/top/t/t.h": '#include "mid/m/m.h"\n'}
+    e, out = run(files12g, contract(b12g), report=True)
+    joined = "\n".join(out)
+    expect("smells: orphan + island detected",
+           ("orphan module: base/b" in joined
+            and "island module: base/c" in joined), True)
+
+    # 12h smells: pass-through + hub + large (and the smell_limits knob)
+    b12h = ("scan: src\nlayer same\n"
+            "module same/a in same\nmodule same/p in same\nmodule same/b in same\n"
+            "module same/root in same\n"
+            "module same/s1 in same\nmodule same/s2 in same\n"
+            "module same/s3 in same\nmodule same/s4 in same\n"
+            "module same/s5 in same\nmodule same/s6 in same\n"
+            "module same/s7 in same\nmodule same/s8 in same\n"
+            "module same/big in same\n"
+            "smell_limits: files=2\n"
+            "allow same/b -> same/p\nallow same/p -> same/a\n"
+            + "".join(f"allow same/root -> same/s{i}\n" for i in range(1, 9)))
+    files12h = {"src/same/a/a.h": "#pragma once\n",
+                "src/same/root/r.h": ('#include "same/s1/s1.h"\n'
+                                      '#include "same/s2/s2.h"\n'
+                                      '#include "same/s3/s3.h"\n'
+                                      '#include "same/s4/s4.h"\n'
+                                      '#include "same/s5/s5.h"\n'
+                                      '#include "same/s6/s6.h"\n'
+                                      '#include "same/s7/s7.h"\n'
+                                      '#include "same/s8/s8.h"\n'),
+                "src/same/p/p1.h": '#include "same/a/a.h"\n',
+                "src/same/p/p2.h": '#include "same/a/a.h"\n',
+                "src/same/p/p3.h": '#include "same/a/a.h"\n',
+                "src/same/b/b.h": ('#include "same/p/p1.h"\n'
+                                   '#include "same/p/p2.h"\n'
+                                   '#include "same/p/p3.h"\n'),
+                "src/same/big/f1.h": "#pragma once\n",
+                "src/same/big/f2.h": "#pragma once\n"}
+    files12h.update({f"src/same/s{i}/s{i}.h": "#pragma once\n"
+                     for i in range(1, 9)})
+    e, out = run(files12h, contract(b12h), report=True)
+    joined = "\n".join(out)
+    expect("smells: pass-through + hub + large detected",
+           ("pass-through module: same/p" in joined
+            and "hub module: same/root" in joined
+            and "large module: same/big" in joined), True)
+
+    # 12i smells: mutual pair; off is silent; warn prints without failing
+    b12i = ("scan: src\nlayer same\n"
+            "module same/p in same\nmodule same/q in same\n"
+            "allow same/p -> same/q\nallow same/q -> same/p\n")
+    files12i = {"src/same/p/p.h": ('#include "same/q/q1.h"\n'
+                                   '#include "same/q/q2.h"\n'
+                                   '#include "same/q/q3.h"\n'),
+                "src/same/q/q.h": ('#include "same/p/p1.h"\n'
+                                   '#include "same/p/p2.h"\n'
+                                   '#include "same/p/p3.h"\n'),
+                "src/same/q/q1.h": "#pragma once\n",
+                "src/same/q/q2.h": "#pragma once\n",
+                "src/same/q/q3.h": "#pragma once\n",
+                "src/same/p/p1.h": "#pragma once\n",
+                "src/same/p/p2.h": "#pragma once\n",
+                "src/same/p/p3.h": "#pragma once\n"}
+    e, out = run(files12i, contract(b12i), report=True)
+    expect("smells: mutual pair detected",
+           "mutual pair: same/p <-> same/q" in "\n".join(out), True)
+    e, out = run(files12i, contract(b12i + "smells: off\n"), report=True)
+    expect("smells off: silent", "mutual pair" in "\n".join(out), False)
+    e, out = run(files12i, contract(b12i + "smells: warn\n"))
+    expect("smells warn: SMELL warning lines, exit still 0",
+           (e, any(v.startswith("warning: SMELL mutual pair") for v in out)),
+           (0, True))
+
     # 13 exit-code contract
     e, _ = run({"src/known/k.h": "#pragma once\n"}, contract(b5))
     expect("exit 0 on a clean tree", e, 0)
@@ -1281,8 +1651,27 @@ allow top -> mid
     e, _ = run({}, contract(b5))
     expect("exit 77 on nothing to scan", e, 77)
 
-    print("check_arch selftest:", "PASS" if ok else "FAIL")
+    print(f"check_arch {CHECK_ARCH_VERSION} selftest:", "PASS" if ok else "FAIL")
     return 0 if ok else 2
+
+
+def detect_roots(repo):
+    """Derive's default scan roots: every top-level directory that contains
+    sources - except the vendor/non-source names (VENDOR_DIRS): vendored
+    trees are never architecture."""
+    roots = []
+    for name in sorted(os.listdir(repo)):
+        p = os.path.join(repo, name)
+        if (not os.path.isdir(p) or name.startswith(".") or name in VENDOR_DIRS
+                or any(x in name for x in DEFAULT_EXCLUDES)):
+            continue
+        for dp, dn, fn in os.walk(p):
+            dn[:] = [d for d in dn if d not in VENDOR_DIRS
+                     and not any(x in d for x in DEFAULT_EXCLUDES)]
+            if any(os.path.splitext(f)[1] in DEFAULT_EXTS for f in fn):
+                roots.append(name.replace("\\", "/"))
+                break
+    return roots
 
 
 def main(argv=None):
@@ -1316,23 +1705,15 @@ def main(argv=None):
     if args.selftest:
         return selftest()
 
-    repo = args.repo or os.path.dirname(here)
+    # abspath: the scan-deps graph speaks absolute paths (compile databases
+    # list absolute TUs) - a relative repo root would silently blind it (A1)
+    repo = os.path.abspath(args.repo) if args.repo else os.path.dirname(here)
 
     if args.derive:
         if args.scan:
             roots = [r.strip().replace("\\", "/") for r in args.scan.split(",") if r.strip()]
         else:
-            roots = []
-            for name in sorted(os.listdir(repo)):
-                p = os.path.join(repo, name)
-                if (not os.path.isdir(p) or name.startswith(".")
-                        or any(x in name for x in DEFAULT_EXCLUDES)):
-                    continue
-                for dp, dn, fn in os.walk(p):
-                    dn[:] = [d for d in dn if not any(x in d for x in DEFAULT_EXCLUDES)]
-                    if any(os.path.splitext(f)[1] in DEFAULT_EXTS for f in fn):
-                        roots.append(name.replace("\\", "/"))
-                        break
+            roots = detect_roots(repo)
         if not roots:
             print("derive: no source roots found (pass --scan DIRS)")
             return EXIT_SKIP
