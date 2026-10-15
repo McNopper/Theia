@@ -238,6 +238,7 @@ set(THEIA_ENTRY_SHADERS
 set(THEIA_LIBRARY_SOURCES
     # Theia forward rendering
     src/theia/renderer/ForwardRenderer.cpp
+    src/theia/renderer/ForwardRendererPipelines.cpp
     src/theia/renderer/GpuCullPass.cpp
     src/theia/renderer/LightCuller.cpp
     src/theia/renderer/GiPass.cpp
@@ -252,6 +253,7 @@ src/theia/renderer/PairingTextures.cpp
 
 set(THEIA_DEMO_SOURCES
     src/demo/Application.cpp
+    src/demo/ApplicationCompute.cpp
 )
 
 set(THEIA_APP_SOURCES
