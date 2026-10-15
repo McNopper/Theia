@@ -21,9 +21,9 @@
 #include "theia/renderer/HiZPass.hpp"
 #include "theia/renderer/RendererConstants.hpp"
 
-class Scene;
-
 namespace theia {
+
+class Scene;
 
 /// GPU-driven forward renderer using Vulkan 1.4 features.
 /// - Dynamic rendering (no render passes)

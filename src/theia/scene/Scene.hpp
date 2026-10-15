@@ -20,6 +20,8 @@
 #include "harmonia/scene/SceneBase.hpp"
 #include "harmonia/scene/Texture.hpp"
 
+namespace theia {
+
 /// Theia (rasterizer) per-instance GPU layout (std430, 36 bytes). The mesh-shader path
 /// draws meshlets, so this carries the mesh's meshlet range. The ranges come from the
 /// referenced unique mesh (shared across instances); object→world placement is the
@@ -170,4 +172,7 @@ class Scene : public harmonia::scene::SceneBase {
     std::uint32_t m_lightCount = 0;
     std::uint32_t m_meshletCount = 0; ///< total meshlets across all meshes (visibility buffer size)
 };
+
+} // namespace theia
+
 #endif // THEIA_SCENE_SCENE_HPP

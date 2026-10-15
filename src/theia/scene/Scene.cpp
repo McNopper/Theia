@@ -24,7 +24,7 @@
 #include "harmonia/scene/Geometry.hpp"
 #include "harmonia/scene/ProceduralGeometry.hpp"
 
-namespace {} // namespace
+namespace theia {
 
 std::uint32_t Scene::addSphereMesh(const harmonia::DeviceContext& ctx,
                                    const harmonia::core::CommandPool& pool,
@@ -250,7 +250,7 @@ void Scene::buildGpuInstances() {
         });
         m_instanceBounds.push_back([&] {
             const harmonia::scene::Aabb object = m_meshes[inst.meshIndex]->objectAabb();
-            const harmonia::scene::Aabb world = harmonia::scene::worldAabbFromInstance(object, inst.xform);
+            const harmonia::scene::Aabb world = harmonia::scene::worldAabbFromInstance(object, inst.transform);
             return GpuInstanceBounds{
                 .minX = world.min.x,
                 .minY = world.min.y,
@@ -365,7 +365,7 @@ VkResult Scene::uploadSceneBuffers(const harmonia::DeviceContext& ctx,
     const std::size_t instCount = std::max<std::size_t>(m_instances.size(), 1);
     std::vector<sm::float4x4> instanceTransforms(instCount, sm::float4x4(1.0f));
     for (std::size_t i = 0; i < m_instances.size(); ++i) {
-        instanceTransforms[i] = m_instances[i].xform.matrix();
+        instanceTransforms[i] = m_instances[i].transform.matrix();
     }
     if (VkResult r = uploadBuffer(
             ctx,
@@ -423,13 +423,13 @@ void Scene::synthesizeEmissiveLights(const std::vector<harmonia::GpuMaterial>& g
             continue;
 
         constexpr float kPi = 3.14159265358979323846F;
-        const sm::float4x4 xform = inst.xform.matrix();
+        const sm::float4x4 transform = inst.transform.matrix();
 
         std::vector<sm::float3> wverts;
         wverts.reserve(verts.size());
         sm::float3 centroid{0.0f};
         for (const auto& v : verts) {
-            wverts.push_back(static_cast<sm::float3>(xform * sm::float4(v.position, 1.0f)));
+            wverts.push_back(static_cast<sm::float3>(transform * sm::float4(v.position, 1.0f)));
             centroid += wverts.back();
         }
         centroid /= static_cast<float>(wverts.size());
@@ -533,3 +533,5 @@ std::uint32_t Scene::instanceMask(std::size_t instanceIndex) const {
     }
     return isEmissive ? 0x01u : (isTransparent ? 0x02u : 0x04u);
 }
+
+} // namespace theia

@@ -15,9 +15,9 @@
 #include "harmonia/core/VulkanHandle.hpp"
 #include "theia/renderer/RendererConstants.hpp"
 
-class Scene;
-
 namespace theia {
+
+class Scene;
 
 /// Ray-query global-illumination compute stage.
 ///

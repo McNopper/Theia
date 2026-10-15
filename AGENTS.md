@@ -192,7 +192,10 @@ clang-tidy, Python3 or the database is missing).
 `analysis`) — `theia/scene` is the leaf, `theia/renderer` consumes it, `demo` consumes
 both; includes may only go **down** that order (cross-repo includes of
 harmonia/slang-math/aether are downward by design) and there must be **no include cycles**
-(file-level SCC detection). Sanitizer lane (Clang/GCC configures only):
+(file-level SCC detection). Theia's classes live in `namespace theia` (the scene module
+included; `theia::pairing` is a module sub-namespace). **Theia never depends on Hyperion**
+— the sibling renderers are independent; shared code goes down into Harmonia (gate fails
+on any `hyperion/` include). Sanitizer lane (Clang/GCC configures only):
 `-DTHEIA_SANITIZER=address|undefined|thread`. Host-side FP is deterministic
 (`/fp:strict` / `-ffp-contract=off -fno-fast-math`).
 

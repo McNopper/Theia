@@ -24,6 +24,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ORDER = ['theia', 'theia/scene', 'theia/renderer', 'demo']
 ROOTS = {'theia/': 'src', 'demo/': 'src'}
 EXTERNAL = ('harmonia/', 'slang-math/', 'aether/')
+FORBIDDEN = ('hyperion/',)  # sibling renderer - never (shared code goes down into Harmonia)
 SCAN = ['src']
 
 INC = re.compile(r'^\s*#\s*include\s+([<"])([\w./-]+)[>"]')
@@ -111,6 +112,9 @@ def main():
             if not m:
                 continue
             inc = m.group(2)
+            if any(inc.startswith(x) for x in FORBIDDEN):
+                violations.append(f'{rel}: must not include ' + chr(34) + inc + chr(34) + ' (forbidden dependency)')
+                continue
             if any(inc.startswith(x) for x in EXTERNAL):
                 ext[inc.split('/')[0]] = ext.get(inc.split('/')[0], 0) + 1
                 continue
