@@ -82,6 +82,9 @@ depth (426), camera (135) - all under the large-module limits, gate green with 2
 edges. Remaining in this item: Extract Class the async-compute rig out of the demo module
 (demo still measures 1457 lines); the theia/pipelines TU-only module reports orphan (consumed
 at link level) - accepted TU-split artifact or promote to a real class in the same batch.
+Batching: this item is front 2 (frame orchestration) of the family categorization -
+Harmonia PLAN; internal order: pipelines class -> ComputeRig -> T-03, with Q1 (coverage)
+as the precondition.
 
 Accepted by design (reviewed 2026-10-15, no action): the `demo -> theia/renderer -> theia/scene`
 chain measures as a pass-through/Middle-Man proxy — it is the designed layer chain.
