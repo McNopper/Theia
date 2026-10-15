@@ -26,7 +26,7 @@ ROOTS = {'theia/': 'src', 'demo/': 'src'}
 EXTERNAL = ('harmonia/', 'slang-math/', 'aether/')
 SCAN = ['src']
 
-INC = re.compile(r'^\s*#\s*include\s+"([\w./-]+)"')
+INC = re.compile(r'^\s*#\s*include\s+([<"])([\w./-]+)[>"]')
 
 
 def module_of(rel):
@@ -110,10 +110,12 @@ def main():
             m = INC.match(line)
             if not m:
                 continue
-            inc = m.group(1)
+            inc = m.group(2)
             if any(inc.startswith(x) for x in EXTERNAL):
                 ext[inc.split('/')[0]] = ext.get(inc.split('/')[0], 0) + 1
                 continue
+            if m.group(1) == '<' and not any(inc.startswith(pfx) for pfx in ROOTS):
+                continue  # angle-bracket outside the project roots: system header
             t = resolve(inc, p)
             if t in adj and t != p:
                 adj[p].add(t)
