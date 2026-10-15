@@ -370,6 +370,9 @@ if(PROJECT_IS_TOP_LEVEL)
         add_test(NAME test_tidy
                  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_tidy.py)
         set_tests_properties(test_tidy PROPERTIES SKIP_RETURN_CODE 77 LABELS analysis RUN_SERIAL TRUE)
+        add_test(NAME test_layers
+                 COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_layers.py)
+        set_tests_properties(test_layers PROPERTIES SKIP_RETURN_CODE 77 LABELS analysis RUN_SERIAL TRUE)
     endif()
 endif()
 

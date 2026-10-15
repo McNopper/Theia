@@ -187,7 +187,12 @@ SDL3-bridge recipe lives in Harmonia's AGENTS.md. CI: `.github/workflows/build.y
 `build/compile_commands.json`, classified per `.clang-tidy`'s WarningsAsErrors contract
 (clang-diagnostic/clang-analyzer/bugprone fail the run; modernize/performance/portability
 are report-only). Also registered as ctest `test_tidy` (label `analysis`; the fast test loop is `ctest -LE analysis`; skips when
-clang-tidy, Python3 or the database is missing). Sanitizer lane (Clang/GCC configures only):
+clang-tidy, Python3 or the database is missing).
+**Architecture gate:** `python tools/check_layers.py` (ctest `test_layers`, label
+`analysis`) — `theia/scene` is the leaf, `theia/renderer` consumes it, `demo` consumes
+both; includes may only go **down** that order (cross-repo includes of
+harmonia/slang-math/aether are downward by design) and there must be **no include cycles**
+(file-level SCC detection). Sanitizer lane (Clang/GCC configures only):
 `-DTHEIA_SANITIZER=address|undefined|thread`. Host-side FP is deterministic
 (`/fp:strict` / `-ffp-contract=off -fno-fast-math`).
 
