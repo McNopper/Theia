@@ -76,7 +76,12 @@ repo, no layer name, no namespace):
                                  # fan-in smells (orphan, island) and
                                  # module-volume (large module) are
                                  # relaxed; volume is judged per FILE
-                                 # (large header) instead
+                                 # (header_size) in both kinds
+  header_size: warn              # report | warn | error - THE HEADER-SIZE
+                                 # RULE (both kinds, independent of
+                                 # smells): one file over the lines limit
+                                 # is bloat - warn by default, error once
+                                 # the repo's bloat queue is drained
   cycles: true                   # the file-level cycle gate
   graph: regex                   # regex | scan-deps - the graph source
   db: build/ninja/compile_commands.json   # scan-deps: the compile database
@@ -120,10 +125,13 @@ smells are REPORT-ONLY queue items for the review cadence - never findings
 orphan module (Speculative Generality / Dead Code / Lazy Class),
 pass-through module (Middle Man), mutual pair (Inappropriate Intimacy),
 hub module (Shotgun Surgery / Divergent Change), large module (Large
-Class). The AST-level catalog smells (Long Method, Long Parameter List,
-Data Clumps, Primitive Obsession, Feature Envy, Switch Statements, ...)
-belong to the lint matrix (clang-tidy / cppcheck), not this tool; the
-rest of the catalog is review judgment.
+Class, applications only). THE HEADER-SIZE RULE is different: a standing
+rule in BOTH kinds, never switchable off - one file over the lines limit
+is bloat, warn by default, promotable to error once the repo's bloat
+queue is drained. The AST-level catalog smells (Long Method, Long
+Parameter List, Data Clumps, Primitive Obsession, Feature Envy, Switch
+Statements, ...) belong to the lint matrix (clang-tidy / cppcheck), not
+this tool; the rest of the catalog is review judgment.
 
 Exit codes: 0 clean - 1 violations - 2 config/usage error - 77 skipped.
 Usage: python tools/check_arch.py [--doc FILE] [--report] [--diagram]
@@ -150,7 +158,7 @@ EXIT_VIOLATIONS = 1
 EXIT_USAGE = 2
 EXIT_SKIP = 77
 
-CHECK_ARCH_VERSION = "1.3.0"
+CHECK_ARCH_VERSION = "1.4.0"
 
 INCLUDE_RE = re.compile(r'^\s*#\s*include\s*([<"])([^>"]+)[>"]', re.MULTILINE)
 ARCH_BLOCK_RE = re.compile(r"```arch[ \t]*\r?\n(.*?)```", re.DOTALL)
@@ -165,7 +173,7 @@ KNOB_KEYS = {
     "scan", "extensions", "exclude", "unclassified", "external", "forbidden",
     "quotes_relative", "repo_fallback", "quotes_resolve", "within_layer",
     "cycles", "graph", "db", "clang_scan_deps", "nesting", "unresolved",
-    "smells", "smell_limits", "kind",
+    "smells", "smell_limits", "kind", "header_size",
     "namespace_root", "namespace_module", "namespace_require",
 }
 
@@ -334,6 +342,10 @@ class Contract:
         if self.kind not in ("application", "library"):
             raise ContractError(f"{path}: kind: application|library expected, "
                                 f"got {self.kind!r}")
+        self.header_size = knobs.get("header_size") or "warn"
+        if self.header_size not in ("report", "warn", "error"):
+            raise ContractError(f"{path}: header_size: report|warn|error expected, "
+                                f"got {self.header_size!r}")
 
     def quote_chain(self):
         """How a quoted include resolves, in order: 'includer' = relative to
@@ -795,7 +807,7 @@ def check_nesting(contract):
     return out
 
 
-def compute_smells(contract, repo, files, file_mod, mod_edges):
+def compute_smells(contract, repo, files, file_mod, mod_edges, file_lines):
     """The refactoring-catalog proxies (refactoring.guru), deterministic over
     the measured module graph. -> [{"kind", "subject", "note"}]: queue items
     for the review cadence, NEVER findings - the thresholds are judgment,
@@ -805,10 +817,9 @@ def compute_smells(contract, repo, files, file_mod, mod_edges):
     kind: library relaxes the FAN-IN-based smells (orphan, island) and the
     module-VOLUME smell (large module): for a library, zero in-repo
     consumers is the definition of public API, and total volume in one
-    namespace is a fact (the STL argument), not dead weight. What still
-    applies in library mode: large HEADER (per-file volume - a bloated
-    header kills a-la-carte granularity) and all coupling proxies
-    (pass-through, mutual, hub). All gates stay in force."""
+    namespace is a fact (the STL argument), not dead weight. The per-FILE
+    volume rule is NOT here - it is a standing rule of its own
+    (check_header_size), valid in both kinds."""
     lim = contract.smell_limits
     targets = {}
     sources = {}
@@ -865,19 +876,11 @@ def compute_smells(contract, repo, files, file_mod, mod_edges):
             smells.append({"kind": "hub module", "subject": m,
                            "note": f"fan-in {fi}, fan-out {fo} "
                                    "(Shotgun Surgery / Divergent Change proxy)"})
-    file_lines = {}
-    for p in files:
-        with open(p, encoding="utf-8", errors="replace") as fh:
-            file_lines[p] = sum(1 for _ in fh)
-    if is_library:
-        # volume per FILE: a bloated header is a smell even in a library;
-        # the library's total size is not
-        for p in sorted(files, key=lambda k: files[k]):
-            if file_lines[p] >= lim["lines"]:
-                smells.append({"kind": "large header", "subject": files[p],
-                               "note": f"{file_lines[p]} lines in one header "
-                                       "(Large Class proxy, per file)"})
-    else:
+    if not is_library:
+        # large MODULE, application only: total volume in one module is
+        # bloat; for a library it is a fact (the STL argument). The per-FILE
+        # rule is a standing rule of its own (check_header_size), valid in
+        # both kinds.
         mod_files = {}
         mod_lines = {}
         for p in files:
@@ -885,13 +888,26 @@ def compute_smells(contract, repo, files, file_mod, mod_edges):
             if m is None:
                 continue
             mod_files[m] = mod_files.get(m, 0) + 1
-            mod_lines[m] = mod_lines.get(m, 0) + file_lines[p]
+            mod_lines[m] = mod_lines.get(m, 0) + file_lines.get(p, 0)
         for m in mods:
             f, l = mod_files.get(m, 0), mod_lines.get(m, 0)
             if f >= lim["files"] or l >= lim["lines"]:
                 smells.append({"kind": "large module", "subject": m,
                                "note": f"{f} files, {l} lines (Large Class proxy)"})
     return smells
+
+
+def check_header_size(contract, files, file_lines):
+    """THE HEADER-SIZE RULE - a standing rule, valid in BOTH kinds, never
+    switchable off: bloat is not good anywhere. A single file over the
+    lines limit is reported wherever it lives; the tier (warn/error) is
+    the repo's ratchet decision."""
+    out = []
+    for p in sorted(files, key=lambda k: files[k]):
+        if file_lines.get(p, 0) >= contract.smell_limits["lines"]:
+            out.append(f"HEADER SIZE: {files[p]} ({file_lines[p]} lines; "
+                       f"limit {contract.smell_limits['lines']})")
+    return out
 
 
 def check_edges(contract, files, file_mod, mod_edges):
@@ -1237,11 +1253,22 @@ def collect(repo, doc_path, report=False):
         violations += [f"unresolved include: {u}" for u in unresolved]
     violations += check_diagram(contract, text)
     smells = []
+    file_lines = {}
+    if contract.smells != "off" or contract.header_size != "report":
+        for p in files:
+            with open(p, encoding="utf-8", errors="replace") as fh:
+                file_lines[p] = sum(1 for _ in fh)
     if contract.smells != "off":
-        smells = compute_smells(contract, repo, files, file_mod, mod_edges)
+        smells = compute_smells(contract, repo, files, file_mod, mod_edges,
+                                file_lines)
         if contract.smells == "warn":
             warnings += [f"SMELL {s['kind']}: {s['subject']} ({s['note']})"
                          for s in smells]
+    header_findings = check_header_size(contract, files, file_lines)
+    if contract.header_size == "warn":
+        warnings += header_findings
+    elif contract.header_size == "error":
+        violations += header_findings
 
     summary = {
         "schema": 1, "code": None, "doc": resolved, "graph": contract.graph,
@@ -1250,7 +1277,8 @@ def collect(repo, doc_path, report=False):
         "declared_edges": [list(e) for e in sorted(contract.edges)],
         "measured_edges": [[a, b, n] for (a, b), n in sorted(mod_edges.items())],
         "external": ext_counts, "violations": violations, "warnings": warnings,
-        "smells": smells, "clean": not violations,
+        "smells": smells, "large_headers": header_findings,
+        "clean": not violations,
     }
     lines = []
     if report:
@@ -1282,6 +1310,10 @@ def collect(repo, doc_path, report=False):
                          "never findings):")
             for s in smells:
                 lines.append(f"  {s['kind']}: {s['subject']} ({s['note']})")
+        if contract.header_size == "report" and header_findings:
+            lines.append(f"large files ({len(header_findings)}; standing rule):")
+            for h in header_findings:
+                lines.append("  " + h)
     for w in warnings:
         lines.append("warning: " + w)
     if violations:
@@ -1689,15 +1721,29 @@ allow top -> mid
            (e, any("kind: application|library expected" in v for v in out)),
            (2, True))
     b12j = ("scan: src\nkind: library\nsmell_limits: lines=5\n"
-            "module same/big in same\n")
+            "module same/big\n")
     files12j = {"src/same/big/1.h": "#pragma once\nint a;\nint b;\nint c;\nint d;\nint e;\nint f;\n",
                 "src/same/big/2.h": "#pragma once\n"}
     e, out = run(files12j, contract(b12j), report=True)
     joined = "\n".join(out)
     expect("kind library: large HEADER (per file) still reported",
-           "large header: src/same/big/1.h" in joined, True)
+           "HEADER SIZE: src/same/big/1.h" in joined, True)
     expect("kind library: large module suppressed",
            "large module" in joined, False)
+    e, out = run(files12j, contract(b12j + "smells: off\n"))
+    expect("header-size rule: standing, independent of smells",
+           any("HEADER SIZE: src/same/big/1.h" in v for v in out), True)
+    b12k = "scan: src\nsmell_limits: lines=5\nmodule big\n"
+    files12k = {"src/big/1.h": "#pragma once\nint a;\nint b;\nint c;\nint d;\nint e;\nint f;\n",
+                "src/big/2.h": "#pragma once\n"}
+    e, out = run(files12k, contract(b12k), report=True)
+    joined = "\n".join(out)
+    expect("application: large module AND large header both reported",
+           ("large module: big" in joined
+            and "HEADER SIZE: src/big/1.h" in joined), True)
+    e, out = run(files12k, contract(b12k + "header_size: error\n"))
+    expect("header_size error: the standing rule can be a hard gate",
+           (e, any("HEADER SIZE:" in v for v in out)), (1, True))
 
     # 13 exit-code contract
     e, _ = run({"src/known/k.h": "#pragma once\n"}, contract(b5))

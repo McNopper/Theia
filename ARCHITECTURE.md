@@ -61,6 +61,7 @@ namespace_module:
 namespace_require:
 unresolved: info
 within_layer: deny              # undeclared same-layer edges: violations
+header_size: warn                # the standing bloat rule (promote to error when the queue is drained)
 smells: report                 # refactoring-catalog proxies: report-only review signals
 
 layer scene
