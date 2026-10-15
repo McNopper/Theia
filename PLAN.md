@@ -74,7 +74,14 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
       Method Object for `ForwardRenderer.cpp` (1342 lines) and `demo/Application.cpp` (1089 lines). Review verdict first: split only where a seam is real; otherwise record accepted.
       Per-file bloat queue (`header_size`): DRAINED (2026-10-15) — `ForwardRenderer.cpp` split into
       `ForwardRenderer.cpp` (867) + `ForwardRendererPipelines.cpp` (499); `demo/Application.cpp`
-      into `Application.cpp` (839) + `ApplicationCompute.cpp` (273). `header_size: error` promoted. | — | backlog |
+      into `Application.cpp` (839) + `ApplicationCompute.cpp` (273). `header_size: error` promoted. | — | **in progress** |
+
+Executed (2026-10-15, file level): theia/renderer (23 files / 5093 lines) split into seven
+focused modules - renderer core (795), pipelines (933), cull (945), gi (975), postfx (913),
+depth (426), camera (135) - all under the large-module limits, gate green with 20 declared
+edges. Remaining in this item: Extract Class the async-compute rig out of the demo module
+(demo still measures 1457 lines); the theia/pipelines TU-only module reports orphan (consumed
+at link level) - accepted TU-split artifact or promote to a real class in the same batch.
 
 Accepted by design (reviewed 2026-10-15, no action): the `demo -> theia/renderer -> theia/scene`
 chain measures as a pass-through/Middle-Man proxy — it is the designed layer chain.
