@@ -195,7 +195,16 @@ low-spp reference).
 
 ## Baseline
 
-- **v0.7.13** (current; consumes Harmonia v0.7.12): **the layering wave.** Every `harmonia::`
+- **v0.7.14** (current; consumes Harmonia v0.7.13): **code-health wave: the scene module
+  joins `namespace theia` + the arch gate.** `theia/scene` (`Scene`, `GpuInstance`,
+  `GpuInstanceBounds`, `GpuMeshlet`) was the family's last global-namespace module — now
+  `theia::` like the renderer, with the forward declarations moved inside the namespace.
+  `tools/check_layers.py` (ctest `test_layers`, label `analysis`): the `scene` ←
+  `renderer` ← `demo` DAG, file-level cycle detection, and any `hyperion/` include fails
+  (**Theia never depends on Hyperion** — the sibling renderers are independent; shared
+  code goes down into Harmonia). 19/19 ctest on Windows; Linux build-only green; 3-scene
+  smoke at release settings pixel-identical (MAD = 0) to the gallery.
+- **v0.7.13** (consumes Harmonia v0.7.12): **the layering wave.** Every `harmonia::`
   reference now names its layer (`harmonia::core::Buffer`, `harmonia::scene::SceneBase`,
   `harmonia::app::App`, …) to match Harmonia v0.7.12's layered namespaces; `theia::` is
   unchanged. Docs re-verified (names + citations). README gallery regenerated from this code
