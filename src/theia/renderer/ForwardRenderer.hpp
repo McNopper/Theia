@@ -16,9 +16,9 @@
 #include "harmonia/core/Image.hpp"
 #include "harmonia/core/VulkanHandle.hpp"
 #include "harmonia/renderer/Camera.hpp"
-#include "theia/renderer/GpuCullPass.hpp"
-#include "theia/renderer/GpuDrivenState.hpp"
-#include "theia/renderer/HiZPass.hpp"
+#include "theia/cull/GpuCullPass.hpp"
+#include "theia/cull/GpuDrivenState.hpp"
+#include "theia/depth/HiZPass.hpp"
 #include "theia/renderer/RendererConstants.hpp"
 
 namespace theia {

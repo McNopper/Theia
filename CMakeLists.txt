@@ -238,15 +238,15 @@ set(THEIA_ENTRY_SHADERS
 set(THEIA_LIBRARY_SOURCES
     # Theia forward rendering
     src/theia/renderer/ForwardRenderer.cpp
-    src/theia/renderer/ForwardRendererPipelines.cpp
-    src/theia/renderer/GpuCullPass.cpp
-    src/theia/renderer/LightCuller.cpp
-    src/theia/renderer/GiPass.cpp
-src/theia/renderer/PairingTextures.cpp
-    src/theia/renderer/MotionVectorPass.cpp
-    src/theia/renderer/TaaPass.cpp
-    src/theia/renderer/HiZPass.cpp
-    src/theia/renderer/GpuDrivenState.cpp
+    src/theia/pipelines/ForwardRendererPipelines.cpp
+    src/theia/cull/GpuCullPass.cpp
+    src/theia/cull/LightCuller.cpp
+    src/theia/gi/GiPass.cpp
+    src/theia/gi/PairingTextures.cpp
+    src/theia/postfx/MotionVectorPass.cpp
+    src/theia/postfx/TaaPass.cpp
+    src/theia/depth/HiZPass.cpp
+    src/theia/cull/GpuDrivenState.cpp
     # Theia GPU scene (rasterizer/meshlet layout — renderer-specific)
     src/theia/scene/Scene.cpp
 )

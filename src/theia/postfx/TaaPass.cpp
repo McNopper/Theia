@@ -1,4 +1,4 @@
-#include "theia/renderer/TaaPass.hpp"
+#include "theia/postfx/TaaPass.hpp"
 
 #include <array>
 #include <cstdint>

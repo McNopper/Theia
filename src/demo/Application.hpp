@@ -10,13 +10,13 @@
 
 #include "harmonia/app/App.hpp"
 #include "harmonia/app/IRenderer.hpp"
-#include "theia/renderer/CameraController.hpp"
-#include "theia/renderer/EnvImportanceResources.hpp"
+#include "theia/camera/CameraController.hpp"
+#include "EnvImportanceResources.hpp"
 #include "theia/renderer/ForwardRenderer.hpp"
-#include "theia/renderer/GiPass.hpp"
-#include "theia/renderer/LightCuller.hpp"
-#include "theia/renderer/MotionVectorPass.hpp"
-#include "theia/renderer/TaaPass.hpp"
+#include "theia/gi/GiPass.hpp"
+#include "theia/cull/LightCuller.hpp"
+#include "theia/postfx/MotionVectorPass.hpp"
+#include "theia/postfx/TaaPass.hpp"
 #include "theia/scene/Scene.hpp"
 
 namespace theia {

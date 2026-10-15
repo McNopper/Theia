@@ -15,7 +15,7 @@
 #include "harmonia/core/Env.hpp"
 #include "harmonia/core/Logger.hpp"
 #include "harmonia/renderer/Camera.hpp"
-#include "theia/renderer/CameraJitter.hpp"
+#include "theia/camera/CameraJitter.hpp"
 
 namespace theia {
 

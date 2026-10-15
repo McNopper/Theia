@@ -1,4 +1,4 @@
-#include "theia/renderer/LightCuller.hpp"
+#include "theia/cull/LightCuller.hpp"
 
 #include <array>
 #include <cmath>

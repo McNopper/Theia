@@ -9,8 +9,8 @@
 #include "harmonia/DeviceContext.hpp"
 #include "harmonia/core/Buffer.hpp"
 #include "harmonia/core/VulkanHandle.hpp"
-#include "theia/renderer/GpuCullPass.hpp"
-#include "theia/renderer/HiZPass.hpp"
+#include "theia/cull/GpuCullPass.hpp"
+#include "theia/depth/HiZPass.hpp"
 #include "theia/renderer/RendererConstants.hpp"
 #include "theia/scene/Scene.hpp"
 

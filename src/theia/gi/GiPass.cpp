@@ -1,4 +1,4 @@
-#include "theia/renderer/GiPass.hpp"
+#include "theia/gi/GiPass.hpp"
 
 #include <algorithm>
 #include <array>
@@ -8,7 +8,7 @@
 #include <harmonia/core/ShaderModule.hpp>
 #include <slang-math/slang-math.hpp>
 #include <span>
-#include <theia/renderer/PairingTextures.hpp>
+#include <theia/gi/PairingTextures.hpp>
 #include <theia/renderer/ShaderPath.hpp>
 #include <theia/scene/Scene.hpp>
 #include <vector>

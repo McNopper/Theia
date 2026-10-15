@@ -1,4 +1,4 @@
-#include "theia/renderer/PairingTextures.hpp"
+#include "theia/gi/PairingTextures.hpp"
 
 #include <algorithm>
 #include <cmath>

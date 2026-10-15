@@ -2,7 +2,7 @@
 #include <gtest/gtest.h>
 #include <slang-math/slang-math.hpp>
 
-#include "theia/renderer/CameraJitter.hpp"
+#include "theia/camera/CameraJitter.hpp"
 
 TEST(TheiaCameraJitterContract, Halton23SequenceIsDeterministicBySampleIndex) {
     const sm::float2 s0 = theia::cameraJitterPixels(0U);

@@ -1,4 +1,4 @@
-#include "theia/renderer/HiZPass.hpp"
+#include "theia/depth/HiZPass.hpp"
 
 #include <algorithm>
 #include <array>

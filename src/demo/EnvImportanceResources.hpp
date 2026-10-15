@@ -5,7 +5,7 @@
 
 #include <cstdint>
 
-#include "theia/renderer/GiPass.hpp"
+#include "theia/gi/GiPass.hpp"
 
 namespace theia {
 

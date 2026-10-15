@@ -1,4 +1,4 @@
-#include "theia/renderer/GpuCullPass.hpp"
+#include "theia/cull/GpuCullPass.hpp"
 
 #include <array>
 #include <cstdint>

@@ -11,28 +11,35 @@ renderers are independent; shared code goes down into Harmonia (a
 
 ```mermaid
 block-beta
-    columns 3
-    host["host"]:3
-    renderer["renderer"]:2
-    space
-    scene["scene"]
+    columns 7
+    host["host"]:7
+    renderer["renderer"]:5
     space:2
+    scene["scene"]
+    space:6
 ```
 
 ### layer host - the modules
 
 ```mermaid
 block-beta
-    columns 3
-    demo["demo"]:3
+    columns 7
+    demo["demo"]:7
 ```
 
 ### layer renderer - the modules
 
 ```mermaid
 block-beta
-    columns 2
-    theia_renderer["theia/renderer"]:2
+    columns 22
+    theia_cull["theia/cull"]:4
+    theia_depth["theia/depth"]:2
+    theia_gi["theia/gi"]:4
+    theia_pipelines["theia/pipelines"]:4
+    theia_postfx["theia/postfx"]:3
+    theia_renderer["theia/renderer"]:5
+    theia_camera["theia/camera"]
+    space:21
 ```
 
 ### layer scene - the modules
@@ -70,9 +77,34 @@ layer host
 
 module theia/scene in scene
 module theia/renderer in renderer
+module theia/pipelines in renderer
+module theia/cull in renderer
+module theia/postfx in renderer
+module theia/gi in renderer
+module theia/depth in renderer
+module theia/camera in renderer
 module demo in host
 
 allow theia/renderer -> theia/scene
+allow theia/renderer -> theia/camera
+allow theia/pipelines -> theia/renderer
+allow theia/pipelines -> theia/camera
+allow theia/cull -> theia/scene
+allow theia/pipelines -> theia/scene
+allow theia/renderer -> theia/cull
+allow theia/renderer -> theia/depth
+allow theia/cull -> theia/renderer
+allow theia/cull -> theia/depth
+allow theia/depth -> theia/renderer
+allow theia/postfx -> theia/renderer
+allow theia/postfx -> theia/camera
+allow theia/gi -> theia/renderer
+allow theia/gi -> theia/scene
+allow theia/gi -> theia/camera
 allow demo -> theia/renderer
 allow demo -> theia/scene
+allow demo -> theia/cull
+allow demo -> theia/postfx
+allow demo -> theia/gi
+allow demo -> theia/camera
 ```

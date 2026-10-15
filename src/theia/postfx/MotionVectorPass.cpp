@@ -1,4 +1,4 @@
-#include "theia/renderer/MotionVectorPass.hpp"
+#include "theia/postfx/MotionVectorPass.hpp"
 
 #include <array>
 #include <cstdint>
