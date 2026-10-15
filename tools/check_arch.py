@@ -71,6 +71,12 @@ repo, no layer name, no namespace):
                                  # --report/--json only; warn: also as
                                  # warning lines; never findings)
   smell_limits:                  # fan=8 mutual=3 files=12 lines=1000
+  kind: application              # application | library - a library's
+                                 # zero-consumer modules are public API:
+                                 # fan-in smells (orphan, island) and
+                                 # module-volume (large module) are
+                                 # relaxed; volume is judged per FILE
+                                 # (large header) instead
   cycles: true                   # the file-level cycle gate
   graph: regex                   # regex | scan-deps - the graph source
   db: build/ninja/compile_commands.json   # scan-deps: the compile database
@@ -144,7 +150,7 @@ EXIT_VIOLATIONS = 1
 EXIT_USAGE = 2
 EXIT_SKIP = 77
 
-CHECK_ARCH_VERSION = "1.2.0"
+CHECK_ARCH_VERSION = "1.3.0"
 
 INCLUDE_RE = re.compile(r'^\s*#\s*include\s*([<"])([^>"]+)[>"]', re.MULTILINE)
 ARCH_BLOCK_RE = re.compile(r"```arch[ \t]*\r?\n(.*?)```", re.DOTALL)
@@ -159,7 +165,7 @@ KNOB_KEYS = {
     "scan", "extensions", "exclude", "unclassified", "external", "forbidden",
     "quotes_relative", "repo_fallback", "quotes_resolve", "within_layer",
     "cycles", "graph", "db", "clang_scan_deps", "nesting", "unresolved",
-    "smells", "smell_limits",
+    "smells", "smell_limits", "kind",
     "namespace_root", "namespace_module", "namespace_require",
 }
 
@@ -324,6 +330,10 @@ class Contract:
                     raise ContractError(f"{path}: smell_limits: {k}: integer "
                                         f"expected, got {v!r}")
                 self.smell_limits[k] = int(v)
+        self.kind = knobs.get("kind") or "application"
+        if self.kind not in ("application", "library"):
+            raise ContractError(f"{path}: kind: application|library expected, "
+                                f"got {self.kind!r}")
 
     def quote_chain(self):
         """How a quoted include resolves, in order: 'includer' = relative to
@@ -790,7 +800,15 @@ def compute_smells(contract, repo, files, file_mod, mod_edges):
     the measured module graph. -> [{"kind", "subject", "note"}]: queue items
     for the review cadence, NEVER findings - the thresholds are judgment,
     so a smell can never fail a run. Module-level proxies, honestly named:
-    the catalog defines its smells at class/method level."""
+    the catalog defines its smells at class/method level.
+
+    kind: library relaxes the FAN-IN-based smells (orphan, island) and the
+    module-VOLUME smell (large module): for a library, zero in-repo
+    consumers is the definition of public API, and total volume in one
+    namespace is a fact (the STL argument), not dead weight. What still
+    applies in library mode: large HEADER (per-file volume - a bloated
+    header kills a-la-carte granularity) and all coupling proxies
+    (pass-through, mutual, hub). All gates stay in force."""
     lim = contract.smell_limits
     targets = {}
     sources = {}
@@ -800,7 +818,10 @@ def compute_smells(contract, repo, files, file_mod, mod_edges):
     mods = sorted({m for m in file_mod.values() if m is not None})
     smells = []
     done = set()
-    # exempt = the topmost occupied layer (entry points hang there by design)
+    is_library = contract.kind == "library"
+    # exempt = the topmost occupied layer (entry points hang there by design);
+    # in library mode EVERY module is exempt from fan-in-based smells - zero
+    # in-repo consumers is what public API means
     top_layer = None
     for lay in reversed(contract.stack):
         if any(contract.layer_of.get(m) == lay for m in mods):
@@ -809,11 +830,14 @@ def compute_smells(contract, repo, files, file_mod, mod_edges):
     for m in mods:
         fin, fout = sources.get(m, set()), targets.get(m, set())
         if not fin and not fout:
+            if is_library:
+                continue
             smells.append({"kind": "island module", "subject": m,
                            "note": "no consumers, no dependencies "
                                    "(Speculative Generality / Dead Code proxy)"})
             done.add(m)
-        elif not fin and top_layer and contract.layer_of.get(m) != top_layer:
+        elif not fin and not is_library and top_layer \
+                and contract.layer_of.get(m) != top_layer:
             smells.append({"kind": "orphan module", "subject": m,
                            "note": "no consumer (Lazy Class / Dead Code proxy)"})
             done.add(m)
@@ -841,21 +865,32 @@ def compute_smells(contract, repo, files, file_mod, mod_edges):
             smells.append({"kind": "hub module", "subject": m,
                            "note": f"fan-in {fi}, fan-out {fo} "
                                    "(Shotgun Surgery / Divergent Change proxy)"})
-    mod_files = {}
-    mod_lines = {}
+    file_lines = {}
     for p in files:
-        m = file_mod.get(p)
-        if m is None:
-            continue
-        mod_files[m] = mod_files.get(m, 0) + 1
         with open(p, encoding="utf-8", errors="replace") as fh:
-            n = sum(1 for _ in fh)
-        mod_lines[m] = mod_lines.get(m, 0) + n
-    for m in mods:
-        f, l = mod_files.get(m, 0), mod_lines.get(m, 0)
-        if f >= lim["files"] or l >= lim["lines"]:
-            smells.append({"kind": "large module", "subject": m,
-                           "note": f"{f} files, {l} lines (Large Class proxy)"})
+            file_lines[p] = sum(1 for _ in fh)
+    if is_library:
+        # volume per FILE: a bloated header is a smell even in a library;
+        # the library's total size is not
+        for p in sorted(files, key=lambda k: files[k]):
+            if file_lines[p] >= lim["lines"]:
+                smells.append({"kind": "large header", "subject": files[p],
+                               "note": f"{file_lines[p]} lines in one header "
+                                       "(Large Class proxy, per file)"})
+    else:
+        mod_files = {}
+        mod_lines = {}
+        for p in files:
+            m = file_mod.get(p)
+            if m is None:
+                continue
+            mod_files[m] = mod_files.get(m, 0) + 1
+            mod_lines[m] = mod_lines.get(m, 0) + file_lines[p]
+        for m in mods:
+            f, l = mod_files.get(m, 0), mod_lines.get(m, 0)
+            if f >= lim["files"] or l >= lim["lines"]:
+                smells.append({"kind": "large module", "subject": m,
+                               "note": f"{f} files, {l} lines (Large Class proxy)"})
     return smells
 
 
@@ -1642,6 +1677,27 @@ allow top -> mid
     expect("smells warn: SMELL warning lines, exit still 0",
            (e, any(v.startswith("warning: SMELL mutual pair") for v in out)),
            (0, True))
+
+    # 12j kind: library - zero fan-in means public API, not dead code; and
+    # volume is judged per FILE, not per module (the STL argument)
+    e, out = run(files12g, contract(b12g + "kind: library\n"), report=True)
+    expect("kind library: fan-in smells suppressed",
+           ("orphan module" in "\n".join(out)
+            or "island module" in "\n".join(out)), False)
+    e, out = run(files12g, contract(b12g + "kind: plugin\n"))
+    expect("kind: invalid value is a contract error",
+           (e, any("kind: application|library expected" in v for v in out)),
+           (2, True))
+    b12j = ("scan: src\nkind: library\nsmell_limits: lines=5\n"
+            "module same/big in same\n")
+    files12j = {"src/same/big/1.h": "#pragma once\nint a;\nint b;\nint c;\nint d;\nint e;\nint f;\n",
+                "src/same/big/2.h": "#pragma once\n"}
+    e, out = run(files12j, contract(b12j), report=True)
+    joined = "\n".join(out)
+    expect("kind library: large HEADER (per file) still reported",
+           "large header: src/same/big/1.h" in joined, True)
+    expect("kind library: large module suppressed",
+           "large module" in joined, False)
 
     # 13 exit-code contract
     e, _ = run({"src/known/k.h": "#pragma once\n"}, contract(b5))
