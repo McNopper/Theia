@@ -72,8 +72,9 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
 | CH-T1 | **Review `theia/renderer` for an internal split** — 23 files / 5093 lines, the family's largest module (check-arch `large module` proxy, 1.2.0). Candidate seams: the mesh-shader geometry path vs GI (`GiPass`) vs the post-fx cluster (TAA / A-SVGF / MotionVector).
       Techniques (refactoring.guru): Extract Class for the seams; Extract Method + Replace Method with
       Method Object for `ForwardRenderer.cpp` (1342 lines) and `demo/Application.cpp` (1089 lines). Review verdict first: split only where a seam is real; otherwise record accepted.
-      Per-file bloat queue (`header_size`, standing rule): `ForwardRenderer.cpp` 1342 lines,
-      `demo/Application.cpp` 1089 lines; promote `header_size: error` once drained. | — | backlog |
+      Per-file bloat queue (`header_size`): DRAINED (2026-10-15) — `ForwardRenderer.cpp` split into
+      `ForwardRenderer.cpp` (867) + `ForwardRendererPipelines.cpp` (499); `demo/Application.cpp`
+      into `Application.cpp` (839) + `ApplicationCompute.cpp` (273). `header_size: error` promoted. | — | backlog |
 
 Accepted by design (reviewed 2026-10-15, no action): the `demo -> theia/renderer -> theia/scene`
 chain measures as a pass-through/Middle-Man proxy — it is the designed layer chain.
