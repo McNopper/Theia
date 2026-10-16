@@ -84,6 +84,9 @@ edges. Remaining in this item: Extract Class the async-compute rig out of the de
 at link level) - accepted TU-split artifact or promote to a real class in the same batch.
 AR1 executed (2026-10-15): Theia's Scene implements the harmonia/scene_rt hooks
 (`createTriangleMesh` / `finishBuild`) and owns its TLAS; harmonia/scene is rt-free.
+T-04 reviewed (2026-10-15): REJECT - Scene::uploadBuffer is a deliberate adapter
+between the harmonia expected-API and the scene VkResult+out-param flow, applied
+uniformly at 17 call sites; removal churns them without behavior or readability gain.
 Batching: this item is front 2 (frame orchestration) of the family categorization -
 Harmonia PLAN; internal order: pipelines class -> ComputeRig -> T-03, with Q1 (coverage)
 as the precondition.
