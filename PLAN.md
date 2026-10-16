@@ -79,16 +79,17 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
 Executed (2026-10-15, file level): theia/renderer (23 files / 5093 lines) split into seven
 focused modules - renderer core (795), pipelines (933), cull (945), gi (975), postfx (913),
 depth (426), camera (135) - all under the large-module limits, gate green with 20 declared
-edges. Remaining in this item (fully specified 2026-10-15, dedicated session): the compute surface
-moves into ForwardRenderer as renderer frame state + methods - members
-(m_asyncCmdPool / m_asyncTimelineSemaphore / m_asyncSignalValue / m_asyncCmdBufs /
-m_stagesCmdBufs / m_gfxDoneSemaphores / m_asyncSemaphores / m_asyncComputeEnabled /
-m_pendingMvp / m_prevViewProj / m_prevViewProjValid) and methods (submitAsyncCompute,
-submitSingleQueueGI, dispatchLightCull, buildGiFrameParams, buildMotionVectorParams, plus
-the onBeforeSceneStages body as `beforeSceneStagesCore`, delegating from the Application
-hook). Creation + teardown move with them (onInitialize blocks + the Application dtor
-async chunk). The theia/pipelines TU-only module reports orphan (consumed at link level) -
-accepted TU-split artifact or promote to a real class in the same batch.
+edges. VERDICT (2026-10-15, after the full end-to-end read): REJECT the rig extraction.
+The async-compute orchestration is the Application's framework-contract implementation:
+`onBeforeSceneStages` is a harmonia::app::App hook, the Application submits BOTH its
+graphics and async-compute queues against the App-provided device/pool infrastructure, and
+the stages command buffers come from the App command pool. An Extract Class would invert
+that framework relationship (the rig would need to own App state) - the classic failed
+extraction. What WAS extractable landed: the queue-ownership barrier helper (T-03 root,
+harmonia::core::imageBarrier) and the Move Method of the attachment transitions into
+ForwardRenderer (the narrow face). `large module: demo` stands as a documented report-only
+signal of the IRenderer-adapter + frame-orchestrator shape. The theia/pipelines orphan
+stays the accepted TU-split artifact.
 AR1 executed (2026-10-15): Theia's Scene implements the harmonia/scene_rt hooks
 (`createTriangleMesh` / `finishBuild`) and owns its TLAS; harmonia/scene is rt-free.
 T-04 reviewed (2026-10-15): REJECT - Scene::uploadBuffer is a deliberate adapter
