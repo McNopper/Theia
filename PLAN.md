@@ -82,6 +82,8 @@ depth (426), camera (135) - all under the large-module limits, gate green with 2
 edges. Remaining in this item: Extract Class the async-compute rig out of the demo module
 (demo still measures 1457 lines); the theia/pipelines TU-only module reports orphan (consumed
 at link level) - accepted TU-split artifact or promote to a real class in the same batch.
+AR1 executed (2026-10-15): Theia's Scene implements the harmonia/scene_rt hooks
+(`createTriangleMesh` / `finishBuild`) and owns its TLAS; harmonia/scene is rt-free.
 Batching: this item is front 2 (frame orchestration) of the family categorization -
 Harmonia PLAN; internal order: pipelines class -> ComputeRig -> T-03, with Q1 (coverage)
 as the precondition.
