@@ -20,11 +20,28 @@
 #include "harmonia/core/Buffer.hpp"
 #include "harmonia/core/Logger.hpp"
 #include "harmonia/rt/TlasBuilder.hpp"
-#include "harmonia/scene/EmissiveBuilder.hpp"
+#include "harmonia/scene_rt/EmissiveBuilder.hpp"
+#include "harmonia/scene_rt/SceneRt.hpp"
+#include "harmonia/scene_rt/TriangleMesh.hpp"
 #include "harmonia/scene/Geometry.hpp"
 #include "harmonia/scene/ProceduralGeometry.hpp"
 
 namespace theia {
+
+std::unique_ptr<harmonia::scene::Geometry>
+Scene::createTriangleMesh(const harmonia::DeviceContext& ctx, const harmonia::core::CommandPool& pool,
+                          harmonia::scene::MeshData&& data, const harmonia::scene::MeshOpacity& opacity,
+                          std::string_view name) {
+    auto mesh = harmonia::scene_rt::TriangleMesh::create(ctx, pool, std::move(data), opacity, name);
+    if (!mesh) {
+        return nullptr;
+    }
+    return std::move(*mesh);
+}
+
+VkResult Scene::finishBuild(const harmonia::DeviceContext& ctx, const harmonia::core::CommandPool& pool) {
+    return harmonia::scene_rt::buildTlas(*this, ctx, pool, m_tlas, m_tlasAddress);
+}
 
 std::uint32_t Scene::addSphereMesh(const harmonia::DeviceContext& ctx,
                                    const harmonia::core::CommandPool& pool,
@@ -83,7 +100,7 @@ VkResult Scene::buildSceneBuffers(const harmonia::DeviceContext& ctx, const harm
         return r;
     }
 
-    harmonia::scene::EmissiveData emissiveData = harmonia::scene::buildEmissiveData(m_meshes, m_instances, m_materials, gpuMaterials);
+    harmonia::scene_rt::EmissiveData emissiveData = harmonia::scene_rt::buildEmissiveData(m_meshes, m_instances, m_materials, gpuMaterials);
 
     m_emissiveTriangleCount = static_cast<std::uint32_t>(emissiveData.triangles.size());
     if (emissiveData.triangles.empty()) {
@@ -99,7 +116,7 @@ VkResult Scene::buildSceneBuffers(const harmonia::DeviceContext& ctx, const harm
         return r;
     }
 
-    const std::vector<float> emissiveCdf = harmonia::scene::buildEmissiveCdf(emissiveData.power);
+    const std::vector<float> emissiveCdf = harmonia::scene_rt::buildEmissiveCdf(emissiveData.power);
     if (VkResult r = uploadBuffer(ctx,
                                   pool,
                                   std::as_bytes(std::span<const float>(emissiveCdf.data(), emissiveCdf.size())),
@@ -123,7 +140,7 @@ void Scene::buildMeshlets(std::vector<harmonia::GpuVertex>& vertices,
     constexpr std::size_t kMaxTris = 124;
 
     for (std::size_t mi = 0; mi < m_meshes.size(); ++mi) {
-        const auto* mesh = dynamic_cast<const harmonia::scene::TriangleMesh*>(m_meshes[mi].get());
+        const auto* mesh = dynamic_cast<const harmonia::scene_rt::TriangleMesh*>(m_meshes[mi].get());
         if (mesh == nullptr) {
             continue;
         }
@@ -414,7 +431,7 @@ void Scene::synthesizeEmissiveLights(const std::vector<harmonia::GpuMaterial>& g
         if (luminance <= 0.0f)
             continue;
 
-        const auto* mesh = dynamic_cast<const harmonia::scene::TriangleMesh*>(m_meshes[inst.meshIndex].get());
+        const auto* mesh = dynamic_cast<const harmonia::scene_rt::TriangleMesh*>(m_meshes[inst.meshIndex].get());
         if (!mesh)
             continue;
         const auto& verts = mesh->data().vertices;
