@@ -199,6 +199,12 @@ harmonia/slang-math/aether are downward by design), only **declared edges** exis
 included; `theia::pairing` is a module sub-namespace). **Theia never depends on Hyperion**
 — the sibling renderers are independent; shared code goes down into Harmonia (a `hyperion/` include is a hard
 violation). Sanitizer lane (Clang/GCC configures only):
+**Coverage lane (Clang/GCC configures only):** configure a separate build with
+`-DTHEIA_COVERAGE=ON` (e.g. `-B build/coverage`), then run `python tools/coverage.py` - it
+builds the instrumented tree, runs the tests with `LLVM_PROFILE_FILE` set, merges the
+profiles and prints the llvm-cov report for `src/` (gcc builds report via gcov; exit 77
+when the LLVM tools are missing). Not wired into CI yet.
+
 `-DTHEIA_SANITIZER=address|undefined|thread`. Host-side FP is deterministic
 (`/fp:strict` / `-ffp-contract=off -fno-fast-math`).
 
