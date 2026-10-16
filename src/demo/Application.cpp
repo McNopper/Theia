@@ -396,7 +396,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::app::RenderTarget&
     m_prevViewProjValid = true;
 
     // No compute pass wrote HDR this frame: leave HDR in GENERAL for host tonemap.
-    transitionGbuffersForRecord(cmd, target.image, giEnabled);
+    m_renderer->transitionGbuffersForRecord(cmd, target.image, giEnabled);
 }
 
 Application::CameraMatrices Application::computeCameraMatrices(const harmonia::app::RenderTarget& target) const noexcept {

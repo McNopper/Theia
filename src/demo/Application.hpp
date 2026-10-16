@@ -92,7 +92,6 @@ class Application final : public harmonia::app::App, public harmonia::app::IRend
     };
     [[nodiscard]] CameraMatrices computeCameraMatrices(const harmonia::app::RenderTarget& target) const noexcept;
     void dispatchLightCull(VkCommandBuffer cmd, const sm::float4x4& proj, const sm::float4x4& view) noexcept;
-    void transitionGbuffersForRecord(VkCommandBuffer cmd, VkImage hdrImage, bool giEnabled) noexcept;
     void submitAsyncCompute(VkCommandBuffer cmd,
                             const harmonia::app::RenderTarget& target,
                             const sm::float4x4& view,

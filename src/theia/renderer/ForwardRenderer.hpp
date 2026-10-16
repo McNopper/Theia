@@ -140,6 +140,11 @@ class ForwardRenderer {
     [[nodiscard]] VkImageView depthView() const noexcept { return m_depthTarget.view(); }
     [[nodiscard]] VkImage depthImage() const noexcept { return m_depthTarget.handle(); }
 
+    /// Transitions the renderer-owned gbuffer/depth attachments to GENERAL for
+    /// the async-compute GI consumption, plus the caller-owned HDR image. The
+    /// narrow face the demo record flow uses (no direct pass/device access).
+    void transitionGbuffersForRecord(VkCommandBuffer cmd, VkImage hdrImage, bool giEnabled) noexcept;
+
   private:
     struct alignas(16) MeshPushConstants {
         sm::float4x4 viewProj; ///< row-major — mul(pos, viewProj) = VP * pos directly

@@ -19,56 +19,6 @@
 
 namespace theia {
 
-void Application::transitionGbuffersForRecord(VkCommandBuffer cmd, VkImage hdrImage, bool giEnabled) noexcept {
-    if (!giEnabled) {
-        const std::array hdrToGeneral{harmonia::core::imageBarrier(hdrImage,
-                                                             VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-                                                             VK_IMAGE_LAYOUT_GENERAL,
-                                                             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                                             VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                                                             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                                                             VK_ACCESS_2_SHADER_READ_BIT)};
-        harmonia::core::pipelineBarrier(cmd, hdrToGeneral);
-    }
-
-    VkImageLayout gbufferOld = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL;
-    VkPipelineStageFlags2 gbufferSrcStage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-    VkAccessFlags2 gbufferSrcAccess = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
-    VkImageLayout depthOld = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL;
-    VkPipelineStageFlags2 depthSrcStage =
-        VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-    VkAccessFlags2 depthSrcAccess = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-    if (giEnabled) {
-        gbufferOld = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        gbufferSrcStage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        gbufferSrcAccess = VK_ACCESS_2_SHADER_READ_BIT;
-    }
-
-    const VkImageMemoryBarrier2 gbufferToGeneral = harmonia::core::imageBarrier(m_renderer->gbufferImage(),
-                                                                          gbufferOld,
-                                                                          VK_IMAGE_LAYOUT_GENERAL,
-                                                                          gbufferSrcStage,
-                                                                          gbufferSrcAccess,
-                                                                          VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                                                          VK_ACCESS_2_SHADER_READ_BIT);
-    const VkImageMemoryBarrier2 depthToGeneral{
-        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-        .pNext = nullptr,
-        .srcStageMask = depthSrcStage,
-        .srcAccessMask = depthSrcAccess,
-        .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
-        .oldLayout = depthOld,
-        .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .image = m_renderer->depthImage(),
-        .subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1},
-    };
-    const std::array guideToGeneral{gbufferToGeneral, depthToGeneral};
-    harmonia::core::pipelineBarrier(cmd, guideToGeneral);
-}
-
 GiPass::FrameParams Application::buildGiFrameParams(const sm::float4x4& view,
                                                     const sm::float4x4& curViewProj) const noexcept {
     GiPass::FrameParams gp{};
@@ -114,44 +64,29 @@ void Application::submitAsyncCompute(VkCommandBuffer cmd,
     const std::uint32_t gfxFamily = deviceContext().graphicsFamily;
     const std::uint32_t asyncFamily = deviceContext().asyncComputeQueueFamily;
 
-    const std::array<VkImageMemoryBarrier2, 3> gfxRelease{{
-        {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-         .pNext = nullptr,
-         .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-         .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-         .dstStageMask = VK_PIPELINE_STAGE_2_NONE,
-         .dstAccessMask = VK_ACCESS_2_NONE,
-         .oldLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-         .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         .srcQueueFamilyIndex = gfxFamily,
-         .dstQueueFamilyIndex = asyncFamily,
-         .image = m_renderer->giBufferImage(),
-         .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
-        {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-         .pNext = nullptr,
-         .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-         .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-         .dstStageMask = VK_PIPELINE_STAGE_2_NONE,
-         .dstAccessMask = VK_ACCESS_2_NONE,
-         .oldLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-         .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         .srcQueueFamilyIndex = gfxFamily,
-         .dstQueueFamilyIndex = asyncFamily,
-         .image = m_renderer->gbufferImage(),
-         .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
-        {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-         .pNext = nullptr,
-         .srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-         .srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-         .dstStageMask = VK_PIPELINE_STAGE_2_NONE,
-         .dstAccessMask = VK_ACCESS_2_NONE,
-         .oldLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-         .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-         .srcQueueFamilyIndex = gfxFamily,
-         .dstQueueFamilyIndex = asyncFamily,
-         .image = target.image,
-         .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
-    }};
+    const std::array gfxRelease{
+        harmonia::core::imageBarrier(m_renderer->giBufferImage(),
+                                     VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                     VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                     VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE,
+                                     VK_IMAGE_ASPECT_COLOR_BIT, gfxFamily, asyncFamily),
+        harmonia::core::imageBarrier(m_renderer->gbufferImage(),
+                                     VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                     VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                     VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE,
+                                     VK_IMAGE_ASPECT_COLOR_BIT, gfxFamily, asyncFamily),
+        harmonia::core::imageBarrier(target.image,
+                                     VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                                     VK_IMAGE_LAYOUT_GENERAL,
+                                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                     VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                     VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE,
+                                     VK_IMAGE_ASPECT_COLOR_BIT, gfxFamily, asyncFamily),
+    };
     harmonia::core::pipelineBarrier(cmd, gfxRelease);
 
     // MOD2: wait for the same slot's PREVIOUS async-compute completion (2 frames ago)
@@ -181,86 +116,56 @@ void Application::submitAsyncCompute(VkCommandBuffer cmd,
         harmonia::core::Logger::error("async compute begin command buffer failed: {}", static_cast<std::int32_t>(r));
     const VkCommandBuffer asyncCmd = m_asyncCmdBufs[slot];
 
-    const std::array<VkImageMemoryBarrier2, 3> asyncAcquire{{
-        {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-         .pNext = nullptr,
-         .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
-         .srcAccessMask = VK_ACCESS_2_NONE,
-         .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-         .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
-         .oldLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-         .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         .srcQueueFamilyIndex = gfxFamily,
-         .dstQueueFamilyIndex = asyncFamily,
-         .image = m_renderer->giBufferImage(),
-         .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
-        {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-         .pNext = nullptr,
-         .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
-         .srcAccessMask = VK_ACCESS_2_NONE,
-         .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-         .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
-         .oldLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-         .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         .srcQueueFamilyIndex = gfxFamily,
-         .dstQueueFamilyIndex = asyncFamily,
-         .image = m_renderer->gbufferImage(),
-         .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
-        {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-         .pNext = nullptr,
-         .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
-         .srcAccessMask = VK_ACCESS_2_NONE,
-         .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-         .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
-         .oldLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-         .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-         .srcQueueFamilyIndex = gfxFamily,
-         .dstQueueFamilyIndex = asyncFamily,
-         .image = target.image,
-         .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
-    }};
+    const std::array asyncAcquire{
+        harmonia::core::imageBarrier(m_renderer->giBufferImage(),
+                                     VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                     VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE,
+                                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                     VK_ACCESS_2_SHADER_READ_BIT,
+                                     VK_IMAGE_ASPECT_COLOR_BIT, gfxFamily, asyncFamily),
+        harmonia::core::imageBarrier(m_renderer->gbufferImage(),
+                                     VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                     VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE,
+                                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                     VK_ACCESS_2_SHADER_READ_BIT,
+                                     VK_IMAGE_ASPECT_COLOR_BIT, gfxFamily, asyncFamily),
+        harmonia::core::imageBarrier(target.image,
+                                     VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                                     VK_IMAGE_LAYOUT_GENERAL,
+                                     VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE,
+                                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                     VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
+                                     VK_IMAGE_ASPECT_COLOR_BIT, gfxFamily, asyncFamily),
+    };
     harmonia::core::pipelineBarrier(asyncCmd, asyncAcquire);
 
     m_giPass.record(asyncCmd, gp, /*skipPreBarriers=*/true);
 
-    const std::array<VkImageMemoryBarrier2, 3> asyncRelease{{
-        {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-         .pNext = nullptr,
-         .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-         .srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
-         .dstStageMask = VK_PIPELINE_STAGE_2_NONE,
-         .dstAccessMask = VK_ACCESS_2_NONE,
-         .oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         .newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         .srcQueueFamilyIndex = asyncFamily,
-         .dstQueueFamilyIndex = gfxFamily,
-         .image = m_renderer->giBufferImage(),
-         .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
-        {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-         .pNext = nullptr,
-         .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-         .srcAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
-         .dstStageMask = VK_PIPELINE_STAGE_2_NONE,
-         .dstAccessMask = VK_ACCESS_2_NONE,
-         .oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-         .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-         .srcQueueFamilyIndex = asyncFamily,
-         .dstQueueFamilyIndex = gfxFamily,
-         .image = m_renderer->gbufferImage(),
-         .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
-        {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
-         .pNext = nullptr,
-         .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-         .srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT,
-         .dstStageMask = VK_PIPELINE_STAGE_2_NONE,
-         .dstAccessMask = VK_ACCESS_2_NONE,
-         .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
-         .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-         .srcQueueFamilyIndex = asyncFamily,
-         .dstQueueFamilyIndex = gfxFamily,
-         .image = target.image,
-         .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}},
-    }};
+    const std::array asyncRelease{
+        harmonia::core::imageBarrier(m_renderer->giBufferImage(),
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                     VK_ACCESS_2_SHADER_READ_BIT,
+                                     VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE,
+                                     VK_IMAGE_ASPECT_COLOR_BIT, asyncFamily, gfxFamily),
+        harmonia::core::imageBarrier(m_renderer->gbufferImage(),
+                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                     VK_IMAGE_LAYOUT_GENERAL,
+                                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                     VK_ACCESS_2_SHADER_READ_BIT,
+                                     VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE,
+                                     VK_IMAGE_ASPECT_COLOR_BIT, asyncFamily, gfxFamily),
+        harmonia::core::imageBarrier(target.image,
+                                     VK_IMAGE_LAYOUT_GENERAL,
+                                     VK_IMAGE_LAYOUT_GENERAL,
+                                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                     VK_ACCESS_2_SHADER_WRITE_BIT,
+                                     VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE,
+                                     VK_IMAGE_ASPECT_COLOR_BIT, asyncFamily, gfxFamily),
+    };
     harmonia::core::pipelineBarrier(asyncCmd, asyncRelease);
     if (const VkResult r = vkEndCommandBuffer(asyncCmd); r != VK_SUCCESS)
         harmonia::core::Logger::error("async compute end command buffer failed: {}", static_cast<std::int32_t>(r));

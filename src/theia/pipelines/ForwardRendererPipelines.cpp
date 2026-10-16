@@ -763,6 +763,44 @@ bool ForwardRenderer::createDepthTarget() {
 }
 
 
+void ForwardRenderer::transitionGbuffersForRecord(VkCommandBuffer cmd, VkImage hdrImage, bool giEnabled) noexcept {
+    if (!giEnabled) {
+        const std::array hdrToGeneral{harmonia::core::imageBarrier(hdrImage,
+                                                             VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                                                             VK_IMAGE_LAYOUT_GENERAL,
+                                                             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                                             VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                                             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                                             VK_ACCESS_2_SHADER_READ_BIT)};
+        harmonia::core::pipelineBarrier(cmd, hdrToGeneral);
+    }
+
+    VkImageLayout gbufferOld = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL;
+    VkPipelineStageFlags2 gbufferSrcStage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    VkAccessFlags2 gbufferSrcAccess = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    VkImageLayout depthOld = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL;
+    VkPipelineStageFlags2 depthSrcStage =
+        VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+    VkAccessFlags2 depthSrcAccess = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    if (giEnabled) {
+        gbufferOld = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        gbufferSrcStage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        gbufferSrcAccess = VK_ACCESS_2_SHADER_READ_BIT;
+    }
+
+    const VkImageMemoryBarrier2 gbufferToGeneral =
+        harmonia::core::imageBarrier(gbufferImage(), gbufferOld, VK_IMAGE_LAYOUT_GENERAL,
+                                     gbufferSrcStage, gbufferSrcAccess,
+                                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
+    const VkImageMemoryBarrier2 depthToGeneral =
+        harmonia::core::imageBarrier(depthImage(), depthOld, VK_IMAGE_LAYOUT_GENERAL,
+                                     depthSrcStage, depthSrcAccess,
+                                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,
+                                     VK_IMAGE_ASPECT_DEPTH_BIT);
+    const std::array guideToGeneral{gbufferToGeneral, depthToGeneral};
+    harmonia::core::pipelineBarrier(cmd, guideToGeneral);
+}
+
 void ForwardRenderer::prepareAttachments(VkCommandBuffer cmd) {
     const std::array imageBarriers{
         harmonia::core::imageBarrier(m_config.hdrImage,
