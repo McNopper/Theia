@@ -44,7 +44,7 @@ jobs:
           ! grep -q ': error:' cppcheck_output.txt
 
       - name: ruff (tools/)
-        run: ruff check tools/ --output-format=text
+        run: ruff check tools/ --output-format=concise
 
       - name: bandit (tools/)
         run: |
