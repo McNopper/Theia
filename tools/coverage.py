@@ -13,6 +13,7 @@ Usage: python tools/coverage.py [--build DIR] [--skip-build] [--show]
 """
 import argparse
 import glob
+import json
 import os
 import shutil
 import subprocess
@@ -52,6 +53,30 @@ def llvm_tool(name, build_dir):
 def run(cmd, **kw):
     print('+', ' '.join(cmd))
     return subprocess.run(cmd, **kw).returncode
+
+
+def test_binaries(build_dir):
+    """The exact binaries the tests run, discovered from ctest itself.
+
+    A filename glob cannot do this: on Linux the executables carry no .exe
+    suffix, so the old glob silently produced an empty report while exiting 0
+    (first CI run of this lane, ubuntu: green job, zero output). Analysis-lane
+    tests (check_tidy et al.) resolve to the interpreter, which lives outside
+    the build dir and is excluded here; so are vcpkg's own installed binaries.
+    """
+    try:
+        out = subprocess.run(
+            ['ctest', '--test-dir', build_dir, '--show-only=json-v1'],
+            capture_output=True, text=True, timeout=60, check=True).stdout
+        tests = json.loads(out).get('tests', [])
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return []
+    root = os.path.realpath(build_dir) + os.sep
+    bins = sorted({t['command'][0] for t in tests
+                   if t.get('command') and os.path.isfile(t['command'][0])})
+    return [b for b in bins
+            if os.path.realpath(b).startswith(root)
+            and os.sep + 'vcpkg_installed' + os.sep not in b]
 
 
 def main():
@@ -114,14 +139,15 @@ def main():
         return rc
 
     srcdir = os.path.join(ROOT, 'src')
-    exes = sorted(glob.glob(os.path.join(args.build, '**', '*.exe'), recursive=True))
-    exes = [e for e in exes
-            if os.sep + 'vcpkg_installed' + os.sep not in e
-            and os.sep + 'CMakeFiles' + os.sep not in e and os.path.isfile(e)]
+    exes = test_binaries(args.build)
+    if not exes:
+        print('coverage: no test binaries discovered - no report produced')
+        return 1
     failed = False
     for exe in exes:
         mode = 'show' if args.show else 'report'
-        cmd = [llvmcov, mode, exe, '-instr-profile=' + merged, '-sources', srcdir]
+        # source dir as a positional filter (documented SOURCES argument)
+        cmd = [llvmcov, mode, exe, '-instr-profile=' + merged, srcdir]
         print('+', ' '.join(cmd))
         rc = subprocess.run(cmd).returncode
         failed = failed or rc != 0
