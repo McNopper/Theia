@@ -547,7 +547,7 @@ std::uint32_t Scene::instanceMask(std::size_t instanceIndex) const {
     bool isTransparent = false;
     if (!isEmissive && matIdx < m_materials.size()) {
         const auto gpuMat = m_materials[matIdx].gpu();
-        const float opacity = std::clamp(gpuMat.opacityFlagsPad.x, 0.0f, 1.0f);
+        const float opacity = sm::saturate(gpuMat.opacityFlagsPad.x);
         const float transmissionWeight = std::max(gpuMat.transmissionColorWeight.w, 0.0f);
         isTransparent = (opacity < 0.9999f) || (transmissionWeight > 0.0f);
     }

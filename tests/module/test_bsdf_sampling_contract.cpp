@@ -2,13 +2,14 @@
 #include <cmath>
 #include <cstdint>
 #include <gtest/gtest.h>
+#include <slang-math/slang-math.hpp>
 
 #include "harmonia/utils/Rng.hpp"
 
 namespace {
 
 float fresnelDielectric(float cosThetaI, float eta) {
-    const float c = std::clamp(std::abs(cosThetaI), 0.0F, 1.0F);
+    const float c = sm::saturate(std::abs(cosThetaI));
     const float g2 = eta * eta - 1.0F + c * c;
     if (g2 <= 0.0F) {
         return 1.0F;
@@ -26,7 +27,7 @@ float fresnelDielectric(float cosThetaI, float eta) {
         return 1.0F;
     }
     const float b = bNum / bDen;
-    return std::clamp(0.5F * a * a * (1.0F + b * b), 0.0F, 1.0F);
+    return sm::saturate(0.5F * a * a * (1.0F + b * b));
 }
 
 } // namespace

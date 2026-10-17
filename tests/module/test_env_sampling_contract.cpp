@@ -37,12 +37,12 @@ sm::float3 sampleEnvImportanceDir(const std::vector<float>& marginalCdf,
 
     const float rowLo = marginalCdf[row];
     const float rowHi = marginalCdf[row + 1U];
-    const float tRow = (rowHi > rowLo) ? std::clamp((xi.x - rowLo) / (rowHi - rowLo), 0.0F, 1.0F) : 0.5F;
+    const float tRow = (rowHi > rowLo) ? sm::saturate((xi.x - rowLo) / (rowHi - rowLo)) : 0.5F;
 
     const std::uint32_t cBase = row * (W + 1U);
     const float colLo = conditionalCdf[cBase + col];
     const float colHi = conditionalCdf[cBase + col + 1U];
-    const float tCol = (colHi > colLo) ? std::clamp((xi.y - colLo) / (colHi - colLo), 0.0F, 1.0F) : 0.5F;
+    const float tCol = (colHi > colLo) ? sm::saturate((xi.y - colLo) / (colHi - colLo)) : 0.5F;
 
     const float uFrac = (static_cast<float>(col) + tCol) / static_cast<float>(W);
     const float vFrac = (static_cast<float>(row) + tRow) / static_cast<float>(H);
