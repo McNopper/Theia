@@ -45,15 +45,16 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
 
 ## At a glance
 
-- **Release:** v0.7.8 — lockstep with Harmonia/Hyperion (slang-math v0.2.1, Aether v0.7.4;
-  all tag-synced with GitHub).
-- **Last shipped (v0.7.8):** **estimator-pure capture** — the extended two-tier contract
-  (firefly clamps + A3(a) regularization off, camera jitter forced on for `--output`);
-  parity re-baselined with bias removed — see Baseline.
-- **Next owned item:** **I6** (configurable frames-per-flip) — below. The shared-estimator
+- **Release:** v0.7.15 - the band split (renderer -> core/pipelines/cull/gi/postfx/
+  depth/camera, all under the large-module limits) + AR1 consumption. Lockstep
+  reference: Harmonia v0.7.14, Hyperion v0.7.14 (Aether v0.7.7, slang-math v0.4.0).
+- **Quality gates (family-uniform):** blocking lint (Q2-Q6) on every push -
+  clang-format pinned 22.1.3, ruff contract in `ruff.toml` (identical x5), cppcheck,
+  bandit, actionlint 1.7.12, yamllint. Coverage stays a local activity (the test
+  suite needs a GPU).
+- **Next owned item:** **I6** (configurable frames-per-flip) - below. The shared-estimator
   next-up items (GI-SMS, C9, DN3, LS2, PERF5/PERF4, C11, C12) are owned by
   `Harmonia/PLAN.md` and wire into `gi.comp.slang` when they land.
-
 ## How to continue
 
 ### Owned items
