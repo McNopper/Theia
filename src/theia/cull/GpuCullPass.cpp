@@ -45,19 +45,19 @@ bool GpuCullPass::initialize(const harmonia::DeviceContext& ctx, const char* spv
     // restores groupCountY=1 and groupCountZ=1, and accumulates groupCountX atomically.
     constexpr VkDeviceSize kIndirectBufSize = kMeshTaskIndirectCmdSize;
 
-    auto compactBuf = harmonia::core::Buffer::create(ctx,
-                                               kCompactListSize,
-                                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                   VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                               VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                                               "theia.gpuCull.compactInstanceList");
+    auto compactBuf =
+        harmonia::core::Buffer::create(ctx,
+                                       kCompactListSize,
+                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                       VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                       "theia.gpuCull.compactInstanceList");
     auto indirectBuf =
         harmonia::core::Buffer::create(ctx,
-                                 kIndirectBufSize,
-                                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-                                     VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                 VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                                 "theia.gpuCull.indirectDrawBuf");
+                                       kIndirectBufSize,
+                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+                                           VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                       VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                       "theia.gpuCull.indirectDrawBuf");
 
     if (!compactBuf || !indirectBuf) {
         harmonia::core::Logger::error("GpuCullPass: failed to allocate output buffers");

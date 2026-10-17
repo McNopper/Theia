@@ -12,7 +12,6 @@ Exit codes: 0 report produced, 1 test or coverage failure, 77 skipped
 Usage: python tools/coverage.py [--build DIR] [--skip-build] [--show]
 """
 import argparse
-import io
 import glob
 import os
 import shutil
@@ -35,7 +34,7 @@ def llvm_tool(name, build_dir):
     comp = None
     cache = os.path.join(build_dir, 'CMakeCache.txt')
     if os.path.isfile(cache):
-        for line in io.open(cache, encoding='utf-8', errors='replace'):
+        for line in open(cache, encoding='utf-8', errors='replace'):
             if line.startswith('CMAKE_CXX_COMPILER:') and ':FILEPATH=' in line:
                 comp = line.split('FILEPATH=', 1)[1].strip()
                 break
@@ -75,7 +74,7 @@ def main():
             keys = ('CMAKE_GENERATOR:', 'CMAKE_GENERATOR_PLATFORM:',
                     'CMAKE_C_COMPILER:', 'CMAKE_CXX_COMPILER:',
                     'CMAKE_TOOLCHAIN_FILE:')
-            for line in io.open(main_cache, encoding='utf-8', errors='replace'):
+            for line in open(main_cache, encoding='utf-8', errors='replace'):
                 for key in keys:
                     if line.startswith(key):
                         value = line.split('=', 1)[1].strip()

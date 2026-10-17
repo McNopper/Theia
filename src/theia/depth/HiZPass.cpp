@@ -90,14 +90,15 @@ void HiZPass::shutdown() {
 
 bool HiZPass::createImage() noexcept {
     auto img = harmonia::core::Image::create(*m_ctx,
-                                       {m_width, m_height},
-                                       VK_FORMAT_R32_SFLOAT,
-                                       VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                                       VK_IMAGE_ASPECT_COLOR_BIT,
-                                       "theia.hiZ",
-                                       m_mipLevels);
+                                             {m_width, m_height},
+                                             VK_FORMAT_R32_SFLOAT,
+                                             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                             VK_IMAGE_ASPECT_COLOR_BIT,
+                                             "theia.hiZ",
+                                             m_mipLevels);
     if (!img) {
-        harmonia::core::Logger::error("HiZPass: failed to create Hi-Z image: VkResult {}", static_cast<int>(img.error()));
+        harmonia::core::Logger::error("HiZPass: failed to create Hi-Z image: VkResult {}",
+                                      static_cast<int>(img.error()));
         return false;
     }
     m_image = std::move(*img);

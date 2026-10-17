@@ -71,15 +71,16 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx,
         static_cast<VkDeviceSize>(cfg.width) * static_cast<VkDeviceSize>(cfg.height) * kReservoirStride;
     if (reservoirBytes > 0) {
         for (auto& slot : m_reservoirBuf) {
-            auto buf = harmonia::core::Buffer::create(ctx,
-                                                reservoirBytes,
-                                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                                VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                                                "theia.gi.restirReservoir");
+            auto buf =
+                harmonia::core::Buffer::create(ctx,
+                                               reservoirBytes,
+                                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                                   VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                               VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                               "theia.gi.restirReservoir");
             if (!buf) {
                 harmonia::core::Logger::error("GiPass: failed to create ReSTIR reservoir buffer: VkResult {}",
-                                        static_cast<int>(buf.error()));
+                                              static_cast<int>(buf.error()));
                 return false;
             }
             slot = std::move(*buf);
@@ -88,15 +89,16 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx,
         const VkDeviceSize pathReservoirBytes =
             static_cast<VkDeviceSize>(cfg.width) * static_cast<VkDeviceSize>(cfg.height) * kPathReservoirStride;
         for (auto& slot : m_pathReservoirBuf) {
-            auto buf = harmonia::core::Buffer::create(ctx,
-                                                pathReservoirBytes,
-                                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                                VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                                                "theia.gi.restirPathReservoir");
+            auto buf =
+                harmonia::core::Buffer::create(ctx,
+                                               pathReservoirBytes,
+                                               VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                                   VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                               VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                               "theia.gi.restirPathReservoir");
             if (!buf) {
                 harmonia::core::Logger::error("GiPass: failed to create ReSTIR path reservoir buffer: VkResult {}",
-                                        static_cast<int>(buf.error()));
+                                              static_cast<int>(buf.error()));
                 return false;
             }
             slot = std::move(*buf);
@@ -108,14 +110,14 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx,
     {
         const std::vector<std::uint32_t> packed = theia::pairing::buildPackedOffsets(kPairingSeed);
         auto buf = harmonia::core::Buffer::upload(ctx,
-                                            uploadPool,
-                                            std::as_bytes(std::span<const std::uint32_t>(packed)),
-                                            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                            "theia.gi.pairingOffsets");
+                                                  uploadPool,
+                                                  std::as_bytes(std::span<const std::uint32_t>(packed)),
+                                                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                      VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                                  "theia.gi.pairingOffsets");
         if (!buf) {
             harmonia::core::Logger::error("GiPass: failed to upload pairing offsets: VkResult {}",
-                                    static_cast<int>(buf.error()));
+                                          static_cast<int>(buf.error()));
             return false;
         }
         m_pairingOffsetBuf = std::move(*buf);
@@ -192,18 +194,16 @@ bool GiPass::createDescriptors() {
         {21, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI2 PT path reservoirs
                                                                                           // (prev, RO)
         {22, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI-ENH pairing maps
-        {23, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI-ENH shift share (cur, RW)
-        {24, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI-ENH shift share (prev, RO)
+        {23, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI-ENH shift share (cur,
+                                                                                          // RW)
+        {24, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI-ENH shift share (prev,
+                                                                                          // RO)
     }};
 
     // MOD1: no UPDATE_AFTER_BIND — incompatible with DESCRIPTOR_BUFFER layouts.
     constexpr VkDescriptorBindingFlags kTextureFlags = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
-    const std::array<VkDescriptorBindingFlags, 25> bindingFlags{
-        0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0,
-        0, kTextureFlags, 0, 0, 0, 0,
-        0, 0, 0, 0, 0,
-        0, 0};
+    const std::array<VkDescriptorBindingFlags, 25> bindingFlags{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, kTextureFlags,
+                                                                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = static_cast<std::uint32_t>(bindingFlags.size()),
@@ -226,10 +226,10 @@ bool GiPass::createDescriptors() {
 
     // MOD1: descriptor buffers (replaces the pool + allocated sets).
     for (std::uint32_t si = 0; si < kDescriptorSlots; ++si) {
-        if (!m_descWriters[si].init(*m_ctx, setLayout, 25,
-                                    si == 0 ? "theia.gi.descBuf0" : "theia.gi.descBuf1")) {
+        if (!m_descWriters[si].init(*m_ctx, setLayout, 25, si == 0 ? "theia.gi.descBuf0" : "theia.gi.descBuf1")) {
             harmonia::core::Logger::error("GiPass: failed to create descriptor buffer slot {}", si);
-            for (std::uint32_t j = 0; j <= si; ++j) m_descWriters[j].shutdown();
+            for (std::uint32_t j = 0; j <= si; ++j)
+                m_descWriters[j].shutdown();
             return false;
         }
     }
@@ -328,9 +328,12 @@ void GiPass::updateDescriptors(const FrameParams& params) {
             const std::uint32_t texCount =
                 std::min(static_cast<std::uint32_t>(sceneTextures.size()), kMaxBindlessTextures);
             for (std::uint32_t i = 0; i < texCount; ++i) {
-                w.writeCombinedImageSampler(*m_ctx, 13, i, sceneTextures[i].sampler(),
-                                             sceneTextures[i].image().view(),
-                                             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                w.writeCombinedImageSampler(*m_ctx,
+                                            13,
+                                            i,
+                                            sceneTextures[i].sampler(),
+                                            sceneTextures[i].image().view(),
+                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             }
         }
     }
@@ -484,26 +487,26 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
     if (!skipPreBarriers) {
         const std::array<VkImageMemoryBarrier2, 3> preBarriers{{
             harmonia::core::imageBarrier(m_cfg.giBufferImage,
-                                   VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                   VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                   VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                   VK_ACCESS_2_SHADER_READ_BIT),
+                                         VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                         VK_ACCESS_2_SHADER_READ_BIT),
             harmonia::core::imageBarrier(m_cfg.gbufferImage,
-                                   VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-                                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                   VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                   VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                   VK_ACCESS_2_SHADER_READ_BIT),
+                                         VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                                         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                         VK_ACCESS_2_SHADER_READ_BIT),
             harmonia::core::imageBarrier(m_cfg.hdrImage,
-                                   VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-                                   VK_IMAGE_LAYOUT_GENERAL,
-                                   VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                   VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-                                   VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT),
+                                         VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                                         VK_IMAGE_LAYOUT_GENERAL,
+                                         VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                         VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                         VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT),
         }};
         const VkDependencyInfo preDep{
             .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,

@@ -103,23 +103,24 @@ bool Application::onInitialize() {
             }
         }
         if (const auto shiftMaskRaw = harmonia::core::getEnvString("THEIA_SHIFT_MASK")) {
-            m_reconnectShiftEnabled =
-                static_cast<std::uint32_t>(std::strtoul(shiftMaskRaw->c_str(), nullptr, 0)) & 3u;
+            m_reconnectShiftEnabled = static_cast<std::uint32_t>(std::strtoul(shiftMaskRaw->c_str(), nullptr, 0)) & 3u;
             harmonia::core::Logger::info("THEIA_SHIFT_MASK = {} (k2={} k3={})",
-                m_reconnectShiftEnabled,
-                (m_reconnectShiftEnabled & 1u) != 0u,
-                (m_reconnectShiftEnabled & 2u) != 0u);
+                                         m_reconnectShiftEnabled,
+                                         (m_reconnectShiftEnabled & 1u) != 0u,
+                                         (m_reconnectShiftEnabled & 2u) != 0u);
         }
     }
     if (m_pureEstimatorCapture) {
         if (!m_cameraJitterEnabled) {
-            harmonia::core::Logger::info("harmonia::renderer::Camera jitter forced ON for capture (--output): parity pixel sampling");
+            harmonia::core::Logger::info(
+                "harmonia::renderer::Camera jitter forced ON for capture (--output): parity pixel sampling");
         }
         m_cameraJitterEnabled = true;
         m_renderer->setCameraJitterEnabled(true);
         m_renderer->setFireflyClampEnabled(false);
-        harmonia::core::Logger::info("harmonia::Estimator-pure capture (--output): firefly clamps off, A3(a) regularization "
-                               "off, camera jitter on");
+        harmonia::core::Logger::info(
+            "harmonia::Estimator-pure capture (--output): firefly clamps off, A3(a) regularization "
+            "off, camera jitter on");
     }
 
     // Progressive accumulation in the interactive window: a stationary camera
@@ -311,9 +312,9 @@ bool Application::onSceneLoaded(const harmonia::scene::SceneLoader::SceneConfig&
     m_renderer->setTransparentMaxDepth(sceneConfig.maxDepth.value_or(2u));
 
     harmonia::core::Logger::info("Loaded scene: {} instances, {} bytes vb, {} bytes ib",
-                           m_scene->instanceCount(),
-                           m_scene->vertexBuffer().size(),
-                           m_scene->indexBuffer().size());
+                                 m_scene->instanceCount(),
+                                 m_scene->vertexBuffer().size(),
+                                 m_scene->indexBuffer().size());
 
     // Environment: the host loaded the environment probe (if any). The raw panorama and
     // its importance-sampling CDFs feed the sky background and the RT-GI env-NEE path.
@@ -399,7 +400,8 @@ void Application::record(VkCommandBuffer cmd, const harmonia::app::RenderTarget&
     m_renderer->transitionGbuffersForRecord(cmd, target.image, giEnabled);
 }
 
-Application::CameraMatrices Application::computeCameraMatrices(const harmonia::app::RenderTarget& target) const noexcept {
+Application::CameraMatrices
+Application::computeCameraMatrices(const harmonia::app::RenderTarget& target) const noexcept {
     const float aspect = static_cast<float>(target.extent.width) / static_cast<float>(target.extent.height);
     sm::float4x4 proj = sm::perspective(sm::radians(m_camera.vfovDeg), aspect, m_camera.nearPlane, m_camera.farPlane);
     proj[1][1] *= -1.0f;
@@ -412,13 +414,8 @@ Application::CameraMatrices Application::computeCameraMatrices(const harmonia::a
 
 void Application::dispatchLightCull(VkCommandBuffer cmd, const sm::float4x4& proj, const sm::float4x4& view) noexcept {
     if (m_scene && m_scene->lightCount() > 0 && m_lightCuller.tilesX() > 0) {
-        m_lightCuller.dispatch(cmd,
-                               m_scene->lightBuffer(),
-                               m_scene->lightCount(),
-                               proj,
-                               view,
-                               m_camera.nearPlane,
-                               m_camera.farPlane);
+        m_lightCuller.dispatch(
+            cmd, m_scene->lightBuffer(), m_scene->lightCount(), proj, view, m_camera.nearPlane, m_camera.farPlane);
     }
 }
 

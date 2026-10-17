@@ -26,12 +26,13 @@ bool GpuDrivenState::ensureVisibilityBuffers(const harmonia::DeviceContext& ctx,
     const std::uint32_t meshletCount = std::max(1u, scene.meshletCount());
     const VkDeviceSize size = static_cast<VkDeviceSize>(meshletCount) * sizeof(std::uint32_t);
     for (auto& buf : meshletVisibility) {
-        auto created = harmonia::core::Buffer::create(ctx,
-                                                size,
-                                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                                                    VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                                VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                                                "theia.meshletVisibility");
+        auto created =
+            harmonia::core::Buffer::create(ctx,
+                                           size,
+                                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                               VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                           VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                           "theia.meshletVisibility");
         if (!created) {
             harmonia::core::Logger::error("Failed to create meshlet visibility buffer");
             return false;
@@ -54,8 +55,7 @@ void GpuDrivenState::dispatchCull(VkCommandBuffer cmd,
     if (!canDraw || !gpuCullPass.isInitialized()) {
         return;
     }
-    gpuCullPass.dispatch(
-        cmd, scene.instanceBuffer(), scene.instanceBoundsBuffer(), instanceCount, viewProj);
+    gpuCullPass.dispatch(cmd, scene.instanceBuffer(), scene.instanceBoundsBuffer(), instanceCount, viewProj);
     const std::array cullBarriers{
         VkBufferMemoryBarrier2{
             .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,

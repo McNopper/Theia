@@ -129,8 +129,8 @@ void ForwardRenderer::drawOpaque(VkCommandBuffer cmd,
     {
         const std::array<harmonia::core::DescriptorBufferWriter*, 4> writers{
             &m_desc.mesh, &m_desc.mat, &m_desc.ibl, &m_desc.texture};
-        harmonia::core::DescriptorBufferWriter::bindSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0,
-                                                    writers);
+        harmonia::core::DescriptorBufferWriter::bindSets(
+            cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, writers);
     }
     auto pc = pcBase;
     pc.presentationParams.y = 0.0f; // opaque routing in the task shader

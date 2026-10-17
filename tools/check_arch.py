@@ -738,8 +738,8 @@ def build_graph_scan_deps(contract, repo, files):
     except OSError:
         # a missing tool is a SKIP, never a traceback (A2)
         return (None, EXIT_SKIP,
-                [f"skip: clang-scan-deps not found ({csd}) - install the VS LLVM "
-                 "component, put it on PATH, or set clang_scan_deps:"])
+                [(f"skip: clang-scan-deps not found ({csd}) - install the VS LLVM "
+                 "component, put it on PATH, or set clang_scan_deps:")])
     if r.returncode != 0 and not r.stdout:
         return (None, EXIT_USAGE,
                 [f"clang-scan-deps failed ({csd}): {r.stderr.strip()[-500:]}"])
@@ -749,8 +749,8 @@ def build_graph_scan_deps(contract, repo, files):
     if unscanned:
         rel = [os.path.relpath(t, repo) for t in unscanned]
         return (None, EXIT_VIOLATIONS,
-                [f"incomplete scan: {len(unscanned)} of {len(tus)} translation units "
-                 "not scanned"] + ["  " + p for p in rel])
+                [(f"incomplete scan: {len(unscanned)} of {len(tus)} translation units "
+                 "not scanned")] + ["  " + p for p in rel])
     norm_to_file = {os.path.normpath(p): p for p in files}
     resolved_tus = 0
     adj = {p: set() for p in files}
@@ -789,9 +789,9 @@ def build_graph_scan_deps(contract, repo, files):
     # path-form mismatch between the database and the scan)
     if tus and resolved_tus == 0:
         return (None, EXIT_USAGE,
-                [f"blind scan-deps graph: the database lists {len(tus)} translation "
+                [(f"blind scan-deps graph: the database lists {len(tus)} translation "
                  "units but none resolve into the scanned roots - a degraded run is "
-                 "never green (check the database's paths)"])
+                 "never green (check the database's paths)")])
     return ((adj, file_mod, mod_edges, ext_counts, forbidden_hits, []), 0, [])
 
 
@@ -991,8 +991,8 @@ def check_diagram(contract, text):
     shown = text[a + len(DIAGRAM_BEGIN):b].strip().replace("\r\n", "\n")
     want = contract.marked_diagram().strip()
     if shown != want:
-        return ["DIAGRAM DRIFT: the diagram section is stale "
-                "(run check_arch.py --diagram)"]
+        return [("DIAGRAM DRIFT: the diagram section is stale "
+                "(run check_arch.py --diagram)")]
     return []
 
 

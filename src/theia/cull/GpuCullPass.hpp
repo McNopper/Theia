@@ -79,7 +79,9 @@ class GpuCullPass {
 
     /// GPU buffer of visible instance indices (uint[kMaxInstances]).
     /// Bind to ForwardRenderer set 0, binding 10 for the task shader to read.
-    [[nodiscard]] const harmonia::core::Buffer& compactInstanceListBuffer() const noexcept { return m_compactInstanceListBuf; }
+    [[nodiscard]] const harmonia::core::Buffer& compactInstanceListBuffer() const noexcept {
+        return m_compactInstanceListBuf;
+    }
 
     /// Single VkDrawMeshTasksIndirectCommandEXT entry: {visibleCount, 1, 1}.
     /// GD3: pass to vkCmdDrawMeshTasksIndirectEXT (drawCount=1, stride=12).
@@ -100,7 +102,8 @@ class GpuCullPass {
     harmonia::core::DescriptorBufferWriter m_descWriter;
 
     harmonia::core::Buffer m_compactInstanceListBuf; ///< uint[kMaxInstances]  STORAGE
-    harmonia::core::Buffer m_indirectDrawBuf; ///< single VkDrawMeshTasksIndirectCommandEXT  STORAGE | INDIRECT | DEVICE_ADDR
+    harmonia::core::Buffer
+        m_indirectDrawBuf; ///< single VkDrawMeshTasksIndirectCommandEXT  STORAGE | INDIRECT | DEVICE_ADDR
 };
 
 } // namespace theia

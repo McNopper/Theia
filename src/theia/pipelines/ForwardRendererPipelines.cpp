@@ -2,7 +2,6 @@
 // theia::renderer::ForwardRenderer: graphics pipelines, descriptor set
 // layouts and pipeline layouts. Methods of theia::renderer::ForwardRenderer
 // split out of ForwardRenderer.cpp (TU split, no behavior change).
-#include "theia/renderer/ForwardRenderer.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -17,6 +16,8 @@
 #include <theia/renderer/ShaderPath.hpp>
 #include <theia/scene/Scene.hpp>
 #include <vector>
+
+#include "theia/renderer/ForwardRenderer.hpp"
 
 #ifdef __clang__
 #pragma clang diagnostic push
@@ -145,8 +146,7 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
                                      VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                      nullptr},
     };
-    if (!createOneSetLayout(meshBindings, {}, "Failed to create mesh descriptor set layout",
-                            m_desc.meshSetLayout)) {
+    if (!createOneSetLayout(meshBindings, {}, "Failed to create mesh descriptor set layout", m_desc.meshSetLayout)) {
         return false;
     }
 
@@ -159,8 +159,7 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
         VkDescriptorSetLayoutBinding{
             5, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
     };
-    if (!createOneSetLayout(matBindings, {}, "Failed to create material descriptor set layout",
-                            m_desc.matSetLayout)) {
+    if (!createOneSetLayout(matBindings, {}, "Failed to create material descriptor set layout", m_desc.matSetLayout)) {
         m_desc.meshSetLayout.reset();
         return false;
     }
@@ -174,19 +173,18 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
         VkDescriptorSetLayoutBinding{6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
     };
-    if (!createOneSetLayout(iblBindings, {}, "Failed to create IBL descriptor set layout",
-                            m_desc.iblSetLayout)) {
+    if (!createOneSetLayout(iblBindings, {}, "Failed to create IBL descriptor set layout", m_desc.iblSetLayout)) {
         m_desc.matSetLayout.reset();
         m_desc.meshSetLayout.reset();
         return false;
     }
 
-    const std::array<VkDescriptorSetLayoutBinding, 1> textureBindings{
-        VkDescriptorSetLayoutBinding{
-            0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};
+    const std::array<VkDescriptorSetLayoutBinding, 1> textureBindings{VkDescriptorSetLayoutBinding{
+        0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxBindlessTextures, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}};
     const std::array<VkDescriptorBindingFlags, 1> textureBindingFlags{
         VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT}; // MOD1: no UPDATE_AFTER_BIND (incompatible with DESCRIPTOR_BUFFER)
-    if (!createOneSetLayout(textureBindings, textureBindingFlags,
+    if (!createOneSetLayout(textureBindings,
+                            textureBindingFlags,
                             "Failed to create bindless texture descriptor set layout",
                             m_desc.textureSetLayout)) {
         m_desc.iblSetLayout.reset();
@@ -233,9 +231,9 @@ bool ForwardRenderer::createPipelineLayouts() {
     if (vkCreatePipelineLayout(m_ctx->device, &layoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
         harmonia::core::Logger::error("Failed to create graphics pipeline layout");
         m_desc.mesh.shutdown();
-    m_desc.mat.shutdown();
-    m_desc.ibl.shutdown();
-    m_desc.texture.shutdown();
+        m_desc.mat.shutdown();
+        m_desc.ibl.shutdown();
+        m_desc.texture.shutdown();
         m_desc.textureSetLayout.reset();
         m_desc.iblSetLayout.reset();
         m_desc.matSetLayout.reset();
@@ -310,9 +308,9 @@ bool ForwardRenderer::createOpaquePipeline() {
         harmonia::core::Logger::error("Failed to create graphics pipeline");
         m_pipelineLayout.reset();
         m_desc.mesh.shutdown();
-    m_desc.mat.shutdown();
-    m_desc.ibl.shutdown();
-    m_desc.texture.shutdown();
+        m_desc.mat.shutdown();
+        m_desc.ibl.shutdown();
+        m_desc.texture.shutdown();
         m_desc.iblSetLayout.reset();
         m_desc.matSetLayout.reset();
         m_desc.meshSetLayout.reset();
@@ -391,9 +389,9 @@ bool ForwardRenderer::createTransparentPipeline() {
         m_graphicsPipeline.reset();
         m_pipelineLayout.reset();
         m_desc.mesh.shutdown();
-    m_desc.mat.shutdown();
-    m_desc.ibl.shutdown();
-    m_desc.texture.shutdown();
+        m_desc.mat.shutdown();
+        m_desc.ibl.shutdown();
+        m_desc.texture.shutdown();
         m_desc.textureSetLayout.reset();
         m_desc.iblSetLayout.reset();
         m_desc.matSetLayout.reset();
@@ -503,7 +501,6 @@ bool ForwardRenderer::createSkyPipeline() {
     m_skyPipeline = harmonia::core::UniquePipeline{m_ctx->device, skyPipeline};
     return true;
 }
-
 
 bool ForwardRenderer::initialize(const harmonia::DeviceContext& ctx, const Config& config) {
     m_config = config;
@@ -622,7 +619,8 @@ bool ForwardRenderer::initialize(const harmonia::DeviceContext& ctx, const Confi
                 };
                 m_gpu.dgcPreprocessAddr = vkGetBufferDeviceAddress(ctx.device, &addrInfo);
             } else {
-                harmonia::core::Logger::warn("ForwardRenderer: failed to allocate DGC preprocess buffer — GD3 fallback");
+                harmonia::core::Logger::warn(
+                    "ForwardRenderer: failed to allocate DGC preprocess buffer — GD3 fallback");
                 m_gpu.dgcLayout.reset();
                 m_gpu.dgcPreprocessSize = 0;
             }
@@ -692,7 +690,6 @@ bool ForwardRenderer::initialize(const harmonia::DeviceContext& ctx, const Confi
     return true;
 }
 
-
 bool ForwardRenderer::resize(std::uint32_t width,
                              std::uint32_t height,
                              VkImage hdrImage,
@@ -714,16 +711,16 @@ bool ForwardRenderer::resize(std::uint32_t width,
     return createDepthTarget();
 }
 
-
 bool ForwardRenderer::createDepthTarget() {
     VkExtent2D extent{m_config.width, m_config.height};
     // SAMPLED_BIT so SSR can read depth after the forward pass.
-    auto depthResult = harmonia::core::Image::create(*m_ctx,
-                                               extent,
-                                               VK_FORMAT_D32_SFLOAT,
-                                               VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                                               VK_IMAGE_ASPECT_DEPTH_BIT,
-                                               "theia.depth");
+    auto depthResult =
+        harmonia::core::Image::create(*m_ctx,
+                                      extent,
+                                      VK_FORMAT_D32_SFLOAT,
+                                      VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                      VK_IMAGE_ASPECT_DEPTH_BIT,
+                                      "theia.depth");
     if (!depthResult) {
         harmonia::core::Logger::error("Failed to create depth target");
         return false;
@@ -733,11 +730,11 @@ bool ForwardRenderer::createDepthTarget() {
     // GBuffer: RGBA16F — view-space normal (xyz * 0.5 + 0.5) + roughness (w).
     // SAMPLED_BIT so SSR compute can sample it; STORAGE_BIT reserved for future post-process.
     auto gbufResult = harmonia::core::Image::create(*m_ctx,
-                                              extent,
-                                              VK_FORMAT_R16G16B16A16_SFLOAT,
-                                              VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                                              VK_IMAGE_ASPECT_COLOR_BIT,
-                                              "theia.gbuffer");
+                                                    extent,
+                                                    VK_FORMAT_R16G16B16A16_SFLOAT,
+                                                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                                    VK_IMAGE_ASPECT_COLOR_BIT,
+                                                    "theia.gbuffer");
     if (!gbufResult) {
         harmonia::core::Logger::error("Failed to create GBuffer target");
         return false;
@@ -749,11 +746,11 @@ bool ForwardRenderer::createDepthTarget() {
     // material index bit-exact and the world position at full precision for ray seeding.
     // SAMPLED_BIT so the GI compute stage can fetch it via texelFetch (Texture2D.Load).
     auto giBufResult = harmonia::core::Image::create(*m_ctx,
-                                               extent,
-                                               VK_FORMAT_R32G32B32A32_SFLOAT,
-                                               VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                                               VK_IMAGE_ASPECT_COLOR_BIT,
-                                               "theia.gibuffer");
+                                                     extent,
+                                                     VK_FORMAT_R32G32B32A32_SFLOAT,
+                                                     VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                                     VK_IMAGE_ASPECT_COLOR_BIT,
+                                                     "theia.gibuffer");
     if (!giBufResult) {
         harmonia::core::Logger::error("Failed to create GI GBuffer target");
         return false;
@@ -762,16 +759,15 @@ bool ForwardRenderer::createDepthTarget() {
     return true;
 }
 
-
 void ForwardRenderer::transitionGbuffersForRecord(VkCommandBuffer cmd, VkImage hdrImage, bool giEnabled) noexcept {
     if (!giEnabled) {
         const std::array hdrToGeneral{harmonia::core::imageBarrier(hdrImage,
-                                                             VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-                                                             VK_IMAGE_LAYOUT_GENERAL,
-                                                             VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                                             VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                                                             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                                                             VK_ACCESS_2_SHADER_READ_BIT)};
+                                                                   VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                                                                   VK_IMAGE_LAYOUT_GENERAL,
+                                                                   VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                                                   VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+                                                                   VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                                                   VK_ACCESS_2_SHADER_READ_BIT)};
         harmonia::core::pipelineBarrier(cmd, hdrToGeneral);
     }
 
@@ -788,15 +784,21 @@ void ForwardRenderer::transitionGbuffersForRecord(VkCommandBuffer cmd, VkImage h
         gbufferSrcAccess = VK_ACCESS_2_SHADER_READ_BIT;
     }
 
-    const VkImageMemoryBarrier2 gbufferToGeneral =
-        harmonia::core::imageBarrier(gbufferImage(), gbufferOld, VK_IMAGE_LAYOUT_GENERAL,
-                                     gbufferSrcStage, gbufferSrcAccess,
-                                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT);
-    const VkImageMemoryBarrier2 depthToGeneral =
-        harmonia::core::imageBarrier(depthImage(), depthOld, VK_IMAGE_LAYOUT_GENERAL,
-                                     depthSrcStage, depthSrcAccess,
-                                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT,
-                                     VK_IMAGE_ASPECT_DEPTH_BIT);
+    const VkImageMemoryBarrier2 gbufferToGeneral = harmonia::core::imageBarrier(gbufferImage(),
+                                                                                gbufferOld,
+                                                                                VK_IMAGE_LAYOUT_GENERAL,
+                                                                                gbufferSrcStage,
+                                                                                gbufferSrcAccess,
+                                                                                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                                                                VK_ACCESS_2_SHADER_READ_BIT);
+    const VkImageMemoryBarrier2 depthToGeneral = harmonia::core::imageBarrier(depthImage(),
+                                                                              depthOld,
+                                                                              VK_IMAGE_LAYOUT_GENERAL,
+                                                                              depthSrcStage,
+                                                                              depthSrcAccess,
+                                                                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                                                              VK_ACCESS_2_SHADER_READ_BIT,
+                                                                              VK_IMAGE_ASPECT_DEPTH_BIT);
     const std::array guideToGeneral{gbufferToGeneral, depthToGeneral};
     harmonia::core::pipelineBarrier(cmd, guideToGeneral);
 }
@@ -804,12 +806,12 @@ void ForwardRenderer::transitionGbuffersForRecord(VkCommandBuffer cmd, VkImage h
 void ForwardRenderer::prepareAttachments(VkCommandBuffer cmd) {
     const std::array imageBarriers{
         harmonia::core::imageBarrier(m_config.hdrImage,
-                               m_hdrFirstUse ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL,
-                               VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-                               m_hdrFirstUse ? VK_PIPELINE_STAGE_2_NONE : VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                               0,
-                               VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                               VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT),
+                                     m_hdrFirstUse ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL,
+                                     VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                                     m_hdrFirstUse ? VK_PIPELINE_STAGE_2_NONE : VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                                     0,
+                                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                     VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT),
         VkImageMemoryBarrier2{
             .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
             .srcStageMask = VK_PIPELINE_STAGE_2_NONE,
@@ -825,19 +827,19 @@ void ForwardRenderer::prepareAttachments(VkCommandBuffer cmd) {
             .subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1},
         },
         harmonia::core::imageBarrier(m_gbufferTarget.handle(),
-                               VK_IMAGE_LAYOUT_UNDEFINED,
-                               VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-                               VK_PIPELINE_STAGE_2_NONE,
-                               0,
-                               VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                               VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT),
+                                     VK_IMAGE_LAYOUT_UNDEFINED,
+                                     VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                                     VK_PIPELINE_STAGE_2_NONE,
+                                     0,
+                                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                     VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT),
         harmonia::core::imageBarrier(m_giBufferTarget.handle(),
-                               VK_IMAGE_LAYOUT_UNDEFINED,
-                               VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-                               VK_PIPELINE_STAGE_2_NONE,
-                               0,
-                               VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                               VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT),
+                                     VK_IMAGE_LAYOUT_UNDEFINED,
+                                     VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                                     VK_PIPELINE_STAGE_2_NONE,
+                                     0,
+                                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                     VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT),
     };
     const VkDependencyInfo hdrDep{
         .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
@@ -868,14 +870,14 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
     // MOD1: write all descriptors via the descriptor buffer writers.
     // Optional buffers (tile lights, env CDFs) may be absent — bind a null descriptor
     // (VK14 nullDescriptor; the shaders gate reads on hasTileData/hasEnvMap).
-    const auto writeOptional = [this](harmonia::core::DescriptorBufferWriter& w, std::uint32_t binding,
-                                      const harmonia::core::Buffer* buf) {
-        if (buf != nullptr) {
-            w.writeStorageBufferHandle(*m_ctx, binding, *buf);
-        } else {
-            w.writeStorageBufferHandle(*m_ctx, binding, VK_NULL_HANDLE, 0U);
-        }
-    };
+    const auto writeOptional =
+        [this](harmonia::core::DescriptorBufferWriter& w, std::uint32_t binding, const harmonia::core::Buffer* buf) {
+            if (buf != nullptr) {
+                w.writeStorageBufferHandle(*m_ctx, binding, *buf);
+            } else {
+                w.writeStorageBufferHandle(*m_ctx, binding, VK_NULL_HANDLE, 0U);
+            }
+        };
     // Mesh set (set 0)
     m_desc.mesh.writeStorageBufferHandle(*m_ctx, 0, m_scene->vertexBuffer());
     m_desc.mesh.writeStorageBufferHandle(*m_ctx, 1, m_scene->instanceBuffer());
@@ -907,9 +909,12 @@ void ForwardRenderer::updateSceneDescriptors(VkCommandBuffer /*cmd*/) {
         const std::uint32_t texCount = std::min(static_cast<std::uint32_t>(sceneTextures.size()), kMaxBindlessTextures);
         for (std::uint32_t i = 0; i < texCount; ++i) {
             // MOD1: write bindless combined image samplers into the descriptor buffer.
-            m_desc.texture.writeCombinedImageSampler(*m_ctx, 0, i, sceneTextures[i].sampler(),
-                                                      sceneTextures[i].image().view(),
-                                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            m_desc.texture.writeCombinedImageSampler(*m_ctx,
+                                                     0,
+                                                     i,
+                                                     sceneTextures[i].sampler(),
+                                                     sceneTextures[i].image().view(),
+                                                     VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
         m_desc.texturesBoundFor = m_scene;
     }
@@ -963,8 +968,8 @@ void ForwardRenderer::bindMeshSets(VkCommandBuffer cmd) {
     {
         const std::array<harmonia::core::DescriptorBufferWriter*, 4> writers{
             &m_desc.mesh, &m_desc.mat, &m_desc.ibl, &m_desc.texture};
-        harmonia::core::DescriptorBufferWriter::bindSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0,
-                                                    writers);
+        harmonia::core::DescriptorBufferWriter::bindSets(
+            cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, m_pipelineLayout, 0, writers);
     }
 }
 

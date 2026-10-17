@@ -6,8 +6,8 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
-#include <span>
 #include <slang-math/slang-math.hpp>
+#include <span>
 
 #include "harmonia/DeviceContext.hpp"
 #include "harmonia/core/Buffer.hpp"
@@ -120,11 +120,10 @@ class ForwardRenderer {
     void setHiZTestEnabled(bool enabled) noexcept { m_gpu.hiZTestEnabled = enabled; }
 
     /// Update tile light list buffers (called by LightCuller each frame before recordFrame).
-    void
-    setTileBuffers(const harmonia::core::Buffer& tileLightCounts,
-                   const harmonia::core::Buffer& tileLightIndices,
-                   std::uint32_t tilesX,
-                   std::uint32_t tilesY);
+    void setTileBuffers(const harmonia::core::Buffer& tileLightCounts,
+                        const harmonia::core::Buffer& tileLightIndices,
+                        std::uint32_t tilesX,
+                        std::uint32_t tilesY);
 
     /// Record scene geometry rendering into cmd.
     /// Transitions hdrImage UNDEFINED/GENERAL -> ATTACHMENT_OPTIMAL, renders, leaves it there.
@@ -262,9 +261,9 @@ class ForwardRenderer {
     /// (geometry / material+light / IBL / bindless-texture) + their layouts + the pool.
     /// MOD1: descriptor buffer writers replace pool + allocated sets.
     struct DescriptorState {
-        harmonia::core::UniqueDescriptorSetLayout meshSetLayout; ///< set 0: geometry buffers
-        harmonia::core::UniqueDescriptorSetLayout matSetLayout;  ///< set 1: material/lighting buffers
-        harmonia::core::UniqueDescriptorSetLayout iblSetLayout;  ///< set 2: IBL textures + samplers
+        harmonia::core::UniqueDescriptorSetLayout meshSetLayout;    ///< set 0: geometry buffers
+        harmonia::core::UniqueDescriptorSetLayout matSetLayout;     ///< set 1: material/lighting buffers
+        harmonia::core::UniqueDescriptorSetLayout iblSetLayout;     ///< set 2: IBL textures + samplers
         harmonia::core::UniqueDescriptorSetLayout textureSetLayout; ///< set 3: bindless material textures
         harmonia::core::DescriptorBufferWriter mesh;
         harmonia::core::DescriptorBufferWriter mat;

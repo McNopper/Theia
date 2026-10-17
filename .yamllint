@@ -1,0 +1,10 @@
+# Relaxed for machine-generated CI YAML: line length and indentation are
+# formatting preferences, not correctness. truthy/false-y strings are intentional.
+extends: default
+rules:
+  line-length: disable
+  truthy: disable
+  document-start: disable
+  indentation:
+    spaces: 2
+    indent-sequences: consistent

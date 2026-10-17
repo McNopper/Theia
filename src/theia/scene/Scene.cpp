@@ -20,18 +20,19 @@
 #include "harmonia/core/Buffer.hpp"
 #include "harmonia/core/Logger.hpp"
 #include "harmonia/rt/TlasBuilder.hpp"
+#include "harmonia/scene/Geometry.hpp"
+#include "harmonia/scene/ProceduralGeometry.hpp"
 #include "harmonia/scene_rt/EmissiveBuilder.hpp"
 #include "harmonia/scene_rt/SceneRt.hpp"
 #include "harmonia/scene_rt/TriangleMesh.hpp"
-#include "harmonia/scene/Geometry.hpp"
-#include "harmonia/scene/ProceduralGeometry.hpp"
 
 namespace theia {
 
-std::unique_ptr<harmonia::scene::Geometry>
-Scene::createTriangleMesh(const harmonia::DeviceContext& ctx, const harmonia::core::CommandPool& pool,
-                          harmonia::scene::MeshData&& data, const harmonia::scene::MeshOpacity& opacity,
-                          std::string_view name) {
+std::unique_ptr<harmonia::scene::Geometry> Scene::createTriangleMesh(const harmonia::DeviceContext& ctx,
+                                                                     const harmonia::core::CommandPool& pool,
+                                                                     harmonia::scene::MeshData&& data,
+                                                                     const harmonia::scene::MeshOpacity& opacity,
+                                                                     std::string_view name) {
     auto mesh = harmonia::scene_rt::TriangleMesh::create(ctx, pool, std::move(data), opacity, name);
     if (!mesh) {
         return nullptr;
@@ -50,7 +51,8 @@ std::uint32_t Scene::addSphereMesh(const harmonia::DeviceContext& ctx,
     // Theia is a rasterizer (mesh-shader pipeline), so an analytic sphere cannot
     // be drawn directly — it is tessellated into a triangle mesh (object space,
     // centred at the origin) and placed by the instance transform.
-    harmonia::scene::MeshData mesh = harmonia::scene::ProceduralGeometry::makeSphere(sm::float3{0.0f, 0.0f, 0.0f}, radius);
+    harmonia::scene::MeshData mesh =
+        harmonia::scene::ProceduralGeometry::makeSphere(sm::float3{0.0f, 0.0f, 0.0f}, radius);
     return addMesh(ctx, pool, std::move(mesh), harmonia::scene::MeshOpacity{}, name.empty() ? "sphere" : name);
 }
 
@@ -100,7 +102,8 @@ VkResult Scene::buildSceneBuffers(const harmonia::DeviceContext& ctx, const harm
         return r;
     }
 
-    harmonia::scene_rt::EmissiveData emissiveData = harmonia::scene_rt::buildEmissiveData(m_meshes, m_instances, m_materials, gpuMaterials);
+    harmonia::scene_rt::EmissiveData emissiveData =
+        harmonia::scene_rt::buildEmissiveData(m_meshes, m_instances, m_materials, gpuMaterials);
 
     m_emissiveTriangleCount = static_cast<std::uint32_t>(emissiveData.triangles.size());
     if (emissiveData.triangles.empty()) {
@@ -524,15 +527,15 @@ void Scene::synthesizeEmissiveLights(const std::vector<harmonia::GpuMaterial>& g
         gl.halfWidth = halfW;
         gl.halfHeight = halfH;
         gpuLights.push_back(gl);
-        harmonia::core::Logger::info(
-            "Scene: emissive mesh {} → harmonia::scene::RectLight at ({:.1f},{:.1f},{:.1f}) lum={:.0f} hw={:.1f} hh={:.1f}",
-            i,
-            centroid.x,
-            centroid.y,
-            centroid.z,
-            luminance,
-            halfW,
-            halfH);
+        harmonia::core::Logger::info("Scene: emissive mesh {} → harmonia::scene::RectLight at ({:.1f},{:.1f},{:.1f}) "
+                                     "lum={:.0f} hw={:.1f} hh={:.1f}",
+                                     i,
+                                     centroid.x,
+                                     centroid.y,
+                                     centroid.z,
+                                     luminance,
+                                     halfW,
+                                     halfH);
     }
 }
 

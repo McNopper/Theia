@@ -89,14 +89,20 @@ class Scene : public harmonia::scene::SceneBase {
     [[nodiscard]] const harmonia::core::Buffer& indexBuffer() const noexcept { return m_indexBuffer; }
     [[nodiscard]] const harmonia::core::Buffer& meshletBuffer() const noexcept { return m_meshletBuffer; }
     [[nodiscard]] const harmonia::core::Buffer& meshletVertexBuffer() const noexcept { return m_meshletVertexBuffer; }
-    [[nodiscard]] const harmonia::core::Buffer& meshletTriangleBuffer() const noexcept { return m_meshletTriangleBuffer; }
+    [[nodiscard]] const harmonia::core::Buffer& meshletTriangleBuffer() const noexcept {
+        return m_meshletTriangleBuffer;
+    }
     [[nodiscard]] const harmonia::core::Buffer& lightBuffer() const noexcept { return m_lightBuffer; }
-    [[nodiscard]] const harmonia::core::Buffer& emissiveTriangleBuffer() const noexcept { return m_emissiveTriangleBuffer; }
+    [[nodiscard]] const harmonia::core::Buffer& emissiveTriangleBuffer() const noexcept {
+        return m_emissiveTriangleBuffer;
+    }
     [[nodiscard]] const harmonia::core::Buffer& emissiveCdfBuffer() const noexcept { return m_emissiveCdfBuffer; }
 
     /// Per-instance object→world transforms (one sm::float4x4 per instance, row-major).
     /// Current frame.  Static scenes upload once at build.
-    [[nodiscard]] const harmonia::core::Buffer& instanceTransformBuffer() const noexcept { return m_instanceTransformBuffer; }
+    [[nodiscard]] const harmonia::core::Buffer& instanceTransformBuffer() const noexcept {
+        return m_instanceTransformBuffer;
+    }
     /// Per-instance transforms from the previous frame (motion-vector pass).
     [[nodiscard]] const harmonia::core::Buffer& prevInstanceTransformBuffer() const noexcept {
         return m_prevInstanceTransformBuffer;
@@ -126,8 +132,10 @@ class Scene : public harmonia::scene::SceneBase {
     VkResult buildSceneBuffers(const harmonia::DeviceContext& ctx, const harmonia::core::CommandPool& pool) override;
 
     [[nodiscard]] std::unique_ptr<harmonia::scene::Geometry>
-    createTriangleMesh(const harmonia::DeviceContext& ctx, const harmonia::core::CommandPool& pool,
-                       harmonia::scene::MeshData&& data, const harmonia::scene::MeshOpacity& opacity,
+    createTriangleMesh(const harmonia::DeviceContext& ctx,
+                       const harmonia::core::CommandPool& pool,
+                       harmonia::scene::MeshData&& data,
+                       const harmonia::scene::MeshOpacity& opacity,
                        std::string_view name) override;
 
     VkResult finishBuild(const harmonia::DeviceContext& ctx, const harmonia::core::CommandPool& pool) override;

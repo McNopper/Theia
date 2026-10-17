@@ -3,7 +3,6 @@
 // compute submission flow and the single-queue GI fallback. Methods of
 // theia::Application split out of Application.cpp (TU split, no behavior
 // change).
-#include "demo/Application.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -11,6 +10,8 @@
 #include <slang-math/slang-math.hpp>
 #include <string>
 #include <tuple>
+
+#include "demo/Application.hpp"
 #include "harmonia/core/Barrier.hpp"
 #include "harmonia/core/Env.hpp"
 #include "harmonia/core/Logger.hpp"
@@ -70,22 +71,31 @@ void Application::submitAsyncCompute(VkCommandBuffer cmd,
                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                                      VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                                     VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE,
-                                     VK_IMAGE_ASPECT_COLOR_BIT, gfxFamily, asyncFamily),
+                                     VK_PIPELINE_STAGE_2_NONE,
+                                     VK_ACCESS_2_NONE,
+                                     VK_IMAGE_ASPECT_COLOR_BIT,
+                                     gfxFamily,
+                                     asyncFamily),
         harmonia::core::imageBarrier(m_renderer->gbufferImage(),
                                      VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                                      VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                                     VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE,
-                                     VK_IMAGE_ASPECT_COLOR_BIT, gfxFamily, asyncFamily),
+                                     VK_PIPELINE_STAGE_2_NONE,
+                                     VK_ACCESS_2_NONE,
+                                     VK_IMAGE_ASPECT_COLOR_BIT,
+                                     gfxFamily,
+                                     asyncFamily),
         harmonia::core::imageBarrier(target.image,
                                      VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
                                      VK_IMAGE_LAYOUT_GENERAL,
                                      VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                                      VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
-                                     VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE,
-                                     VK_IMAGE_ASPECT_COLOR_BIT, gfxFamily, asyncFamily),
+                                     VK_PIPELINE_STAGE_2_NONE,
+                                     VK_ACCESS_2_NONE,
+                                     VK_IMAGE_ASPECT_COLOR_BIT,
+                                     gfxFamily,
+                                     asyncFamily),
     };
     harmonia::core::pipelineBarrier(cmd, gfxRelease);
 
@@ -120,24 +130,33 @@ void Application::submitAsyncCompute(VkCommandBuffer cmd,
         harmonia::core::imageBarrier(m_renderer->giBufferImage(),
                                      VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                     VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE,
+                                     VK_PIPELINE_STAGE_2_NONE,
+                                     VK_ACCESS_2_NONE,
                                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                      VK_ACCESS_2_SHADER_READ_BIT,
-                                     VK_IMAGE_ASPECT_COLOR_BIT, gfxFamily, asyncFamily),
+                                     VK_IMAGE_ASPECT_COLOR_BIT,
+                                     gfxFamily,
+                                     asyncFamily),
         harmonia::core::imageBarrier(m_renderer->gbufferImage(),
                                      VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                                     VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE,
+                                     VK_PIPELINE_STAGE_2_NONE,
+                                     VK_ACCESS_2_NONE,
                                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                      VK_ACCESS_2_SHADER_READ_BIT,
-                                     VK_IMAGE_ASPECT_COLOR_BIT, gfxFamily, asyncFamily),
+                                     VK_IMAGE_ASPECT_COLOR_BIT,
+                                     gfxFamily,
+                                     asyncFamily),
         harmonia::core::imageBarrier(target.image,
                                      VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
                                      VK_IMAGE_LAYOUT_GENERAL,
-                                     VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE,
+                                     VK_PIPELINE_STAGE_2_NONE,
+                                     VK_ACCESS_2_NONE,
                                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                      VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
-                                     VK_IMAGE_ASPECT_COLOR_BIT, gfxFamily, asyncFamily),
+                                     VK_IMAGE_ASPECT_COLOR_BIT,
+                                     gfxFamily,
+                                     asyncFamily),
     };
     harmonia::core::pipelineBarrier(asyncCmd, asyncAcquire);
 
@@ -149,22 +168,31 @@ void Application::submitAsyncCompute(VkCommandBuffer cmd,
                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                      VK_ACCESS_2_SHADER_READ_BIT,
-                                     VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE,
-                                     VK_IMAGE_ASPECT_COLOR_BIT, asyncFamily, gfxFamily),
+                                     VK_PIPELINE_STAGE_2_NONE,
+                                     VK_ACCESS_2_NONE,
+                                     VK_IMAGE_ASPECT_COLOR_BIT,
+                                     asyncFamily,
+                                     gfxFamily),
         harmonia::core::imageBarrier(m_renderer->gbufferImage(),
                                      VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                                      VK_IMAGE_LAYOUT_GENERAL,
                                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                      VK_ACCESS_2_SHADER_READ_BIT,
-                                     VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE,
-                                     VK_IMAGE_ASPECT_COLOR_BIT, asyncFamily, gfxFamily),
+                                     VK_PIPELINE_STAGE_2_NONE,
+                                     VK_ACCESS_2_NONE,
+                                     VK_IMAGE_ASPECT_COLOR_BIT,
+                                     asyncFamily,
+                                     gfxFamily),
         harmonia::core::imageBarrier(target.image,
                                      VK_IMAGE_LAYOUT_GENERAL,
                                      VK_IMAGE_LAYOUT_GENERAL,
                                      VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                                      VK_ACCESS_2_SHADER_WRITE_BIT,
-                                     VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE,
-                                     VK_IMAGE_ASPECT_COLOR_BIT, asyncFamily, gfxFamily),
+                                     VK_PIPELINE_STAGE_2_NONE,
+                                     VK_ACCESS_2_NONE,
+                                     VK_IMAGE_ASPECT_COLOR_BIT,
+                                     asyncFamily,
+                                     gfxFamily),
     };
     harmonia::core::pipelineBarrier(asyncCmd, asyncRelease);
     if (const VkResult r = vkEndCommandBuffer(asyncCmd); r != VK_SUCCESS)
@@ -173,6 +201,5 @@ void Application::submitAsyncCompute(VkCommandBuffer cmd,
     m_prevViewProj = curViewProj;
     m_prevViewProjValid = true;
 }
-
 
 } // namespace theia

@@ -8,15 +8,15 @@
 #include <memory>
 #include <slang-math/slang-math.hpp>
 
+#include "EnvImportanceResources.hpp"
 #include "harmonia/app/App.hpp"
 #include "harmonia/app/IRenderer.hpp"
 #include "theia/camera/CameraController.hpp"
-#include "EnvImportanceResources.hpp"
-#include "theia/renderer/ForwardRenderer.hpp"
-#include "theia/gi/GiPass.hpp"
 #include "theia/cull/LightCuller.hpp"
+#include "theia/gi/GiPass.hpp"
 #include "theia/postfx/MotionVectorPass.hpp"
 #include "theia/postfx/TaaPass.hpp"
+#include "theia/renderer/ForwardRenderer.hpp"
 #include "theia/scene/Scene.hpp"
 
 namespace theia {

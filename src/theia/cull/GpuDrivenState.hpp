@@ -31,20 +31,20 @@ class GpuDrivenState {
     // (GD3) or vkCmdExecuteGeneratedCommandsEXT (GD6 DGC path).
     GpuCullPass gpuCullPass;
     harmonia::core::UniqueIndirectCommandsLayout dgcLayout; ///< DRAW_MESH_TASKS_EXT token, stride=12
-    VkBuffer dgcPreprocessBuf = VK_NULL_HANDLE;       ///< vkCmdExecuteGeneratedCommandsEXT scratch
+    VkBuffer dgcPreprocessBuf = VK_NULL_HANDLE;             ///< vkCmdExecuteGeneratedCommandsEXT scratch
     VmaAllocation dgcPreprocessAlloc = VK_NULL_HANDLE;
     VkDeviceAddress dgcPreprocessAddr = 0;
     VkDeviceSize dgcPreprocessSize = 0;
 
-    HiZPass hiZPass;                       ///< current-frame depth pyramid builder (B4)
+    HiZPass hiZPass;                             ///< current-frame depth pyramid builder (B4)
     harmonia::core::Buffer meshletVisibility[2]; ///< ping-pong per-meshlet visibility (uint/meshlet)
-    std::uint32_t visFrame = 0;            ///< index of PREVIOUS-frame visibility buffer
-    std::uint32_t visMeshletCount = 0;     ///< meshlet count the visibility buffers were sized for
-    const Scene* visBuiltFor = nullptr;    ///< scene the visibility buffers were built for
-    bool hiZTestEnabled = true;            ///< set false for one frame on a camera cut
-    bool visClearPrev = false;             ///< clear PREV visibility next frame (freshly (re)built)
-    bool hiZDebugDisabled = false;         ///< THEIA_DISABLE_HIZ: draw all meshlets (A-B debug)
-    bool forceSinglePass = false;          ///< THEIA_SINGLE_PASS: bypass two-pass Hi-Z (A-B debug)
+    std::uint32_t visFrame = 0;                  ///< index of PREVIOUS-frame visibility buffer
+    std::uint32_t visMeshletCount = 0;           ///< meshlet count the visibility buffers were sized for
+    const Scene* visBuiltFor = nullptr;          ///< scene the visibility buffers were built for
+    bool hiZTestEnabled = true;                  ///< set false for one frame on a camera cut
+    bool visClearPrev = false;                   ///< clear PREV visibility next frame (freshly (re)built)
+    bool hiZDebugDisabled = false;               ///< THEIA_DISABLE_HIZ: draw all meshlets (A-B debug)
+    bool forceSinglePass = false;                ///< THEIA_SINGLE_PASS: bypass two-pass Hi-Z (A-B debug)
 
     /// (Re)create the ping-pong meshlet-visibility buffers when the scene changes.
     [[nodiscard]] bool ensureVisibilityBuffers(const harmonia::DeviceContext& ctx, const Scene& scene);
