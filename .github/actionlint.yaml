@@ -1,0 +1,6 @@
+# actionlint's runner-label DB lags GitHub's image releases: ubuntu-26.04 is
+# a real GitHub-hosted runner (the family's Linux build leg) - declare it so
+# the runner-label check does not flag the build matrix.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
