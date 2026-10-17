@@ -134,7 +134,7 @@ def main():
         print('coverage: no .profraw files produced')
         return 1
     merged = os.path.join(profdir, 'merged.profdata')
-    rc = run([profdata, 'merge', '-sparse'] + profraws + ['-o', merged])
+    rc = run([profdata, 'merge', '-sparse', *profraws, '-o', merged])
     if rc:
         return rc
 

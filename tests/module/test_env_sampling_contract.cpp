@@ -111,8 +111,10 @@ TEST(TheiaEnvSamplingContract, DeterministicReplayProducesStableSequence) {
     for (std::size_t i = 0; i < 32; ++i) {
         float p0 = 0.0F;
         float p1 = 0.0F;
-        const sm::float3 d0 = sampleEnvImportanceDir(marginal, conditional, W, H, harmonia::utils::Rng::nextFloat2(s0), p0);
-        const sm::float3 d1 = sampleEnvImportanceDir(marginal, conditional, W, H, harmonia::utils::Rng::nextFloat2(s1), p1);
+        const sm::float3 d0 =
+            sampleEnvImportanceDir(marginal, conditional, W, H, harmonia::utils::Rng::nextFloat2(s0), p0);
+        const sm::float3 d1 =
+            sampleEnvImportanceDir(marginal, conditional, W, H, harmonia::utils::Rng::nextFloat2(s1), p1);
         EXPECT_NEAR(d0.x, d1.x, 1.0e-6F);
         EXPECT_NEAR(d0.y, d1.y, 1.0e-6F);
         EXPECT_NEAR(d0.z, d1.z, 1.0e-6F);

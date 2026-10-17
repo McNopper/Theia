@@ -239,7 +239,7 @@ class Contract:
                     continue
                 raise ContractError(f"{path}: cannot parse contract line: {raw.strip()!r}")
 
-        dupes = sorted({l for l in layers if layers.count(l) > 1})
+        dupes = sorted({ly for ly in layers if layers.count(ly) > 1})
         if dupes:
             raise ContractError(f"{path}: duplicate layer declarations {dupes}")
         self.stack = layers                    # bottom-up: first = the bottom
@@ -366,9 +366,10 @@ class Contract:
         """File (posix, scan-root-stripped) -> declared module (longest prefix)."""
         best = None
         for m in self.modules:
-            if rel == m or rel.startswith(m + "/"):
-                if best is None or len(m) > len(best):
-                    best = m
+            if rel != m and not rel.startswith(m + "/"):
+                continue
+            if best is None or len(m) > len(best):
+                best = m
         return best
 
     def _direct_children(self, m):
@@ -890,10 +891,10 @@ def compute_smells(contract, repo, files, file_mod, mod_edges, file_lines):
             mod_files[m] = mod_files.get(m, 0) + 1
             mod_lines[m] = mod_lines.get(m, 0) + file_lines.get(p, 0)
         for m in mods:
-            f, l = mod_files.get(m, 0), mod_lines.get(m, 0)
-            if f >= lim["files"] or l >= lim["lines"]:
+            f, nl = mod_files.get(m, 0), mod_lines.get(m, 0)
+            if f >= lim["files"] or nl >= lim["lines"]:
                 smells.append({"kind": "large module", "subject": m,
-                               "note": f"{f} files, {l} lines (Large Class proxy)"})
+                               "note": f"{f} files, {nl} lines (Large Class proxy)"})
     return smells
 
 

@@ -45,7 +45,7 @@ int main(int argc, char* argv[]) {
             if (ctx) {
                 testCtx.context = std::make_unique<harmonia::vulkan_init::Context>(std::move(*ctx));
                 auto pool = harmonia::core::CommandPool::create(testCtx.context->deviceContext(),
-                                                          testCtx.context->deviceContext().graphicsFamily);
+                                                                testCtx.context->deviceContext().graphicsFamily);
                 if (pool) {
                     testCtx.commandPool = std::make_unique<harmonia::core::CommandPool>(std::move(*pool));
                     testCtx.window = window.get();

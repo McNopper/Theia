@@ -15,8 +15,6 @@ jobs:
   lint:
     name: lint (Q2-Q6)
     runs-on: ubuntu-latest
-    # Newly added: report findings without blocking CI while tool versions stabilize
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -24,27 +22,35 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cppcheck
-          pip install ruff bandit yamllint
+          # clang-format pinned to the local dev version (VS 18 LLVM):
+          # any other version reformats differently and fails the check
+          pip install clang-format==22.1.3 ruff bandit yamllint
           curl -sSfL https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz | tar xzf - -C /usr/local/bin actionlint
 
       - name: clang-format
         run: |
+          clang-format --version
           find src include tests -name '*.hpp' -o -name '*.cpp' -o -name '*.h' 2>/dev/null | \
-            xargs clang-format --dry-run --Werror --style=file
+            xargs -r clang-format --dry-run --Werror --style=file
 
       - name: cppcheck
         run: |
-          cppcheck --enable=warning,portability \
-            --template='{file}:{line}: {severity}: {id}: {message}' \
-            --inline-suppr \
-            src/ include/ 2>&1 | tee cppcheck_output.txt || true
+          # explicit source files, not dirs: slang-math is header-only (no
+          # .cpp TU), so a dir scan would error with no analyzable paths
+          find src include \( -name '*.cpp' -o -name '*.cc' -o -name '*.h' -o -name '*.hpp' \) 2>/dev/null | \
+            xargs -r cppcheck --enable=warning,portability \
+              --template='{file}:{line}: {severity}: {id}: {message}' \
+              --inline-suppr 2>&1 | tee cppcheck_output.txt
           ! grep -q ': error:' cppcheck_output.txt
 
       - name: ruff (tools/)
         run: ruff check tools/ --output-format=text
 
       - name: bandit (tools/)
-        run: bandit -r tools/ -q --skip B101
+        run: |
+          # accepted tool-script patterns: subprocess plumbing (B404/B603/B607)
+          # and trusted-local XML parsing (B314/B405); B101 assert = test style
+          bandit -r tools/ -q --skip B101,B314,B404,B405,B603,B607
 
       - name: actionlint
         run: actionlint .github/workflows/build.yml

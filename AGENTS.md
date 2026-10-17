@@ -183,6 +183,15 @@ SDL3-bridge recipe lives in Harmonia's AGENTS.md. CI: `.github/workflows/build.y
 >   used only in the one-shot capture path. This helps *during* a capture; it is still
 >   not licence to run two captures at once.
 
+**Lint (CI):** `.github/workflows/build.yml` runs a **blocking** `lint (Q2-Q6)` job
+on ubuntu-latest: clang-format (pinned 22.1.3 via pip - the local dev version; a
+different version reformats differently and fails), cppcheck (explicit source-file
+scan of `src/` + `include/`, gate = no `error:` severity), ruff over `tools/`
+(contract: root `ruff.toml`, identical in all five family repos; findings stay at
+zero - fix code, do not grow ignores), bandit (accepted tool-script patterns in the
+`--skip` list), actionlint + yamllint on the workflows. Local pre-flight: run the
+same commands from the repo root before pushing a lint-affecting change.
+
 **Static analysis:** `python tools/check_tidy.py` â€” parallel clang-tidy over
 `build/compile_commands.json`, classified per `.clang-tidy`'s WarningsAsErrors contract
 (clang-diagnostic/clang-analyzer/bugprone fail the run; modernize/performance/portability

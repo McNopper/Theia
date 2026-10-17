@@ -17,9 +17,11 @@ using theia::Scene;
 TEST_F(RtFixture, Scene_BuildWithMeshAndSphere) {
     Scene scene;
     const std::uint32_t matDiffuse = scene.addMaterial(harmonia::scene::Material::diffuse(sm::float3(0.8F), 1.0F));
-    const std::uint32_t matMetal = scene.addMaterial(harmonia::scene::Material::metal(sm::float3(0.9F, 0.3F, 0.2F), 0.15F));
+    const std::uint32_t matMetal =
+        scene.addMaterial(harmonia::scene::Material::metal(sm::float3(0.9F, 0.3F, 0.2F), 0.15F));
 
-    harmonia::scene::MeshData floor = harmonia::scene::ProceduralGeometry::makeBox(sm::float3(2.0F, 0.1F, 2.0F)); // object space
+    harmonia::scene::MeshData floor =
+        harmonia::scene::ProceduralGeometry::makeBox(sm::float3(2.0F, 0.1F, 2.0F)); // object space
     const std::uint32_t floorMesh =
         scene.addMesh(deviceCtx(), commandPool(), std::move(floor), harmonia::scene::MeshOpacity{}, "test.floor");
     ASSERT_NE(floorMesh, std::numeric_limits<std::uint32_t>::max());
@@ -27,7 +29,8 @@ TEST_F(RtFixture, Scene_BuildWithMeshAndSphere) {
     const std::uint32_t sphereMesh = scene.addSphereMesh(deviceCtx(), commandPool(), 0.5F, "test.sphere");
     ASSERT_NE(sphereMesh, std::numeric_limits<std::uint32_t>::max());
 
-    ASSERT_NE(scene.addInstance(floorMesh, harmonia::scene::Transform{}, matDiffuse), std::numeric_limits<std::uint32_t>::max());
+    ASSERT_NE(scene.addInstance(floorMesh, harmonia::scene::Transform{}, matDiffuse),
+              std::numeric_limits<std::uint32_t>::max());
     ASSERT_NE(scene.addInstance(sphereMesh, harmonia::scene::Transform{.translation = {0.0F, 0.5F, 0.0F}}, matMetal),
               std::numeric_limits<std::uint32_t>::max());
 
@@ -50,7 +53,8 @@ TEST_F(RtFixture, Scene_SynthesizesLightFromEmissiveMesh) {
     const std::uint32_t emitterMesh =
         scene.addMesh(deviceCtx(), commandPool(), std::move(quad), harmonia::scene::MeshOpacity{}, "test.emitter");
     ASSERT_NE(emitterMesh, std::numeric_limits<std::uint32_t>::max());
-    ASSERT_NE(scene.addInstance(emitterMesh, harmonia::scene::Transform{}, matEmitter), std::numeric_limits<std::uint32_t>::max());
+    ASSERT_NE(scene.addInstance(emitterMesh, harmonia::scene::Transform{}, matEmitter),
+              std::numeric_limits<std::uint32_t>::max());
 
     ASSERT_EQ(scene.build(deviceCtx(), commandPool()), VK_SUCCESS);
     EXPECT_GT(scene.lightCount(), 0U);
@@ -73,7 +77,8 @@ TEST_F(RtFixture, Scene_DoesNotSynthesizeLightsForNonEmissiveGeometry) {
     const std::uint32_t floorMesh =
         scene.addMesh(deviceCtx(), commandPool(), std::move(floor), harmonia::scene::MeshOpacity{}, "test.floor");
     ASSERT_NE(floorMesh, std::numeric_limits<std::uint32_t>::max());
-    ASSERT_NE(scene.addInstance(floorMesh, harmonia::scene::Transform{}, matDiffuse), std::numeric_limits<std::uint32_t>::max());
+    ASSERT_NE(scene.addInstance(floorMesh, harmonia::scene::Transform{}, matDiffuse),
+              std::numeric_limits<std::uint32_t>::max());
 
     ASSERT_EQ(scene.build(deviceCtx(), commandPool()), VK_SUCCESS);
     EXPECT_EQ(scene.lightCount(), 0U);
@@ -94,7 +99,8 @@ TEST_F(RtFixture, Scene_BuildWithMultipleInstancesOfOneMesh) {
 
     for (std::size_t i = 0; i < 4; ++i) {
         const harmonia::scene::Transform transform{.translation = sm::float3(static_cast<float>(i) * 2.0F, 0.0F, 0.0F)};
-        ASSERT_NE(scene.addInstance(mesh, transform, mat), std::numeric_limits<std::uint32_t>::max()) << "instance " << i;
+        ASSERT_NE(scene.addInstance(mesh, transform, mat), std::numeric_limits<std::uint32_t>::max())
+            << "instance " << i;
     }
 
     ASSERT_EQ(scene.build(deviceCtx(), commandPool()), VK_SUCCESS);

@@ -1,0 +1,17 @@
+# Explicit ruff contract for the Python build tooling (tools/). Pinned rule
+# set so a ruff upgrade cannot silently grow the defaults and flip CI red.
+# Identical in all five family repos. Findings are meant to stay at zero:
+# fix the code, do not grow ignores.
+[lint]
+select = ["E4", "E7", "E9", "F", "SIM", "UP", "RUF"]
+
+[lint.per-file-ignores]
+# one-off build tooling: percent formatting in the Blender/OMM tools is legal
+# and not worth a mass rewrite (57 sites, some not mechanically convertible)
+"tools/*" = ["UP031"]
+# Blender addon convention: the bl_info dict must precede the imports
+"tools/blender_to_aether/*" = ["E402"]
+# self-contained test runner: imports the parent module via sys.path
+"tools/mtlx_to_aether/tests/*" = ["E402"]
+# root-level self-contained test runners: same sys.path idiom
+"tools/test_*.py" = ["E402"]

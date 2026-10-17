@@ -113,11 +113,9 @@ def main():
         outputs = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
             futs = {pool.submit(run_tu, tidy, tmp_dir, f): f for f in files}
-            done = 0
-            for fut in concurrent.futures.as_completed(futs):
+            for done, fut in enumerate(concurrent.futures.as_completed(futs), start=1):
                 path, text = fut.result()
                 outputs[path] = text
-                done += 1
                 if done % 10 == 0 or done == len(files):
                     print(f"  ... {done}/{len(files)} TUs", flush=True)
     log_path = os.path.join(os.path.dirname(db), "clang_tidy.log") \
