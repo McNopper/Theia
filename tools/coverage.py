@@ -34,10 +34,11 @@ def llvm_tool(name, build_dir):
     comp = None
     cache = os.path.join(build_dir, 'CMakeCache.txt')
     if os.path.isfile(cache):
-        for line in open(cache, encoding='utf-8', errors='replace'):
-            if line.startswith('CMAKE_CXX_COMPILER:') and ':FILEPATH=' in line:
-                comp = line.split('FILEPATH=', 1)[1].strip()
-                break
+        with open(cache, encoding='utf-8', errors='replace') as fh:
+            for line in fh:
+                if line.startswith('CMAKE_CXX_COMPILER:') and ':FILEPATH=' in line:
+                    comp = line.split('FILEPATH=', 1)[1].strip()
+                    break
     if comp:
         cand = os.path.join(os.path.dirname(comp), name + '.exe')
         if os.path.isfile(cand):
@@ -74,13 +75,14 @@ def main():
             keys = ('CMAKE_GENERATOR:', 'CMAKE_GENERATOR_PLATFORM:',
                     'CMAKE_C_COMPILER:', 'CMAKE_CXX_COMPILER:',
                     'CMAKE_TOOLCHAIN_FILE:')
-            for line in open(main_cache, encoding='utf-8', errors='replace'):
-                for key in keys:
-                    if line.startswith(key):
-                        value = line.split('=', 1)[1].strip()
-                        if value:
-                            forward[key[:-1]] = value
-                        break
+            with open(main_cache, encoding='utf-8', errors='replace') as fh:
+                for line in fh:
+                    for key in keys:
+                        if line.startswith(key):
+                            value = line.split('=', 1)[1].strip()
+                            if value:
+                                forward[key[:-1]] = value
+                            break
             for name, value in forward.items():
                 cmd += ['-D' + name + '=' + value]
         rc = run(cmd)

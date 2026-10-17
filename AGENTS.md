@@ -203,7 +203,7 @@ violation). Sanitizer lane (Clang/GCC configures only):
 `-DTHEIA_COVERAGE=ON` (e.g. `-B build/coverage`), then run `python tools/coverage.py` - it
 builds the instrumented tree, runs the tests with `LLVM_PROFILE_FILE` set, merges the
 profiles and prints the llvm-cov report for `src/` (gcc builds report via gcov; exit 77
-when the LLVM tools are missing). Not wired into CI yet.
+when the LLVM tools are missing). NOT wired into CI: the test suites need a GPU and CI is build-only for the renderer band, so a CI coverage report would measure nothing - the lane stays a local activity.
 
 `-DTHEIA_SANITIZER=address|undefined|thread`. Host-side FP is deterministic
 (`/fp:strict` / `-ffp-contract=off -fno-fast-math`).

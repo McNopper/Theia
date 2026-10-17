@@ -62,7 +62,8 @@ def sanitize_db(db_path, tmp_dir):
     # Strip C++ module scanning flags that reference files existing only
     # after a build, so the run works on a fresh tree; clang-tidy gets the
     # cl-style commands via cl driver mode (the family compiles clang-cl).
-    entries = json.load(open(db_path))
+    with open(db_path, encoding='utf-8') as fh:
+        entries = json.load(fh)
     out = []
     for e in entries:
         if not is_project_tu(e["file"]):
