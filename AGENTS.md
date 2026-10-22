@@ -1,6 +1,6 @@
 # AGENTS.md â€” Theia
 
-Quick-start context for AI agents so basic facts don't have to be rediscovered each session.
+Quick-start context for AI agents so basic facts don't have to be rediscovered every time.
 
 **Outstanding work, governance (definition of done + guardrails) and release history: see
 [`PLAN.md`](PLAN.md).**
@@ -198,9 +198,8 @@ same commands from the repo root before pushing a lint-affecting change.
 are report-only). Also registered as ctest `test_tidy` (label `analysis`; the fast test loop is `ctest -LE analysis`; skips when
 clang-tidy, Python3 or the database is missing).
 **Architecture gate:** `ARCHITECTURE.md` is the machine-checked architecture contract
-(the check-arch reflexion gate - the document is the contract, the include graph is measured
-against it). ctest `test_arch` runs the vendored `tools/check_arch.py` engine (label
-`analysis`; registered only where the check-arch skill exists — local, not CI). Contract:
+(the document is the contract, the include graph is measured against it). ctest `test_arch`
+runs the vendored `tools/check_arch.py` engine (label `analysis`; local; not wired into CI). Contract:
 `theia/scene` is the leaf, `theia/renderer` consumes it, `demo` consumes
 both; includes may only go **down** that order (cross-repo includes of
 harmonia/slang-math/aether are downward by design), only **declared edges** exist (default deny), and there must be

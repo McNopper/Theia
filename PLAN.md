@@ -27,8 +27,8 @@ technique in the **shared Harmonia estimator + BSDF** wherever both benefit; per
 only where they genuinely diverge. **Theia converges to Hyperion** (the unbiased ground
 truth) — the gate is a strict-AND metric set (mean_diff / rel_mse / SSIM /
 luminance-histogram) over 14 scenes; methodology and tools live in Harmonia
-(`Harmonia/PLAN.md` *Parity methodology*, `Harmonia/tools/`). Most estimator work is owned by
-Harmonia; this file tracks what Theia owns or consumes. Sibling plans: `Harmonia/PLAN.md`,
+(`Harmonia/PLAN.md` *Parity methodology*, `Harmonia/tools/`). Most estimator work is tracked in
+Harmonia; this file tracks Theia's roadmap and the items it consumes. Sibling plans: `Harmonia/PLAN.md`,
 `Hyperion/PLAN.md`, `Aether/PLAN.md`, `slang-math/PLAN.md`.
 
 **Shipped GI state (orientation):** Theia's interactive GI runs **ReSTIR PT** — one unified
@@ -52,62 +52,60 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
   clang-format pinned 22.1.3, ruff contract in `ruff.toml` (identical x5), cppcheck,
   bandit, actionlint 1.7.12, yamllint. Coverage stays a local activity (the test
   suite needs a GPU).
-- **Next owned item:** **I6** (configurable frames-per-flip) - below. The shared-estimator
-  next-up items (GI-SMS, C9, DN3, LS2, PERF5/PERF4, C11, C12) are owned by
+- **Next:** **I6** (configurable frames-per-flip) - below. The shared-estimator
+  next-up items (GI-SMS, C9, DN3, LS2, PERF5/PERF4, C11, C12) are tracked in
   `Harmonia/PLAN.md` and wire into `gi.comp.slang` when they land.
 ## How to continue
 
-### Owned items
+### Roadmap
 
 | ID | Task | Deps | Status |
 |----|------|------|--------|
 | I6 | **Configurable frames-per-flip** (Theia window): render **N** accumulation frames per one swapchain present (**default N = 1** = current behaviour). N > 1 converges the *displayed* image faster per flip on a static/slow camera (each presented frame is the accumulation of N jittered sub-frames) at the cost of flip rate and input latency; accumulation still resets on camera move (as today). The interactive-window analogue of the headless `--offscreen-frames` path, distinct from TAA (which reprojects+blends rather than pure-accumulates). CLI flag `--frames-per-flip <N>` (default 1); validate against the convergence gate. Self-contained — VK6 present pacing is later polish, not a prerequisite. **Add the flag to the shared parser** (`Harmonia/src/harmonia/app/CliParser.cpp`), not to Theia's silent-swallow arg loop (that loop was the B5 bug — unknown args must hard-error). **Shipped:** `--frames-per-flip <N>` (default 1 = classic cadence) — the render half runs every frame, only the display/present half is gated per flip; N = 1 is byte-identical to the old loop. | — | **done** |
 | ANI3 | **Object motion vectors** — extend the MotionVectorPass beyond camera motion to animated instances (per-node velocity → TAA + ReSTIR temporal reuse). The plumbing is already in place but unused: `prevInstanceTransforms` is bound at `shaders/motion_vector.comp.slang:34` while the shader hardcodes the static-scene model (`:76`). | ANI1 (Aether) | backlog |
-| MOD4 | **Swapchain recreate on resize → `VK_KHR_swapchain_maintenance1`** — `VkSwapchainPresentScalingCreateInfoEXT` lets the driver scale to extent changes without the full teardown/rebuild in `Swapchain::recreate` (`handleResize`). A behavior decision (render-at-fixed-extent + scale vs current exact-match recreate), so recreate-on-resize is kept for now; the present-pacing half shipped as VK6 (v0.7.6). **Hardware now verified present** (2026-09 vulkaninfo); the decision is behavioral only. | — | backlog |
+| MOD4 | **Swapchain recreate on resize → `VK_KHR_swapchain_maintenance1`** — `VkSwapchainPresentScalingCreateInfoEXT` lets the driver scale to extent changes without the full teardown/rebuild in `Swapchain::recreate` (`handleResize`). A behavior decision (render-at-fixed-extent + scale vs current exact-match recreate), so recreate-on-resize is kept for now; the present-pacing half shipped as VK6 (v0.7.6). **Hardware now verified present** (vulkaninfo); the decision is behavioral only. | — | backlog |
 | SM6-Theia | **slang-math v0.3.0 migration slice** — replace hand-rolled sites (`src/theia/scene/Scene.cpp:530` saturate; per-component trig in `src/theia/renderer/CameraController.hpp:36,78` → SM2 functions); bump the FetchContent pin in this repo's release commit. Track origin: slang-math/PLAN.md SM6. | slang-math v0.3.0 tag | backlog |
 
-### Code health (check-arch smell harvest)
+### Code health
 
 | ID | Task | Deps | Status |
 |----|------|------|--------|
-| CH-T1 | **Review `theia/renderer` for an internal split** — 23 files / 5093 lines, the family's largest module (check-arch `large module` proxy, 1.2.0). Candidate seams: the mesh-shader geometry path vs GI (`GiPass`) vs the post-fx cluster (TAA / A-SVGF / MotionVector).
+| CH-T1 | **Review `theia/renderer` for an internal split** — 23 files / 5093 lines, the family's largest module (the `large module` proxy). Candidate seams: the mesh-shader geometry path vs GI (`GiPass`) vs the post-fx cluster (TAA / A-SVGF / MotionVector).
       Techniques (refactoring.guru): Extract Class for the seams; Extract Method + Replace Method with
-      Method Object for `ForwardRenderer.cpp` (1342 lines) and `demo/Application.cpp` (1089 lines). Review verdict first: split only where a seam is real; otherwise record accepted.
-      Per-file bloat queue (`header_size`): DRAINED (2026-10-15) — `ForwardRenderer.cpp` split into
+      Method Object for `ForwardRenderer.cpp` (1342 lines) and `demo/Application.cpp` (1089 lines). Verdict first: split only where a seam is real; otherwise record accepted.
+      Per-file bloat queue (`header_size`): DRAINED — `ForwardRenderer.cpp` split into
       `ForwardRenderer.cpp` (867) + `ForwardRendererPipelines.cpp` (499); `demo/Application.cpp`
       into `Application.cpp` (839) + `ApplicationCompute.cpp` (273). `header_size: error` promoted. | — | **in progress** |
 
-Executed (2026-10-15, file level): theia/renderer (23 files / 5093 lines) split into seven
+Executed (file level): theia/renderer (23 files / 5093 lines) split into seven
 focused modules - renderer core (795), pipelines (933), cull (945), gi (975), postfx (913),
 depth (426), camera (135) - all under the large-module limits, gate green with 20 declared
-edges. VERDICT (2026-10-15, after the full end-to-end read): REJECT the rig extraction.
-The async-compute orchestration is the Application's framework-contract implementation:
+edges. VERDICT (after the full end-to-end read): REJECT the rig extraction.
+The async-compute submission flow is the Application's framework-contract implementation:
 `onBeforeSceneStages` is a harmonia::app::App hook, the Application submits BOTH its
 graphics and async-compute queues against the App-provided device/pool infrastructure, and
 the stages command buffers come from the App command pool. An Extract Class would invert
-that framework relationship (the rig would need to own App state) - the classic failed
-extraction. What WAS extractable landed: the queue-ownership barrier helper (T-03 root,
+that framework relationship (the rig would need to hold App state) - the classic failed
+extraction. What WAS extractable landed: the queue-transfer barrier helper (T-03 root,
 harmonia::core::imageBarrier) and the Move Method of the attachment transitions into
 ForwardRenderer (the narrow face). `large module: demo` stands as a documented report-only
-signal of the IRenderer-adapter + frame-orchestrator shape. The theia/pipelines orphan
+signal of the IRenderer-adapter + frame-coordination shape. The theia/pipelines orphan
 stays the accepted TU-split artifact.
-AR1 executed (2026-10-15): Theia's Scene implements the harmonia/scene_rt hooks
+AR1 executed: Theia's Scene implements the harmonia/scene_rt hooks
 (`createTriangleMesh` / `finishBuild`) and owns its TLAS; harmonia/scene is rt-free.
-T-04 reviewed (2026-10-15): REJECT - Scene::uploadBuffer is a deliberate adapter
+T-04 verdict: REJECT - Scene::uploadBuffer is a deliberate adapter
 between the harmonia expected-API and the scene VkResult+out-param flow, applied
 uniformly at 17 call sites; removal churns them without behavior or readability gain.
-Batching: this item is front 2 (frame orchestration) of the family categorization -
-Harmonia PLAN; internal order: pipelines class -> ComputeRig -> T-03, with Q1 (coverage)
+This item sits in the frame-coordination cluster of the family categorization in
+Harmonia/PLAN.md; internal order: pipelines class -> ComputeRig -> T-03, with Q1 (coverage)
 as the precondition.
 
-Accepted by design (reviewed 2026-10-15, no action): the `demo -> theia/renderer -> theia/scene`
+Accepted by design (no action): the `demo -> theia/renderer -> theia/scene`
 chain measures as a pass-through/Middle-Man proxy — it is the designed layer chain.
 
 ### ReSTIR-PT refinements (GI-ENH — core landed; exploitation remains)
 
-### ReSTIR-PT refinements (GI-ENH — all exploitation landed)
-
-**Landed (2026-09-25):** (b) vector-valued resampling weights (§6.3), (c) Gaussian
+**Landed:** (b) vector-valued resampling weights (§6.3), (c) Gaussian
 paired-neighbor self-inverse maps (§3), (a) k=2 + k≥3 reconnection shifts (telescoping
 GRIS Jacobian, Eq. 5 footprint criteria), **paper-faithful resampling** (shift OR replay per candidate - the pairwise-MIS
 average and the paired shift-sharing shortcut were both dropped: shift-sharing
@@ -144,19 +142,19 @@ Multi-frame captures are run-to-run pixel-reproducible. Remaining:
   is N/A while spatial-only; our per-pass hash dedup (GI2.5) already covers the spatial
   duplicate case.)
 
-### Consumed items (owned elsewhere — pointers)
+### Consumed items (defined elsewhere)
 
 - **GI-SMS** (caustics/SDS), **DN3** (converging denoiser — the à-trous replacement),
   **DN1** (RaNAD neural denoiser for the low-spp window; unblocked by VK1 cooperative matrix),
   **C11** (ReSTIR SSS — brings Theia's realtime SSS onto the shared random-walk model
   Hyperion already runs → SSS parity), **C9/C12** (BSDF), **PERF5/PERF4** (wavefront — Theia
   is the harder wire: `gi.comp.slang` ~1519 lines fuses ReSTIR PT + medium walk + path trace)
-  — all owned by `Harmonia/PLAN.md`.
+  — all tracked in `Harmonia/PLAN.md`.
 - **VK4** (subgroup rotate/reconvergence → faster reservoir merging/compaction) and **VK5**
   (pipeline binaries → cuts Theia's cold start: 5 pipelines at init — opaque/transparent/sky/
-  cull/GI — and speeds `.spv` hot-reload) — Harmonia owns the probe→enable; Theia consumes.
+  cull/GI — and speeds `.spv` hot-reload) — Harmonia covers the probe→enable; Theia consumes.
 - **ANI2** (per-frame TLAS refit; needs PERF3), **ANI6** (animated parity gate; needs ANI7),
-  **BV4** (wavefront AABB consumers; gated by PERF5) — Harmonia-owned.
+  **BV4** (wavefront AABB consumers; gated by PERF5) — tracked in `Harmonia/PLAN.md`.
 - **NH2/NH3** (node hierarchy) once **NH1** (Aether) lands.
 
 ## Governance
@@ -201,7 +199,7 @@ low-spp reference).
   HDR content — that is the estimator's true noise floor, not a bug (see
   `Harmonia/PLAN.md` §7 bias-vs-noise method).
 - **Multi-frame captures are run-to-run pixel-reproducible — keep them that way.** Two sync
-  bugs were fixed to guarantee it (2026-09): the reservoir ping-pong needs its per-frame
+  bugs were fixed to guarantee it: the reservoir ping-pong needs its per-frame
   buffer barrier in `GiPass::record` (frame N's `Cur` writes → frame N+1's `Prev` reads had
   no dependency at all), and the GiPass descriptor set must be **per frame slot** — a single
   mutable set rebound every frame races in-flight frames under UPDATE_AFTER_BIND (the
@@ -212,7 +210,7 @@ low-spp reference).
   (denoise, TAA, culling) bypassed in reference/accumulation mode. Irreducible bias is
   rejected from the converging path (presentation-only at most). Neural GI proxies are
   rejected outright (see Harmonia/PLAN.md *Research triage*).
-- Shared-BSDF contracts owned by Harmonia apply here verbatim (`Harmonia/PLAN.md`
+- Shared-BSDF contracts defined by Harmonia apply here verbatim (`Harmonia/PLAN.md`
   guardrails): dielectric sidedness (raw outward `GiHit.geoNormal`), the Chiang 2019
   terminator factor at every NEE/continuation site (Theia-side: `gi.comp.slang:899,1017`,
   `forward_render.frag.slang:302,328`), object-space position-fetch vertices, MaterialX
@@ -223,7 +221,7 @@ low-spp reference).
   `-matrix-layout-row-major`; new Theia compute entries → `THEIA_ENTRY_SHADERS` in
   `CMakeLists.txt`. Force-recompile `.spv` when shared Harmonia shaders change (CMake does not
   track Slang import chains — touch the consuming entry shaders).
-- Fix bugs at once — root-caused and patched in the same session. Solve directly, never defer.
+- Fix bugs at once — root-caused and patched immediately. Solve directly, never defer.
 - Tags are always pushed to GitHub (verify `git ls-remote --tags origin` == `git tag -l`).
   Release order: slang-math → Aether → Harmonia → **Theia**; bump the Harmonia FetchContent
   pin in the release commit.
@@ -233,7 +231,7 @@ low-spp reference).
 
 ## Baseline
 
-- **v0.7.14** (current; consumes Harmonia v0.7.13): **code-health wave: the scene module
+- **v0.7.14** (current; consumes Harmonia v0.7.13): **code health: the scene module
   joins `namespace theia` + the arch gate.** `theia/scene` (`Scene`, `GpuInstance`,
   `GpuInstanceBounds`, `GpuMeshlet`) was the family's last global-namespace module — now
   `theia::` like the renderer, with the forward declarations moved inside the namespace.
@@ -242,10 +240,10 @@ low-spp reference).
   (**Theia never depends on Hyperion** — the sibling renderers are independent; shared
   code goes down into Harmonia). 19/19 ctest on Windows; Linux build-only green; 3-scene
   smoke at release settings pixel-identical (MAD = 0) to the gallery.
-- **v0.7.13** (consumes Harmonia v0.7.12): **the layering wave.** Every `harmonia::`
+- **v0.7.13** (consumes Harmonia v0.7.12): **the layering migration.** Every `harmonia::`
   reference now names its layer (`harmonia::core::Buffer`, `harmonia::scene::SceneBase`,
   `harmonia::app::App`, …) to match Harmonia v0.7.12's layered namespaces; `theia::` is
-  unchanged. Docs re-verified (names + citations). README gallery regenerated from this code
+  unchanged. Docs updated (names + citations). README gallery regenerated from this code
   — pixel-identical (MAD = 0) to the previous set; the 7 noise-prone shaderball scenes were
   refreshed (sub-1/255 accumulation nondeterminism). 18/18 ctest on Windows and Linux; zero
   validation errors and warnings.
@@ -260,7 +258,7 @@ low-spp reference).
   OMM cutout path proven image-identical, MAD = 0 vs the release gallery). 18/18 ctest on
   Windows and Linux; **zero validation errors and warnings** (interactive + offscreen).
 - **v0.7.11** (current; consumes Harmonia v0.7.10 + transitive slang-math v0.3.0): **dual-OS
-  CI; refactoring wave 1 (T-01/T-02); I6; descriptor-range fix; regenerated gallery.**
+  CI; refactoring batch 1 (T-01/T-02); I6; descriptor-range fix; regenerated gallery.**
   Build-only CI on windows-latest + ubuntu-26.04 (the GPU suites stay local); portable env
   reads + the GCC missing-field-initializer mirror blocks. **T-01:** shared
   `buildGiFrameParams`/`buildMotionVectorParams` — every GI-ENH/PERF5 parameter lands once
@@ -271,13 +269,13 @@ low-spp reference).
   **Fix** (`range-08045` follow-through): descriptor writes carry buffer creation sizes;
   optional tile-light / env-CDF resources became non-owning `const Buffer*` (absent = null
   descriptor, unchanged). README gallery regenerated at release settings — **pixel-identical
-  to the v0.7.10 gallery (MAD = 0 on all 30 scenes)**, hard evidence the wave is image-neutral.
+  to the v0.7.10 gallery (MAD = 0 on all 30 scenes)**, hard evidence the refactor is image-neutral.
   18/18 ctest green on both OSes; interactive `--validation` clean.
 - **v0.7.10** (consumes Harmonia v0.7.9): **reconnection shift made faithful to ReSTIR PT
-  Enhanced (adaptive k, mode-gated selection, invertibility).** (Entry backfilled 2026-10-09
+  Enhanced (adaptive k, mode-gated selection, invertibility).** (Entry backfilled
   from the release commit.)
 - **v0.7.9** (consumes Harmonia v0.7.9): **Theia matches Hyperion (bias floor 5.11 FAIL ->
-  2.22 PASS).** (Entry backfilled 2026-10-09 from the release commit.)
+  2.22 PASS).** (Entry backfilled from the release commit.)
 - **v0.7.8**: **estimator-pure capture — the extended two-tier contract.**
   `--output` now disables every presentation aid — A-SVGF/TAA (v0.7.4), the firefly clamps
   (`forward_render.frag.slang` + `gi.comp.slang`; `fireflyClampEnabled` = rngFlags bit2 /

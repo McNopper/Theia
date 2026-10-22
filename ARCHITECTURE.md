@@ -1,7 +1,6 @@
 # Architecture
 
-The checked-in architecture contract for Theia (the check-arch reflexion
-gate). One leaf (`theia/scene`), the renderer consuming it, and the thin
+The checked-in architecture contract for Theia. One leaf (`theia/scene`), the renderer consuming it, and the thin
 `demo` host on top. **Theia never depends on Hyperion** — the sibling
 renderers are independent; shared code goes down into Harmonia (a
 `hyperion/` include is a hard violation).
@@ -68,8 +67,8 @@ namespace_module:
 namespace_require:
 unresolved: info
 within_layer: deny              # undeclared same-layer edges: violations
-header_size: error               # the standing bloat rule (hard gate; the 2026-10 bloat queue is drained)
-smells: report                 # refactoring-catalog proxies: report-only review signals
+header_size: error               # the standing bloat rule (hard gate; the bloat queue is drained)
+smells: report                 # refactoring-catalog proxies: report-only signals
 
 layer scene
 layer renderer
