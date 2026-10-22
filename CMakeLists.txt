@@ -394,10 +394,10 @@ if(PROJECT_IS_TOP_LEVEL)
         add_test(NAME test_tidy
                  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_tidy.py)
         set_tests_properties(test_tidy PROPERTIES SKIP_RETURN_CODE 77 LABELS analysis RUN_SERIAL TRUE)
-        # The architecture gate (LOCAL ONLY - not a CI gate): the global
-        # check-arch skill's presence marks the dev machine; the engine and
-        # the ARCHITECTURE.md contract are vendored in the repo. On machines
-        # (and CI runners) without the skill the gate is not registered.
+        # The architecture gate (LOCAL ONLY - not a CI gate): the engine and
+        # the ARCHITECTURE.md contract are vendored in the repo, but the gate
+        # runs from a per-user engine install (the paths below). Machines
+        # without that install - e.g. CI runners - skip registration.
         set(CHECK_ARCH_ENGINE "")
         foreach(_cand "$ENV{USERPROFILE}/.config/opencode/skills/check-arch/scripts/check_arch.py"
                       "$ENV{HOME}/.config/opencode/skills/check-arch/scripts/check_arch.py")

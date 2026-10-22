@@ -1,4 +1,4 @@
-# AGENTS.md â€” Theia
+# AGENTS.md — Theia
 
 Quick-start context for AI agents so basic facts don't have to be rediscovered every time.
 
@@ -9,7 +9,7 @@ Quick-start context for AI agents so basic facts don't have to be rediscovered e
 
 **Theia** is a **lean accumulation path-traced renderer**: a GPU-driven Vulkan renderer that
 converges to the **Hyperion** path-traced ground truth through frame accumulation. Multi-bounce
-global illumination â€” diffuse, specular, environment NEE, transmission and refraction â€” is
+global illumination — diffuse, specular, environment NEE, transmission and refraction — is
 **hardware ray-traced** through Harmonia's shared OpenPBR `path_integrator`, the same estimator
 and BSDF Hyperion uses. **ReSTIR PT** provides reservoir resampling: a direct-light reservoir
 (emissive triangles / env NEE by scene type) plus a **multi-bounce path reservoir** for the
@@ -24,7 +24,7 @@ flowchart LR
     SM["slang-math<br/>math"] --> A["Aether<br/>file format"]
     SM --> H
     A --> H["Harmonia<br/>shared Vulkan lib"]
-    H --> Hy["Hyperion<br/>path tracer Â· ground truth"]
+    H --> Hy["Hyperion<br/>path tracer · ground truth"]
     H --> T["<b>Theia</b><br/>accumulation renderer (this repo)"]
 ```
 
@@ -35,22 +35,22 @@ Theia-specific (not in Harmonia).
 ## Algorithm strategy (drives every technique decision)
 
 - **One best-quality approach that matches the ground truth.** Theia picks the single
-  path-traced estimator that converges to Hyperion â€” the shared OpenPBR BSDF with environment
-  NEE and multi-bounce transport â€” and scales it with frame accumulation.
+  path-traced estimator that converges to Hyperion — the shared OpenPBR BSDF with environment
+  NEE and multi-bounce transport — and scales it with frame accumulation.
 - **Scales by resolution and frame count.** Accumulation is the quality/performance knob:
   lower the render resolution or frame count for fast iteration (e.g. the 320x240 parity size),
   raise them for final deliverables. The approach itself stays single.
 - **Target hardware (capability, not a brand):** a high-end GPU class with **hardware ray
   tracing**, a **large (~100GB-class) unified memory** pool, and AI-based denoising/upscaling.
-  HW ray tracing is first-class and memory is abundant â†’ ray-traced techniques are favored.
+  HW ray tracing is first-class and memory is abundant → ray-traced techniques are favored.
   It also runs on **other hardware**, kept portable by scaling resolution and frames.
 - **Transparency/refraction (shipped v0.4.0+):** transmission/refraction is **HW ray-traced**
-  via the scene TLAS and runs through Harmonia's shared `path_integrator` â€” the same estimator
+  via the scene TLAS and runs through Harmonia's shared `path_integrator` — the same estimator
   and OpenPBR BSDF Hyperion uses. Order-independent, refraction-native, best parity.
 
 - **GPU-driven, latest standard Vulkan, cross-vendor.** Prefer GPU-driven rendering
   (indirect/mesh-shader draws, GPU-side culling, bindless) using the latest Vulkan features
-  available, but **cross-vendor only** â€” core + `KHR`/`EXT`. **Never** vendor-specific
+  available, but **cross-vendor only** — core + `KHR`/`EXT`. **Never** vendor-specific
   extensions (`VK_NV_*`, `VK_AMD_*`, `VK_INTEL_*`). E.g. ray tracing uses
   `VK_KHR_ray_query` / `VK_KHR_acceleration_structure` (already in use), not a vendor RT path.
   This keeps Theia portable to the "other hardware" requirement above.
@@ -67,8 +67,8 @@ CLI flags: `--scene/-s`, `--output/-o` (headless EXR+PNG), `--width`, `--height`
 accumulation frames per swapchain flip, default 1 — I6), `--validation`/`--no-validation`,
 `--no-restir-di` (ReSTIR DI off), `--taa`/`--no-taa`, `--no-camera-jitter` (interactive
 only — `--output` capture forces jitter ON, see below),
-`--indirect-ambient <f>`. RT-GI is always on (it is the renderer â€” no GI-off path).
-Theia accumulates frames â€” use `--offscreen-frames` for convergence quality.
+`--indirect-ambient <f>`. RT-GI is always on (it is the renderer — no GI-off path).
+Theia accumulates frames — use `--offscreen-frames` for convergence quality.
 
 **Capture is estimator-pure:** `--output` disables every presentation aid — denoiser/TAA,
 the firefly clamps, and the A3(a) secondary-bounce roughness regularization — and forces
@@ -76,10 +76,10 @@ camera jitter **on**, so the capture integrates the same pixel footprint as Hype
 per-sample jitter and converges to the unclamped ground truth. Firefly speckle on HDR
 content in a capture is the estimator's true variance, not a bug.
 
-âš ï¸ No `--offscreen` flag â€” headless is triggered by `--output`.
+⚠ï¸ No `--offscreen` flag — headless is triggered by `--output`.
 
 **Startup/resize black frames are expected, not a hang:** the window stays black while the
-scene uploads and the pipelines build (meshlet processing, BLAS/TLAS builds, RT pipelines â€”
+scene uploads and the pipelines build (meshlet processing, BLAS/TLAS builds, RT pipelines —
 several seconds on heavy scenes like `ABeautifulGame`), and every window resize
 re-initializes the pipeline at the new resolution and restarts accumulation.
 
@@ -88,15 +88,15 @@ re-initializes the pipeline at the new resolution and restarts accumulation.
 Parity vs Hyperion and showcase screenshots use the unified accumulation RT path.
 
 Compare with `Harmonia/tools/compare_renders.py ref.exr cand.exr` (pre-tonemap EXR, same
-color space). The gate is a **strict-AND metric set** (mean_diff â‰¤ 4.0, rel_mse, SSIM â‰¥ 0.98,
-luminance-histogram corr â‰¥ 0.999) over the 14 scenes in
-`Harmonia/tools/validation_manifest.toml` â€” full methodology in Harmonia's `AGENTS.md` /
+color space). The gate is a **strict-AND metric set** (mean_diff ≤ 4.0, rel_mse, SSIM ≥ 0.98,
+luminance-histogram corr ≥ 0.999) over the 14 scenes in
+`Harmonia/tools/validation_manifest.toml` — full methodology in Harmonia's `AGENTS.md` /
 `PLAN.md`.
 
-**Screenshot gallery** (`screenshots/`, 1280Ã—720 PNG): Theia renders 256 frames. The matching
-Hyperion screenshots use **64 spp** (fireflies acceptable â€” 256 spp is too slow for the full
+**Screenshot gallery** (`screenshots/`, 1280×720 PNG): Theia renders 256 frames. The matching
+Hyperion screenshots use **64 spp** (fireflies acceptable — 256 spp is too slow for the full
 30-scene set); a parity *reference* is distinct and uses a clean Hyperion **256 spp** EXR at
-the 320Ã—240 parity resolution.
+the 320×240 parity resolution.
 
 ## Gotchas (each has cost a debug cycle)
 
@@ -104,11 +104,11 @@ the 320Ã—240 parity resolution.
   Aether tree. Editing the Aether working tree's `assets/` does nothing unless you update the
   `_deps` copy or build with `-DFETCHCONTENT_SOURCE_DIR_AETHER=...`. Symptom: two "different"
   renders give byte-identical metrics.
-- **IBL parity reference must be high-spp:** a low-spp Hyperion reference is noisy â€” render it
+- **IBL parity reference must be high-spp:** a low-spp Hyperion reference is noisy — render it
   with `hyperion --spp 256` first, or the diff measures noise, not a real discrepancy.
 - **Real-time multi-bounce GI (RT-GI):** Theia runs a HW ray-traced GI pass
-  (`gi.comp.slang` â†’ shared `path_integrator`) providing path-traced multi-bounce indirect
-  (diffuse + specular + env-NEE) and transmission/refraction. RT-GI is always on â€” it is the
+  (`gi.comp.slang` → shared `path_integrator`) providing path-traced multi-bounce indirect
+  (diffuse + specular + env-NEE) and transmission/refraction. RT-GI is always on — it is the
   renderer's single indirect/reflection/occlusion path (the split-sum IBL fallback was removed).
   The old "single-bounce IBL + flat ambient, darker than Hyperion" gap is closed for the
   unified pipeline.
@@ -118,21 +118,21 @@ the 320Ã—240 parity resolution.
   sets `entersMedium` with per-channel Ïƒ_t exactly like Hyperion; it is NOT a diffuse-tint
   approximation anymore. Thin-walled subsurface keeps the diffuse sheet. Pure absorbers
   (single-scatter albedo = 0, e.g. OpenPBR transmission with `transmission_scatter = 0` and
-  `transmission_depth > 0`) take the **exact deterministic Beerâ€“Lambert** branch (no free-flight
-  sampling, transmittance `exp(-Ïƒ_tÂ·d)` applied at the boundary) â€” matches Hyperion, zero walk
+  `transmission_depth > 0`) take the **exact deterministic Beer–Lambert** branch (no free-flight
+  sampling, transmittance `exp(-Ïƒ_t·d)` applied at the boundary) — matches Hyperion, zero walk
   variance.
-- **`GiHit.geoNormal` is the RAW outward-winding normal â€” never pre-flip it to face the ray.**
+- **`GiHit.geoNormal` is the RAW outward-winding normal — never pre-flip it to face the ray.**
   Pre-flipping erases the side bit: `surf.backface = dot(h.geoNormal, wo) < 0` then reads **always
-  false** â†’ the C7 dielectric-exit branch never engages (interior exits refract with the entry IOR,
+  false** → the C7 dielectric-exit branch never engages (interior exits refract with the entry IOR,
   no TIR), and the medium walk refracts against a wrong-signed normal (broken exits, spurious
-  re-entry, repeated Beerâ€“Lambert). Consumers flip a local copy by wo (`makeSurfaceHit`, mirroring
+  re-entry, repeated Beer–Lambert). Consumers flip a local copy by wo (`makeSurfaceHit`, mirroring
   Hyperion's `shadeSurface`) or use it as the true interface outward normal (`runMediumWalk`
   offsets/Fresnel/refract, backface detection).
-- **The path reservoir has NO temporal merge â€” do not add one back.** A streamed temporal
+- **The path reservoir has NO temporal merge — do not add one back.** A streamed temporal
   merge (yesterday's merged reservoir as today's input) double-counts re-selected history on
-  heavy-tailed path candidates: measured âˆ’2.8% darker on cornell indirect @1024f, reproduced
+  heavy-tailed path candidates: measured −2.8% darker on cornell indirect @1024f, reproduced
   in Monte-Carlo simulation; M-caps don't fix it. Spatial reuse reads neighbours' **unmerged
-  local** reservoirs (bindings 20/21 store local candidates only) â€” plain unbiased RIS, and
+  local** reservoirs (bindings 20/21 store local candidates only) — plain unbiased RIS, and
   progressive accumulation already integrates the temporal axis. The DI reservoir's temporal
   merge has the same latent bias, invisible on light-tailed direct lighting.
 - **New compute shader entry points** MUST be added to `THEIA_ENTRY_SHADERS` in `CMakeLists.txt`
@@ -146,7 +146,7 @@ the 320Ã—240 parity resolution.
 
 - Quick parity/iteration (cheap): `cornell_classic`, `cornell_spheres`, `cornell_suzanne`,
   `dragon_teapot`.
-- **Never** use `ABeautifulGame` for quick test renders â€” expensive. (Required only in final
+- **Never** use `ABeautifulGame` for quick test renders — expensive. (Required only in final
   screenshot/render *deliverable* batches.)
 
 ## Build & test
@@ -192,7 +192,7 @@ zero - fix code, do not grow ignores), bandit (accepted tool-script patterns in 
 `--skip` list), actionlint + yamllint on the workflows. Local pre-flight: run the
 same commands from the repo root before pushing a lint-affecting change.
 
-**Static analysis:** `python tools/check_tidy.py` â€” parallel clang-tidy over
+**Static analysis:** `python tools/check_tidy.py` — parallel clang-tidy over
 `build/compile_commands.json`, classified per `.clang-tidy`'s WarningsAsErrors contract
 (clang-diagnostic/clang-analyzer/bugprone fail the run; modernize/performance/portability
 are report-only). Also registered as ctest `test_tidy` (label `analysis`; the fast test loop is `ctest -LE analysis`; skips when
@@ -225,12 +225,12 @@ SDL3, slangc and volk come from the Vulkan SDK (not vcpkg). vcpkg provides tomlp
 - **Material model = OpenPBR Surface** (Academy Software Foundation), tagged `model = "openpbr"`.
   OpenPBR's canonical/reference implementation is **MaterialX** (`mx_*` genGLSL nodes); follow
   OpenPBR parameter naming and use MaterialX as the cross-check. Parameters are identical to
-  Hyperion â€” the goal is the best real-time approximation of the same OpenPBR inputs, not
+  Hyperion — the goal is the best real-time approximation of the same OpenPBR inputs, not
   different parameters. The shared OpenPBR BSDF lives in Harmonia (`bsdf_shared.slang`).
 
 ## GPU-driven design (Theia)
 
-**Principle:** GPU-driven by design â€” all draw submission parameters (dispatch counts, per-draw
+**Principle:** GPU-driven by design — all draw submission parameters (dispatch counts, per-draw
 instance indices) are GPU-resident and GPU-written. The CPU records commands only; it never reads
 back GPU-side state to determine draw counts or parameters.
 
@@ -252,12 +252,12 @@ flowchart TD
 **GD6 single GPU-generated draw:** `vkCmdExecuteGeneratedCommandsEXT` issues **one** sequence
 whose indirect command is `indirectDrawBuf = {visibleCount, 1, 1}` (GPU-written by the cull
 compute). That single draw dispatches `visibleCount` task workgroups, and the task shader indexes
-`compactInstanceList[gid.x]` â€” **identical semantics to the GD3 fallback**, but the command and
+`compactInstanceList[gid.x]` — **identical semantics to the GD3 fallback**, but the command and
 its dispatch count stay GPU-resident and are consumed through the modern device-generated-commands
 path. Both paths share one task-shader entry point (`gid.x = 0..visibleCount-1`).
 
-> âš ï¸ **Do not** use N per-instance DGC sequences keyed on `SV_DrawIndex`: with `maxDrawCount=1`,
-> `SV_DrawIndex` is the draw index *within* a sequence (always 0), **not** the sequence index â€” so
+> ⚠ï¸ **Do not** use N per-instance DGC sequences keyed on `SV_DrawIndex`: with `maxDrawCount=1`,
+> `SV_DrawIndex` is the draw index *within* a sequence (always 0), **not** the sequence index — so
 > every sequence would read `compactInstanceList[0]` and only instance 0 (e.g. the floor) would
 > rasterize. The single-sequence design (one sequence, `gid.x` indexes the list) avoids this.
 
@@ -268,10 +268,10 @@ path. Both paths share one task-shader entry point (`gid.x = 0..visibleCount-1`)
 - DGC preprocess buffer: sized for `maxSequenceCount=1`, allocated with
   `VK_BUFFER_USAGE_2_PREPROCESS_BUFFER_BIT_EXT` (64-bit flag via `VkBufferUsageFlags2CreateInfo`;
   requires `maintenance5` + `VMA_ALLOCATOR_CREATE_KHR_MAINTENANCE5_BIT`).
-- Cullâ†’draw barrier on `indirectDrawBuf` covers both `DRAW_INDIRECT` (GD3) and `COMMAND_PREPROCESS`
+- Cull→draw barrier on `indirectDrawBuf` covers both `DRAW_INDIRECT` (GD3) and `COMMAND_PREPROCESS`
   (GD6) destination stages so the GPU-written count is fully visible before it is consumed.
-- Two-way dispatch per pass: DGC (preferred) â†’ GD3 indirect (`vkCmdDrawMeshTasksIndirectEXT`).
-  The CPU-count direct draw rung was removed â€” `VK_EXT_mesh_shader` is a hard requirement, so
+- Two-way dispatch per pass: DGC (preferred) → GD3 indirect (`vkCmdDrawMeshTasksIndirectEXT`).
+  The CPU-count direct draw rung was removed — `VK_EXT_mesh_shader` is a hard requirement, so
   the GD3 indirect draw is always available.
 - Debug A/B toggles: `THEIA_FORCE_GD3` (skip DGC, use indirect draw), `THEIA_SINGLE_PASS`
   (bypass two-pass Hi-Z), `THEIA_DISABLE_HIZ` (draw all meshlets), `THEIA_NO_RECONNECTION`
@@ -288,11 +288,11 @@ path. Both paths share one task-shader entry point (`gid.x = 0..visibleCount-1`)
   per-meshlet Hi-Z occlusion is handled by the mesh shader using `cullPhase` push constant.
 
 **Active extensions for GPU-driven draws:**
-- `VK_EXT_mesh_shader`: `vkCmdDrawMeshTasksIndirectEXT` for GPU-count indirect draws âœ…
-- `VK_EXT_device_generated_commands` (`dgcSupported`): single-sequence GPU-generated mesh draw âœ…
+- `VK_EXT_mesh_shader`: `vkCmdDrawMeshTasksIndirectEXT` for GPU-count indirect draws ✅
+- `VK_EXT_device_generated_commands` (`dgcSupported`): single-sequence GPU-generated mesh draw ✅
 
-**Acceleration structure builds â€” device-side only (Khronos deprecation compliant):**
+**Acceleration structure builds — device-side only (Khronos deprecation compliant):**
 - BLAS builds: `vkCmdBuildAccelerationStructuresKHR` (`Geometry::buildBlas`).
 - TLAS builds: `vkCmdBuildAccelerationStructuresKHR` (`SceneBase::buildTlas`).
-- `vkBuildAccelerationStructuresKHR` (host-side) is **never used** â€” deprecated per the
+- `vkBuildAccelerationStructuresKHR` (host-side) is **never used** — deprecated per the
   [Khronos RT AS deprecation blog](https://www.khronos.org/blog/vulkan-ray-tracing-deprecating-host-side-acceleration-structure-builds).
