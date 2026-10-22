@@ -231,7 +231,7 @@ low-spp reference).
 
 ## Baseline
 
-- **v0.7.14** (current; consumes Harmonia v0.7.13): **code health: the scene module
+- **v0.7.14** (consumes Harmonia v0.7.13): **code health: the scene module
   joins `namespace theia` + the arch gate.** `theia/scene` (`Scene`, `GpuInstance`,
   `GpuInstanceBounds`, `GpuMeshlet`) was the family's last global-namespace module — now
   `theia::` like the renderer, with the forward declarations moved inside the namespace.
@@ -257,7 +257,7 @@ low-spp reference).
   unbacked). Consumes Harmonia **v0.7.11** (VK15 — opacity micromap on the KHR AS API; the
   OMM cutout path proven image-identical, MAD = 0 vs the release gallery). 18/18 ctest on
   Windows and Linux; **zero validation errors and warnings** (interactive + offscreen).
-- **v0.7.11** (current; consumes Harmonia v0.7.10 + transitive slang-math v0.3.0): **dual-OS
+- **v0.7.11** (consumes Harmonia v0.7.10 + transitive slang-math v0.3.0): **dual-OS
   CI; refactoring batch 1 (T-01/T-02); I6; descriptor-range fix; regenerated gallery.**
   Build-only CI on windows-latest + ubuntu-26.04 (the GPU suites stay local); portable env
   reads + the GCC missing-field-initializer mirror blocks. **T-01:** shared
