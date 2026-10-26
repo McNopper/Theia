@@ -17,10 +17,10 @@ namespace theia {
 class CameraController {
   public:
     // feel tuning
-    static constexpr float maxPitchDeg = 89.0f;   ///< gimbal-lock clamp at the poles
-    static constexpr float zoomBase = 1.2f;       ///< wheel zoom base (pow per step)
-    static constexpr float minSpeed = 1.0f;       ///< units/second floor
-    static constexpr float maxSpeed = 5000.0f;    ///< units/second ceiling
+    static constexpr float maxPitchDeg = 89.0f; ///< gimbal-lock clamp at the poles
+    static constexpr float zoomBase = 1.2f;     ///< wheel zoom base (pow per step)
+    static constexpr float minSpeed = 1.0f;     ///< units/second floor
+    static constexpr float maxSpeed = 5000.0f;  ///< units/second ceiling
 
     float yaw = -90.0f;        ///< degrees, -90 = looking toward -Z (Cornell default)
     float pitch = 0.0f;        ///< degrees, clamped +/-maxPitchDeg

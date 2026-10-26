@@ -17,8 +17,8 @@
 namespace theia {
 
 namespace {
-constexpr float kCameraCutAngleThreshold = 0.1745f;    ///< ~10 deg
-constexpr float kCameraCutPositionFraction = 0.5f;     ///< focus-distance fraction that reads as a cut
+constexpr float kCameraCutAngleThreshold = 0.1745f; ///< ~10 deg
+constexpr float kCameraCutPositionFraction = 0.5f;  ///< focus-distance fraction that reads as a cut
 constexpr float kTaaBlendAlpha = 0.1f;
 } // namespace
 
@@ -371,8 +371,8 @@ void Application::record(VkCommandBuffer cmd, const harmonia::app::RenderTarget&
             const float posDelta = sm::length(m_camera.position - m_hiZPrevPos);
             const float cosAng = sm::clamp(sm::dot(curDir, m_hiZPrevDir), -1.0f, 1.0f);
             const float angle = std::acos(cosAng);
-            cut = (angle > kCameraCutAngleThreshold)
-              || (posDelta > kCameraCutPositionFraction * std::max(focusDist, 1e-3f));
+            cut = (angle > kCameraCutAngleThreshold) ||
+                  (posDelta > kCameraCutPositionFraction * std::max(focusDist, 1e-3f));
         }
         m_renderer->setHiZTestEnabled(!cut);
         m_hiZPrevPos = m_camera.position;
