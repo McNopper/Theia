@@ -16,8 +16,14 @@ namespace theia {
 /// math. Extracted from the Theia Application God Object (R8/CH9).
 class CameraController {
   public:
+    // feel tuning
+    static constexpr float maxPitchDeg = 89.0f;   ///< gimbal-lock clamp at the poles
+    static constexpr float zoomBase = 1.2f;       ///< wheel zoom base (pow per step)
+    static constexpr float minSpeed = 1.0f;       ///< units/second floor
+    static constexpr float maxSpeed = 5000.0f;    ///< units/second ceiling
+
     float yaw = -90.0f;        ///< degrees, -90 = looking toward -Z (Cornell default)
-    float pitch = 0.0f;        ///< degrees, clamped +/-89
+    float pitch = 0.0f;        ///< degrees, clamped +/-maxPitchDeg
     float speed = 50.0f;       ///< units/second
     float sensitivity = 0.15f; ///< degrees per pixel of mouse movement
     bool captured = false;     ///< whether relative mouse mode is active
@@ -40,13 +46,13 @@ class CameraController {
     void handleMotion(float dxRel, float dyRel) noexcept {
         yaw += dxRel * sensitivity;
         pitch -= dyRel * sensitivity;
-        pitch = std::max(-89.0f, std::min(89.0f, pitch));
+        pitch = std::max(-maxPitchDeg, std::min(maxPitchDeg, pitch));
     }
 
     /// Scale movement speed by pow(1.2, steps) (mouse wheel), clamped to [1, 5000].
     void adjustSpeed(float steps) noexcept {
-        speed *= std::pow(1.2f, steps);
-        speed = std::max(1.0f, std::min(5000.0f, speed));
+        speed *= std::pow(zoomBase, steps);
+        speed = std::max(minSpeed, std::min(maxSpeed, speed));
     }
 
     /// Integrate WASD/Q/E movement over dt, returning the updated position.
