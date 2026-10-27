@@ -45,7 +45,7 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
 
 ## At a glance
 
-- **Release:** v0.7.16 - SM6 + pins (Aether v0.7.8, Harmonia v0.7.15). Prior v0.7.15 - the band split (renderer -> core/pipelines/cull/gi/postfx/
+- **Release:** v0.7.17 - I6 verified (frames-per-flip shipped Harmonia-side v0.7.15, consumed by Theia; 5 CPU contract tests added); pins: slang-math v0.5.0, Aether v0.8.0, Harmonia v0.7.16.
   depth/camera, all under the large-module limits) + AR1 consumption. Lockstep
   reference: Harmonia v0.7.14, Hyperion v0.7.14 (Aether v0.7.7, slang-math v0.4.0).
 - **Quality gates (family-uniform):** blocking lint (Q2-Q6) on every push -
