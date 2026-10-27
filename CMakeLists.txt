@@ -236,6 +236,16 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/McNopper/Harmonia.git
     GIT_TAG v0.7.15
 )
+# slang-math arrives transitively (Aether + Harmonia both declare it against their
+# release pins). The FIRST FetchContent_Declare for a name wins, so declaring it
+# here overrides the transitive v0.4.0 pins for the whole build — family policy
+# "use latest slang-math" (v0.5.0: additive SM4 transform builders, no API change
+# needed by Theia).
+FetchContent_Declare(
+    slang_math
+    GIT_REPOSITORY https://github.com/McNopper/slang-math.git
+    GIT_TAG v0.5.0
+)
 FetchContent_MakeAvailable(aether harmonia)
 
 set(THEIA_SHADER_OUTPUT_DIR "${CMAKE_BINARY_DIR}/shaders")

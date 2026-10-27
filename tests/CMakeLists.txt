@@ -10,6 +10,7 @@ set(THEIA_MODULE_TEST_SOURCES
     module/test_camera_jitter_contract.cpp
     module/test_env_sampling_contract.cpp
     module/test_bsdf_sampling_contract.cpp
+    module/test_cli_flags.cpp
 )
 
 add_executable(theia_module_tests ${THEIA_MODULE_TEST_SOURCES})
