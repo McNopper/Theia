@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(theia VERSION 0.7.16 LANGUAGES C CXX)
+project(theia VERSION 0.7.17 LANGUAGES C CXX)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
@@ -229,12 +229,12 @@ endif()
 FetchContent_Declare(
     aether
     GIT_REPOSITORY https://github.com/McNopper/Aether.git
-    GIT_TAG v0.7.8
+    GIT_TAG v0.8.0
 )
 FetchContent_Declare(
     harmonia
     GIT_REPOSITORY https://github.com/McNopper/Harmonia.git
-    GIT_TAG v0.7.15
+    GIT_TAG v0.7.16
 )
 # slang-math arrives transitively (Aether + Harmonia both declare it against their
 # release pins). The FIRST FetchContent_Declare for a name wins, so declaring it
