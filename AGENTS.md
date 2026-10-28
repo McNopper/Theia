@@ -206,7 +206,11 @@ harmonia/slang-math/aether are downward by design), only **declared edges** exis
 **no include cycles** (file-level SCC detection). Theia's classes live in `namespace theia` (the scene module
 included; `theia::pairing` is a module sub-namespace). **Theia never depends on Hyperion**
 — the sibling renderers are independent; shared code goes down into Harmonia (a `hyperion/` include is a hard
-violation). Sanitizer lane (Clang/GCC configures only):
+violation).
+
+**Dead-code gate:** `python tools/check_dead.py` - orphan headers, never-compiled sources (absent from `compile_commands.json` AND unreferenced by any CMake file), and FetchContent declare/consume mismatches. Also registered as ctest `test_dead` (label `analysis`; local only - registration is gated on the per-user check-dead skill install, so CI runners skip it). Justified findings go into `tools/check_dead.exceptions` with a reason; real dead code is deleted in a fix commit.
+
+Sanitizer lane (Clang/GCC configures only):
 **Coverage lane (Clang/GCC configures only):** configure a separate build with
 `-DTHEIA_COVERAGE=ON` (e.g. `-B build/coverage`), then run `python tools/coverage.py` - it
 builds the instrumented tree, runs the tests with `LLVM_PROFILE_FILE` set, merges the

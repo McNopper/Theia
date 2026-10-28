@@ -519,6 +519,24 @@ if(PROJECT_IS_TOP_LEVEL)
                              --repo "${CMAKE_SOURCE_DIR}" --doc "${CMAKE_SOURCE_DIR}/ARCHITECTURE.md")
             set_tests_properties(test_arch PROPERTIES SKIP_RETURN_CODE 77 LABELS analysis RUN_SERIAL TRUE)
         endif()
+        # The dead-code gate (LOCAL ONLY - not a CI gate): the canonical engine
+        # is the per-user check-dead skill (same model as test_arch); the repo
+        # runs its vendored snapshot. Machines without the skill skip
+        # registration.
+        set(CHECK_DEAD_ENGINE "")
+        foreach(_cand "$ENV{USERPROFILE}/.config/opencode/skills/check-dead/scripts/check_dead.py"
+                      "$ENV{HOME}/.config/opencode/skills/check-dead/scripts/check_dead.py")
+          if(EXISTS "${_cand}")
+            set(CHECK_DEAD_ENGINE "${_cand}")
+            break()
+          endif()
+        endforeach()
+        if(CHECK_DEAD_ENGINE)
+            add_test(NAME test_dead
+                     COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_dead.py
+                             --repo "${CMAKE_SOURCE_DIR}")
+            set_tests_properties(test_dead PROPERTIES SKIP_RETURN_CODE 77 LABELS analysis RUN_SERIAL TRUE)
+        endif()
     endif()
 endif()
 
