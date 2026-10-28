@@ -244,7 +244,7 @@ FetchContent_Declare(
 FetchContent_Declare(
     slang_math
     GIT_REPOSITORY https://github.com/McNopper/slang-math.git
-    GIT_TAG v0.5.0
+    GIT_TAG v0.6.0
 )
 FetchContent_MakeAvailable(aether harmonia)
 
