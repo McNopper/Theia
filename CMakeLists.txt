@@ -265,27 +265,57 @@ set(THEIA_ENTRY_SHADERS
     taa.comp.slang
 )
 
-# Theia-specific sources only. Common Vulkan code now lives in Harmonia and the
-# file-format parsers in Aether, both linked via harmonia::harmonia.
-set(THEIA_LIBRARY_SOURCES
-    # Theia forward rendering
-    src/theia/renderer/ForwardRenderer.cpp
-    src/theia/pipelines/ForwardRendererPipelines.cpp
-    src/theia/cull/GpuCullPass.cpp
-    src/theia/cull/LightCuller.cpp
-    src/theia/gi/GiPass.cpp
-    src/theia/gi/PairingTextures.cpp
-    src/theia/postfx/MotionVectorPass.cpp
-    src/theia/postfx/TaaPass.cpp
-    src/theia/depth/HiZPass.cpp
-    src/theia/cull/GpuDrivenState.cpp
+# Per-band sources (AR2), bottom-up. Common Vulkan code lives in Harmonia and
+# the file-format parsers in Aether; the bands below carry the Theia-side
+# module DAG of ARCHITECTURE.md (theia/scene + theia/camera leaves -> depth ->
+# cull -> renderer -> gi/postfx -> demo).
+set(THEIA_scene_SOURCES
     # Theia GPU scene (rasterizer/meshlet layout — renderer-specific)
     src/theia/scene/Scene.cpp
+    src/theia/scene/Scene.hpp
+)
+# theia_camera (CameraController.hpp, CameraJitter.hpp) and
+# theia_renderer_core (theia/renderer/RendererConstants.hpp + ShaderPath.hpp)
+# are header-only bands — no source lists, INTERFACE targets below.
+set(THEIA_depth_SOURCES
+    src/theia/depth/HiZPass.cpp
+    src/theia/depth/HiZPass.hpp
+)
+set(THEIA_cull_SOURCES
+    src/theia/cull/GpuCullPass.cpp
+    src/theia/cull/GpuCullPass.hpp
+    src/theia/cull/GpuDrivenState.cpp
+    src/theia/cull/GpuDrivenState.hpp
+    src/theia/cull/LightCuller.cpp
+    src/theia/cull/LightCuller.hpp
+)
+set(THEIA_renderer_SOURCES
+    # One C++ class, TU-split across the theia/renderer and theia/pipelines
+    # arch modules (see the theia_renderer target comment below): the TUs
+    # reference each other's symbols, so they ship in one static library.
+    src/theia/renderer/ForwardRenderer.cpp
+    src/theia/renderer/ForwardRenderer.hpp
+    src/theia/pipelines/ForwardRendererPipelines.cpp
+)
+set(THEIA_gi_SOURCES
+    src/theia/gi/GiPass.cpp
+    src/theia/gi/GiPass.hpp
+    src/theia/gi/PairingTextures.cpp
+    src/theia/gi/PairingTextures.hpp
+)
+set(THEIA_postfx_SOURCES
+    src/theia/postfx/MotionVectorPass.cpp
+    src/theia/postfx/MotionVectorPass.hpp
+    src/theia/postfx/TaaPass.cpp
+    src/theia/postfx/TaaPass.hpp
 )
 
 set(THEIA_DEMO_SOURCES
     src/demo/Application.cpp
+    src/demo/Application.hpp
     src/demo/ApplicationCompute.cpp
+    src/demo/EnvImportanceResources.hpp
+    src/demo/ViewAccumulation.hpp
 )
 
 set(THEIA_APP_SOURCES
@@ -367,26 +397,99 @@ set(COMPILE_SLANG_EXTRA_INCLUDE_DIRS "${HARMONIA_SHADER_SOURCE_DIR}")
 compile_slang_shaders(theia_shaders "${THEIA_SHADER_OUTPUT_DIR}" ${THEIA_ENTRY_SHADERS})
 unset(COMPILE_SLANG_EXTRA_INCLUDE_DIRS)
 
-add_library(theia_lib STATIC ${THEIA_LIBRARY_SOURCES})
-add_dependencies(theia_lib theia_shaders)
-
-target_include_directories(theia_lib
-    PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
-)
-
+# ── Layered targets (AR2, Harmonia pattern) ──────────────────────────────────
+# The include-DAG of ARCHITECTURE.md expressed as target_link_libraries — an
+# upward include of an out-of-band symbol is now a LINK error. Bottom-up;
+# shared leaves sit lowest. Only the leaves publish src/ (every band reaches
+# one transitively).
+#
+#   theia_scene   theia_camera   theia_renderer_core      (layer leaves)
+#         \____________|______________/  |
+#          theia_depth -> renderer_core |
+#          theia_cull -> scene, depth, renderer_core
+#          theia_renderer -> cull, depth, scene, camera, renderer_core
+#          theia_gi -> scene, renderer_core     theia_postfx -> renderer_core
+#          theia_demo -> renderer, cull, gi, postfx, scene, camera
+#          theia (exe) -> demo
+#
+# theia_renderer carries BOTH ForwardRenderer TUs (the theia/renderer and
+# theia/pipelines arch modules): the class is TU-split with mutual symbol
+# references (ForwardRenderer.cpp calls prepareAttachments/beginSceneRendering/
+# bindMeshSets/updateSceneDescriptors, ForwardRendererPipelines.cpp calls
+# loadShaderModule), so two targets could not flow one way. The file layout and
+# the include graph are unchanged; this is a build-graph grouping only.
 # harmonia::harmonia brings the common Vulkan library plus Aether, Vulkan SDK,
 # volk, stb and OpenEXR (incl. HARMONIA_HAS_OPENEXR) transitively.
-target_link_libraries(theia_lib
-    PUBLIC theia_project_options harmonia::harmonia meshoptimizer::meshoptimizer
+add_library(theia_scene STATIC ${THEIA_scene_SOURCES})
+target_include_directories(theia_scene
+    PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(theia_scene
+    PUBLIC theia_project_options theia_vulkan_sdk harmonia::harmonia
+           meshoptimizer::meshoptimizer
 )
 
-target_compile_definitions(theia_lib
-    PUBLIC THEIA_SHADER_DIR=\"${THEIA_SHADER_OUTPUT_DIR}\"
-           THEIA_ASSETS_DIR=\"${AETHER_ASSETS_DIR}\"
+# theia_camera and theia_renderer_core are header-only (no .cpp, no symbols
+# of their own): INTERFACE targets — no archive, include dirs/definitions
+# propagate to their consumers through the link interface.
+add_library(theia_camera INTERFACE)
+target_include_directories(theia_camera
+    INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(theia_camera
+    INTERFACE theia_project_options theia_vulkan_sdk harmonia::harmonia
+)
+
+add_library(theia_renderer_core INTERFACE)
+target_include_directories(theia_renderer_core
+    INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(theia_renderer_core
+    INTERFACE theia_project_options theia_vulkan_sdk harmonia::harmonia
+)
+target_compile_definitions(theia_renderer_core
+    INTERFACE THEIA_SHADER_DIR=\"${THEIA_SHADER_OUTPUT_DIR}\"
+)
+
+add_library(theia_depth STATIC ${THEIA_depth_SOURCES})
+target_link_libraries(theia_depth
+    PUBLIC theia_project_options theia_vulkan_sdk harmonia::harmonia
+           theia_renderer_core
+)
+
+add_library(theia_cull STATIC ${THEIA_cull_SOURCES})
+target_link_libraries(theia_cull
+    PUBLIC theia_project_options theia_vulkan_sdk harmonia::harmonia
+           theia_scene theia_depth theia_renderer_core
+)
+
+add_library(theia_renderer STATIC ${THEIA_renderer_SOURCES})
+target_link_libraries(theia_renderer
+    PUBLIC theia_project_options theia_vulkan_sdk harmonia::harmonia
+           theia_cull theia_depth theia_scene theia_camera theia_renderer_core
+)
+
+add_library(theia_gi STATIC ${THEIA_gi_SOURCES})
+target_link_libraries(theia_gi
+    PUBLIC theia_project_options theia_vulkan_sdk harmonia::harmonia
+           theia_scene theia_renderer_core
+)
+
+add_library(theia_postfx STATIC ${THEIA_postfx_SOURCES})
+target_link_libraries(theia_postfx
+    PUBLIC theia_project_options theia_vulkan_sdk harmonia::harmonia
+           theia_renderer_core
 )
 
 add_library(theia_demo STATIC ${THEIA_DEMO_SOURCES})
-target_link_libraries(theia_demo PUBLIC theia_lib)
+add_dependencies(theia_demo theia_shaders)
+target_link_libraries(theia_demo
+    PUBLIC theia_project_options theia_vulkan_sdk harmonia::harmonia
+           theia_renderer theia_cull theia_gi theia_postfx theia_scene theia_camera
+)
+target_compile_definitions(theia_demo
+    PUBLIC THEIA_ASSETS_DIR=\"${AETHER_ASSETS_DIR}\"
+)
 
 add_executable(theia ${THEIA_APP_SOURCES})
 target_link_libraries(theia PRIVATE theia_demo)
