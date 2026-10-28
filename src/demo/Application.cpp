@@ -800,16 +800,13 @@ void Application::onUpdate(float dtSeconds) {
 
     // Restart progressive accumulation whenever the view changes so a moving
     // camera doesn't smear across viewpoints and a stationary one converges.
+    // Cadence-independent by construction: the --frames-per-flip gate only
+    // throttles the PRESENT half (Harmonia's AppPresent); rendering and this
+    // reset decision run on every iteration.
     const float ev100 = m_camera.physical.ev100();
-    const bool viewChanged = !m_viewSigValid || m_camera.position != m_prevCamPos ||
-                             m_camera.target != m_prevCamTarget || m_camera.up != m_prevCamUp || ev100 != m_prevEv100;
+    const bool viewChanged = m_viewGate.update(m_camera.position, m_camera.target, m_camera.up, ev100);
     if (viewChanged) {
         resetAccumulation();
-        m_prevCamPos = m_camera.position;
-        m_prevCamTarget = m_camera.target;
-        m_prevCamUp = m_camera.up;
-        m_prevEv100 = ev100;
-        m_viewSigValid = true;
     }
     // TAA gate: a changed view means this frame is a fresh, non-accumulated sample where TAA
     // provides temporal stability; a static view is converged by progressive accumulation, so

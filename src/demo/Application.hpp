@@ -9,6 +9,7 @@
 #include <slang-math/slang-math.hpp>
 
 #include "EnvImportanceResources.hpp"
+#include "ViewAccumulation.hpp"
 #include "harmonia/app/App.hpp"
 #include "harmonia/app/IRenderer.hpp"
 #include "theia/camera/CameraController.hpp"
@@ -155,12 +156,10 @@ class Application final : public harmonia::app::App, public harmonia::app::IRend
     /// interactive-window TAA pass: TAA runs only during motion, never on a converged static view.
     bool m_cameraMoving = false;
 
-    // Previous view signature, used to reset progressive accumulation on change.
-    sm::float3 m_prevCamPos{0.0f, 0.0f, 0.0f};
-    sm::float3 m_prevCamTarget{0.0f, 0.0f, 0.0f};
-    sm::float3 m_prevCamUp{0.0f, 0.0f, 0.0f};
-    float m_prevEv100 = 0.0f;
-    bool m_viewSigValid = false;
+    // Move-resets-accumulation gate: the previous view signature plus the decision
+    // that drives resetAccumulation() (headless-testable seam, see
+    // ViewAccumulation.hpp; epoch mirrors App's m_accumViewEpoch token).
+    ViewAccumulationGate m_viewGate;
 
     // harmonia::renderer::Camera-cut detection for two-pass Hi-Z occlusion culling: on a large view change the
     // previous-frame visibility set is stale, so the Hi-Z test is disabled for that frame and
