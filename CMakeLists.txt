@@ -224,8 +224,7 @@ endif()
 # ── Shared libraries: Aether (file format) + Harmonia (common Vulkan) ─────────
 # Consumed via FetchContent, pinned to published release tags.  For local
 # development against working copies, override FETCHCONTENT_SOURCE_DIR_AETHER /
-# FETCHCONTENT_SOURCE_DIR_HARMONIA.  Aether is pinned v0.7.2; Harmonia is pinned
-# to the latest release.
+# FETCHCONTENT_SOURCE_DIR_HARMONIA.
 FetchContent_Declare(
     aether
     GIT_REPOSITORY https://github.com/McNopper/Aether.git
@@ -236,16 +235,11 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/McNopper/Harmonia.git
     GIT_TAG v0.7.16
 )
-# slang-math arrives transitively (Aether + Harmonia both declare it against their
-# release pins). The FIRST FetchContent_Declare for a name wins, so declaring it
-# here overrides the transitive v0.4.0 pins for the whole build — family policy
-# "use latest slang-math" (v0.5.0: additive SM4 transform builders, no API change
-# needed by Theia).
-FetchContent_Declare(
-    slang_math
-    GIT_REPOSITORY https://github.com/McNopper/slang-math.git
-    GIT_TAG v0.6.0
-)
+# slang-math arrives transitively: Aether and Harmonia are its direct consumers
+# and pin it in their own CMakeLists; Harmonia is the renderer-tier vendor
+# (Theia and Hyperion take the version Harmonia fetches).  Never declare
+# slang-math here - a direct declare would fork the renderer tier's math
+# version.
 FetchContent_MakeAvailable(aether harmonia)
 
 set(THEIA_SHADER_OUTPUT_DIR "${CMAKE_BINARY_DIR}/shaders")
