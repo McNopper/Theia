@@ -290,6 +290,9 @@ set(THEIA_renderer_SOURCES
     src/theia/renderer/ForwardRenderer.cpp
     src/theia/renderer/ForwardRenderer.hpp
     src/theia/pipelines/ForwardRendererPipelines.cpp
+    # PERF5 10a: per-pass GPU timing scaffolding (THEIA_PASS_TIMING=1).
+    src/theia/renderer/PassTimer.cpp
+    src/theia/renderer/PassTimer.hpp
 )
 set(THEIA_gi_SOURCES
     src/theia/gi/GiPass.cpp

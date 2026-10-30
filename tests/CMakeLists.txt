@@ -12,6 +12,7 @@ set(THEIA_MODULE_TEST_SOURCES
     module/test_bsdf_sampling_contract.cpp
     module/test_view_accumulation_contract.cpp
     module/test_cli_flags.cpp
+    module/test_pass_timer.cpp
 )
 
 add_executable(theia_module_tests ${THEIA_MODULE_TEST_SOURCES})

@@ -18,6 +18,7 @@
 #include "theia/postfx/MotionVectorPass.hpp"
 #include "theia/postfx/TaaPass.hpp"
 #include "theia/renderer/ForwardRenderer.hpp"
+#include "theia/renderer/PassTimer.hpp"
 #include "theia/scene/Scene.hpp"
 
 namespace theia {
@@ -115,6 +116,8 @@ class Application final : public harmonia::app::App, public harmonia::app::IRend
     GiPass m_giPass;
     MotionVectorPass m_motionVectorPass;
     TaaPass m_taaPass;
+    /// PERF5 10a: per-pass GPU timing scaffolding (THEIA_PASS_TIMING=1) — see PassTimer.hpp.
+    PassTimer m_passTimer;
     std::unique_ptr<Scene> m_scene = std::make_unique<Scene>();
 
     /// Environment importance-sampling state captured at scene-load for the per-frame GI dispatch.

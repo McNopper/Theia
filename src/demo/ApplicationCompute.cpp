@@ -160,7 +160,9 @@ void Application::submitAsyncCompute(VkCommandBuffer cmd,
     };
     harmonia::core::pipelineBarrier(asyncCmd, asyncAcquire);
 
+    m_passTimer.giBegin(asyncCmd);
     m_giPass.record(asyncCmd, gp, /*skipPreBarriers=*/true);
+    m_passTimer.giEnd(asyncCmd);
 
     const std::array asyncRelease{
         harmonia::core::imageBarrier(m_renderer->giBufferImage(),

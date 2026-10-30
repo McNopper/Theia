@@ -29,6 +29,7 @@ Application::~Application() {
     }
     // Harmonia's ~App() calls vkDeviceWaitIdle; wait here so async resources are idle.
     vkDeviceWaitIdle(dev);
+    m_passTimer.shutdown();
 
     if (m_stagesCmdBufs[0] != VK_NULL_HANDLE) {
         commandPool().free(m_stagesCmdBufs[0]);
@@ -131,6 +132,11 @@ bool Application::onInitialize() {
     // onUpdate() calls resetAccumulation() whenever the view changes. The
     // offscreen capture path accumulates regardless of this flag.
     setInteractiveAccumulation(true);
+
+    // PERF5 10a: per-pass GPU timing (THEIA_PASS_TIMING=1). Diagnostics only —
+    // degrades to a no-op when the toggle is unset or the device has no
+    // timestamp queries; never fails initialization.
+    m_passTimer.initialize(deviceContext());
 
     // LightCuller (Forward+ tile-based light culling)
     if (!m_lightCuller.initialize(deviceContext(), swapchain().extent().width, swapchain().extent().height)) {
@@ -353,6 +359,10 @@ bool Application::onSceneLoaded(const harmonia::scene::SceneLoader::SceneConfig&
 }
 
 void Application::record(VkCommandBuffer cmd, const harmonia::app::RenderTarget& target) noexcept {
+    // PERF5 10a: log the previous batch's per-pass GPU times for this slot, then
+    // arm the slot this frame's timestamp hooks write into (PassTimer::beginFrame).
+    m_passTimer.beginFrame(frameIndex() % 2U);
+
     m_renderer->setRngState(frameIndex(), config().rngSeed, config().deterministicReplay);
 
     const CameraMatrices cam = computeCameraMatrices(target);
@@ -429,18 +439,24 @@ void Application::submitSingleQueueGI(VkCommandBuffer cmd,
     }
 
     GiPass::FrameParams gp = buildGiFrameParams(view, curViewProj);
+    m_passTimer.giBegin(cmd);
     m_giPass.record(cmd, gp);
+    m_passTimer.giEnd(cmd);
 
     if (m_motionVectorPass.isInitialized()) {
         const MotionVectorPass::FrameParams mvp = buildMotionVectorParams(curViewProj);
+        m_passTimer.motionBegin(cmd);
         m_motionVectorPass.record(cmd, mvp);
+        m_passTimer.motionEnd(cmd);
     }
     if (m_taaPass.isInitialized() && m_useTaa && m_cameraMoving) {
+        m_passTimer.taaBegin(cmd);
         m_taaPass.record(cmd,
                          TaaPass::FrameParams{
                              .alpha = kTaaBlendAlpha,
                              .firstFrame = false,
                          });
+        m_passTimer.taaEnd(cmd);
     }
 }
 
@@ -691,18 +707,22 @@ std::pair<VkCommandBuffer, VkSemaphore> Application::onBeforeSceneStages(VkComma
     // MotionVectorPass runs on the graphics queue so motionVectorImage stays in the
     // graphics family. giBuffer is now SHADER_READ_ONLY_OPTIMAL on the graphics queue.
     if (m_motionVectorPass.isInitialized()) {
+        m_passTimer.motionBegin(stagesCmd);
         m_motionVectorPass.record(stagesCmd, m_pendingMvp);
+        m_passTimer.motionEnd(stagesCmd);
     }
     // C4: TAA after MotionVectorPass, before denoiser (async path). Runs only while the
     // camera is moving (fresh, non-accumulated frame); a static view is converged by
     // progressive accumulation, which TAA would blur.
     // AABB clamp handles stale history — no passthrough needed on motion resume.
     if (m_taaPass.isInitialized() && m_useTaa && m_cameraMoving) {
+        m_passTimer.taaBegin(stagesCmd);
         m_taaPass.record(stagesCmd,
                          TaaPass::FrameParams{
                              .alpha = kTaaBlendAlpha,
                              .firstFrame = false,
                          });
+        m_passTimer.taaEnd(stagesCmd);
     }
 
     return {stagesCmd, m_asyncSemaphores[slot]};
