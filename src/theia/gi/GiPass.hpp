@@ -21,32 +21,13 @@ class Scene;
 
 /// Ray-query global-illumination compute stage.
 ///
-/// PERF5 wavefront pipeline (PLAN.md "PERF5 wavefront design (stage 10a)"):
-/// records the wavefront dispatch train after the forward geometry pass —
-///   1. generate (wavefront_generate, once per frame): G-buffer load, wave-0
-///      camera-ray enqueue (all eight slots initialized every frame), collect init;
-///   2. maxDepth + 1 (trace, shade) pairs (10d wave loop):
-///        trace (wavefront_trace) — the verbatim traceClosestHit RayQuery
-///          traversal over the live records of the current wave's ray buffer →
-///          the WaveHit buffer (miss sentinel for misses); at wave 0 only kind 0
-///          is traced (the slot-0 single-trace optimization — all four sample
-///          slots hold the identical camera ray, shade reuses record 0's hit);
-///        shade (gi.comp) — wave 0 shades the primary vertices (reservoir
-///          passes + per-sample primary blocks); waves >= 1 resume one record
-///          per slot (surface reconstruction, integrateSurface, inline null
-///          chain + medium walk) and REGENERATE the next wave's successors into
-///          the non-read ping-pong half; the last wave composites the collect.
-///      Dead slots exit on the alive flag (fixed-width dispatches, Q1 — no
-///      indirect dispatch); every slot is rewritten every wave (alive
-///      continuation or explicit kill — the buffers are never cleared).
-///   The resulting indirect (bounce) radiance accumulates IN the path records
-///   and lands in the per-pixel WaveCollect (no atomics anywhere); the last
-///   wave's shade composites it into the HDR render target — RT-GI is the
-///   renderer's single indirect provider (there is no split-sum IBL fallback).
-/// The three pipelines share one layout (descriptor set + push-constant block).
-/// 10c: the trace pass is the single source of wave-0 hits — the shade dispatch
-/// reconstructs the primary surface from hit record 0 (reconstructGiHit; the
-/// miss sentinel triggers the Q1 G-buffer fallback).
+/// Runs one compute dispatch after the forward geometry pass. For every primary
+/// hit recorded in the forward G-buffer it spawns a BSDF continuation ray and walks
+/// 1..maxDepth path segments through the scene TLAS (inline VK_KHR_ray_query),
+/// evaluating the shared Harmonia `integrateSurface` estimator at each secondary
+/// vertex. The resulting indirect (bounce) radiance is additively composited into
+/// the HDR render target — RT-GI is the renderer's single indirect provider (there
+/// is no split-sum IBL fallback path).
 ///
 /// Always recorded after the forward geometry pass, which therefore emits direct +
 /// emission only (the `giEnabled` push-constant bit 1 also tells the forward pass to
@@ -147,8 +128,7 @@ class GiPass {
                                   const Config& cfg,
                                   const harmonia::core::CommandPool& uploadPool,
                                   const char* giSpv = "gi.comp.spv",
-                                  const char* generateSpv = "wavefront_generate.comp.spv",
-                                  const char* traceSpv = "wavefront_trace.comp.spv");
+                                  const char* generateSpv = "wavefront_generate.comp.spv");
     void shutdown();
 
     /// Dispatch the GI accumulation pass. Call AFTER ForwardRenderer::recordFrame()
@@ -196,19 +176,13 @@ class GiPass {
         std::uint32_t pairingEnabled = 0;        ///< 1 = Gaussian paired neighbours in path-reservoir spatial reuse
         std::uint32_t reconnectShiftEnabled = 1; ///< GI-ENH (a): reconnection shift feature mask
                                                  ///< bit0 = k=2, bit1 = k>=3. 0 = replay-only.
-        std::uint32_t waveIndex = 0;             ///< PERF5 10d: current wave (0..waveCount-1)
-        std::uint32_t waveCount = 1;             ///< PERF5 10d: dispatched wave count — 1 when the
-                                                 ///< ReSTIR PT path reservoir owns ALL multi-bounce
-                                                 ///< transport (per-sample slots are provably dead
-                                                 ///< after wave 0); maxDepth + 1 for the legacy
-                                                 ///< per-sample walks
     };
     // Layout guard: must equal the Slang `GiParams` struct exactly (2×float4x4 + float4
-    // + 28 scalars = 144 + 112 = 256). Fails loudly on any accidental padding mismatch.
-    static_assert(sizeof(GiPushConstants) == 256);
+    // + 26 scalars = 144 + 104 = 248). Fails loudly on any accidental padding mismatch.
+    static_assert(sizeof(GiPushConstants) == 248);
 
     [[nodiscard]] bool createDescriptors();
-    [[nodiscard]] bool createPipelines(const char* giSpv, const char* generateSpv, const char* traceSpv);
+    [[nodiscard]] bool createPipelines(const char* giSpv, const char* generateSpv);
     void updateDescriptors(const FrameParams& params);
     void
     updateRestirDescriptors(const FrameParams& params,
@@ -235,10 +209,6 @@ class GiPass {
     /// ahead of the GI dispatch every frame. Shares m_pipelineLayout (same
     /// descriptor set + push-constant block as the GI shader).
     harmonia::core::UniquePipeline m_generatePipeline;
-    /// PERF5 10c: trace pass (the verbatim traceClosestHit RayQuery traversal over
-    /// the wave-0 records → WaveHit buffer), dispatched between generate and GI.
-    /// Shares m_pipelineLayout.
-    harmonia::core::UniquePipeline m_tracePipeline;
 
     bool m_hdrFirstUse = true;
     const Scene* m_boundScene = nullptr;
@@ -274,36 +244,24 @@ class GiPass {
 
     /// PERF5 10b: wavefront path buffers (PLAN.md "PERF5 wavefront design" §2).
     /// Exact Slang std430 strides (float3 = 16 B align): WavePath 160, WaveHit 32,
-    /// WaveCollect 176 (10d: the collect carries BOTH per-sample composite chains —
-    /// indirect and primary env NEE — see wave_common.slang; was 112 B) — sized to
-    /// the render resolution × kWaveSlotsPerPixel (recreated on resize via
-    /// initialize()). The CPU never indexes the contents.
+    /// WaveCollect 112 — the design's byte math pins them; sized to the render
+    /// resolution × kWaveSlotsPerPixel (recreated on resize via initialize()).
+    /// The CPU never indexes the contents.
     static constexpr VkDeviceSize kWavePathStride = 160;
     static constexpr VkDeviceSize kWaveHitStride = 32;
-    static constexpr VkDeviceSize kWaveCollectStride = 176;
+    static constexpr VkDeviceSize kWaveCollectStride = 112;
     /// Fixed per-pixel slot window: kinds 0..3 = adaptive samples, 4 = path-reservoir
-    /// local candidate, 5..7 = spatial-replay candidates (enqueue is a later stage;
-    /// the generate pass initializes all eight slots every frame — Q2 — so every
-    /// first read is defined). Slot = pixelIndex * kWaveSlotsPerPixel + kind (no
-    /// allocation atomics — deterministic index space; the records' alive bit is
-    /// the truth, buffers are never cleared).
+    /// local candidate (10c), 5..7 = spatial-replay candidates (10c). Slot =
+    /// pixelIndex * kWaveSlotsPerPixel + kind (no allocation atomics — deterministic
+    /// index space; the records' alive bit is the truth, buffers are never cleared).
     static constexpr std::uint32_t kWaveSlotsPerPixel = 8;
-    /// Ray buffer ×2 per the design's byte math. 10d: the regenerate is IN-PLACE
-    /// (both ray bindings alias m_wavePathBuf[0] — each shade thread reads and
-    /// writes only its own pixel's slots, so the wave barriers order everything;
-    /// a physical ping-pong would force every fixed-width wave to re-write every
-    /// dead slot's 160-B record, which dominated the frame on unified memory).
-    /// m_wavePathBuf[1] stays allocated as the design's second ray half — the
-    /// 10e stream-compaction scratch. Wave 0 is fully rewritten by the generate
-    /// pass every frame; the buffers are never cleared (the alive bit is the
-    /// truth — dead records persist in their slots).
+    /// Ray buffer ×2 for the per-wave ping-pong. 10b has only wave 0: generate
+    /// writes `cur` every frame and the GI dispatch reads it in the same frame;
+    /// wave N+1 successors are 10c.
     harmonia::core::Buffer m_wavePathBuf[2]{};
-    std::uint32_t m_wavePathPingPong = 0;      ///< 10d: inert bookkeeping (bindings alias buf[0]);
-                                               ///< retained for the 10e compaction half
-    harmonia::core::Buffer m_waveHitBuf{};     ///< trace-pass output (10c) — written by each wave's
-                                               ///< trace dispatch, read by that wave's shade dispatch
-    harmonia::core::Buffer m_waveCollectBuf{}; ///< per-pixel collect: generate-initialized, accumulated
-                                               ///< by the shade waves, composited by the last wave (10d)
+    std::uint32_t m_wavePathPingPong = 0;      ///< index of the buffer generate writes THIS frame
+    harmonia::core::Buffer m_waveHitBuf{};     ///< trace-pass output (10c) — allocated, unconsumed in 10b
+    harmonia::core::Buffer m_waveCollectBuf{}; ///< collect init by generate — consumed from 10d
 
     VkImageView m_boundMotionVectorView = VK_NULL_HANDLE;
 };

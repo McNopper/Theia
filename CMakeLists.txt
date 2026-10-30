@@ -255,7 +255,6 @@ set(THEIA_ENTRY_SHADERS
     forward_cull.comp.slang
     gi.comp.slang
     wavefront_generate.comp.slang
-    wavefront_trace.comp.slang
     motion_vector.comp.slang
     hiz_build.comp.slang
     taa.comp.slang
