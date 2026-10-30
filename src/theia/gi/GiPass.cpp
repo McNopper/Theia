@@ -39,36 +39,6 @@ namespace {
 }
 
 constexpr std::uint64_t kPairingSeed = 0x50414952494E47ULL; // "PAIRING"
-
-/// One compute pipeline from a compiled .spv against the shared layout
-/// (descriptor-buffer flag per MOD1).
-[[nodiscard]] bool
-createComputePipeline(VkDevice device, VkPipelineLayout layout, const char* spv, harmonia::core::UniquePipeline& out) {
-    auto module = harmonia::core::createShaderModule(device, shaderPath(spv));
-    if (!module) {
-        harmonia::core::Logger::error("GiPass: cannot load shader: {}", spv);
-        return false;
-    }
-
-    const VkComputePipelineCreateInfo pipeInfo{
-        .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
-        .flags = VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT, // MOD1
-        .stage = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-                  .stage = VK_SHADER_STAGE_COMPUTE_BIT,
-                  .module = *module,
-                  .pName = "main"},
-        .layout = layout,
-    };
-    VkPipeline pipeline{};
-    const VkResult res = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &pipeline);
-    vkDestroyShaderModule(device, *module, nullptr);
-    if (res != VK_SUCCESS) {
-        harmonia::core::Logger::error("GiPass: failed to create compute pipeline ({})", spv);
-        return false;
-    }
-    out = harmonia::core::UniquePipeline{device, pipeline};
-    return true;
-}
 } // namespace
 
 GiPass::~GiPass() {
@@ -78,8 +48,7 @@ GiPass::~GiPass() {
 bool GiPass::initialize(const harmonia::DeviceContext& ctx,
                         const Config& cfg,
                         const harmonia::core::CommandPool& uploadPool,
-                        const char* giSpv,
-                        const char* generateSpv) {
+                        const char* giSpv) {
     m_ctx = &ctx;
     m_cfg = cfg;
     m_hdrFirstUse = true;
@@ -136,57 +105,6 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx,
         }
     }
 
-    // PERF5 10b: wavefront path buffers (design §2 byte math: pixels × 8 slots ×
-    // stride; ray buffer ×2 for the wave ping-pong). No one-time fill — the
-    // generate pass rewrites every consumed slot each frame (the records' alive
-    // bit is the truth). These are structural now: the GI dispatch consumes the
-    // wave-0 records, so a creation failure fails the pass (GI off), same as a
-    // pipeline failure.
-    {
-        const VkDeviceSize pixels = static_cast<VkDeviceSize>(cfg.width) * static_cast<VkDeviceSize>(cfg.height);
-        const VkDeviceSize wavePathBytes = pixels * kWaveSlotsPerPixel * kWavePathStride;
-        const VkDeviceSize waveHitBytes = pixels * kWaveSlotsPerPixel * kWaveHitStride;
-        const VkDeviceSize waveCollectBytes = pixels * kWaveCollectStride;
-        for (auto& slot : m_wavePathBuf) {
-            auto buf = harmonia::core::Buffer::create(ctx,
-                                                      wavePathBytes,
-                                                      VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                          VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                                      VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                                                      "theia.gi.wavePath");
-            if (!buf) {
-                harmonia::core::Logger::error("GiPass: failed to create wavefront path buffer: VkResult {}",
-                                              static_cast<int>(buf.error()));
-                return false;
-            }
-            slot = std::move(*buf);
-        }
-        auto hitBuf = harmonia::core::Buffer::create(ctx,
-                                                     waveHitBytes,
-                                                     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                                     VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                                                     "theia.gi.waveHit");
-        if (!hitBuf) {
-            harmonia::core::Logger::error("GiPass: failed to create wavefront hit buffer: VkResult {}",
-                                          static_cast<int>(hitBuf.error()));
-            return false;
-        }
-        m_waveHitBuf = std::move(*hitBuf);
-        auto collectBuf = harmonia::core::Buffer::create(ctx,
-                                                         waveCollectBytes,
-                                                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                                         VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                                                         "theia.gi.waveCollect");
-        if (!collectBuf) {
-            harmonia::core::Logger::error("GiPass: failed to create wavefront collect buffer: VkResult {}",
-                                          static_cast<int>(collectBuf.error()));
-            return false;
-        }
-        m_waveCollectBuf = std::move(*collectBuf);
-    }
-
     // GI-ENH: Gaussian paired-neighbor pairing textures (self-inverse offset maps
     // built deterministically on the CPU, uploaded once, read-only at runtime).
     {
@@ -208,13 +126,12 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx,
     m_reservoirsCleared = false;
     m_pathReservoirPingPong = 0;
     m_pathReservoirsCleared = false;
-    m_wavePathPingPong = 0;
     m_boundMotionVectorView = VK_NULL_HANDLE;
 
     if (!createDescriptors()) {
         return false;
     }
-    if (!createPipelines(giSpv, generateSpv)) {
+    if (!createPipeline(giSpv)) {
         return false;
     }
     return true;
@@ -229,15 +146,9 @@ void GiPass::shutdown() {
     m_pathReservoirBuf[1] = {};
     m_pathReservoirsCleared = false;
     m_pathReservoirPingPong = 0;
-    m_wavePathBuf[0] = {};
-    m_wavePathBuf[1] = {};
-    m_wavePathPingPong = 0;
-    m_waveHitBuf = {};
-    m_waveCollectBuf = {};
     m_pairingOffsetBuf = {};
     m_boundMotionVectorView = VK_NULL_HANDLE;
     m_pipeline.reset();
-    m_generatePipeline.reset();
     m_pipelineLayout.reset();
     for (auto& w : m_descWriters) {
         w.shutdown(); // MOD1: replaces pool + sets
@@ -253,7 +164,7 @@ void GiPass::shutdown() {
 }
 
 bool GiPass::createDescriptors() {
-    const std::array<VkDescriptorSetLayoutBinding, 29> bindings{{
+    const std::array<VkDescriptorSetLayoutBinding, 25> bindings{{
         {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // TLAS
         {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // hdr (RW)
         {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // giBuffer
@@ -287,19 +198,12 @@ bool GiPass::createDescriptors() {
                                                                                           // RW)
         {24, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI-ENH shift share (prev,
                                                                                           // RO)
-        {25, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // PERF5 10b wavefront ray
-                                                                                          // buffer (cur, RW)
-        {26, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // PERF5 wavefront ray buffer
-                                                                                          // (prev, RW; 10c successors)
-        {27, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // PERF5 wavefront hits (10c)
-        {28, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // PERF5 wavefront collect
-                                                                                          // (10d)
     }};
 
     // MOD1: no UPDATE_AFTER_BIND — incompatible with DESCRIPTOR_BUFFER layouts.
     constexpr VkDescriptorBindingFlags kTextureFlags = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
-    const std::array<VkDescriptorBindingFlags, 29> bindingFlags{
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, kTextureFlags, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    const std::array<VkDescriptorBindingFlags, 25> bindingFlags{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, kTextureFlags,
+                                                                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = static_cast<std::uint32_t>(bindingFlags.size()),
@@ -322,7 +226,7 @@ bool GiPass::createDescriptors() {
 
     // MOD1: descriptor buffers (replaces the pool + allocated sets).
     for (std::uint32_t si = 0; si < kDescriptorSlots; ++si) {
-        if (!m_descWriters[si].init(*m_ctx, setLayout, 29, si == 0 ? "theia.gi.descBuf0" : "theia.gi.descBuf1")) {
+        if (!m_descWriters[si].init(*m_ctx, setLayout, 25, si == 0 ? "theia.gi.descBuf0" : "theia.gi.descBuf1")) {
             harmonia::core::Logger::error("GiPass: failed to create descriptor buffer slot {}", si);
             for (std::uint32_t j = 0; j <= si; ++j)
                 m_descWriters[j].shutdown();
@@ -337,7 +241,7 @@ bool GiPass::createDescriptors() {
     return true;
 }
 
-bool GiPass::createPipelines(const char* giSpv, const char* generateSpv) {
+bool GiPass::createPipeline(const char* giSpv) {
     const VkPushConstantRange pcRange{
         .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
         .offset = 0,
@@ -357,15 +261,29 @@ bool GiPass::createPipelines(const char* giSpv, const char* generateSpv) {
     }
     m_pipelineLayout = harmonia::core::UniquePipelineLayout{m_ctx->device, pipelineLayout};
 
-    // PERF5 10b: two compute pipelines against the shared layout — the generate
-    // pass (camera-ray enqueue + collect init, dispatched first) and the GI pass
-    // (consumes the wave-0 records).
-    if (!createComputePipeline(m_ctx->device, m_pipelineLayout, generateSpv, m_generatePipeline)) {
+    auto module = harmonia::core::createShaderModule(m_ctx->device, shaderPath(giSpv));
+    if (!module) {
+        harmonia::core::Logger::error("GiPass: cannot load shader: {}", giSpv);
         return false;
     }
-    if (!createComputePipeline(m_ctx->device, m_pipelineLayout, giSpv, m_pipeline)) {
+
+    const VkComputePipelineCreateInfo pipeInfo{
+        .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+        .flags = VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT, // MOD1
+        .stage = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                  .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+                  .module = *module,
+                  .pName = "main"},
+        .layout = m_pipelineLayout,
+    };
+    VkPipeline pipeline{};
+    const VkResult res = vkCreateComputePipelines(m_ctx->device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &pipeline);
+    vkDestroyShaderModule(m_ctx->device, *module, nullptr);
+    if (res != VK_SUCCESS) {
+        harmonia::core::Logger::error("GiPass: failed to create compute pipeline");
         return false;
     }
+    m_pipeline = harmonia::core::UniquePipeline{m_ctx->device, pipeline};
     return true;
 }
 
@@ -427,13 +345,6 @@ void GiPass::updateRestirDescriptors(const FrameParams& params, std::uint32_t sl
     // the other slot may hold a frame that is still in flight (the descriptor-race fix).
     auto& w = m_descWriters[slot % kDescriptorSlots];
     m_activeSlot = slot % kDescriptorSlots;
-    // PERF5 10b: wavefront buffers — 25/26 ray ping-pong (cur = generate's write
-    // target, read by the GI dispatch the same frame), 27 hits (10c), 28 collect
-    // (10d). Written every frame like the reservoir ping-pong bindings.
-    w.writeStorageBufferHandle(*m_ctx, 25, m_wavePathBuf[m_wavePathPingPong]);
-    w.writeStorageBufferHandle(*m_ctx, 26, m_wavePathBuf[1u - m_wavePathPingPong]);
-    w.writeStorageBufferHandle(*m_ctx, 27, m_waveHitBuf);
-    w.writeStorageBufferHandle(*m_ctx, 28, m_waveCollectBuf);
     // A4: bindings 16 (cur reservoir), 17 (prev reservoir), 18 (motion vectors).
     // GI2 full PT: bindings 20/21 mirror 16/17 for the path reservoir ping-pong.
     if (!m_reservoirBuf[0].isValid() || !m_reservoirBuf[1].isValid() || !m_pathReservoirBuf[0].isValid() ||
@@ -556,19 +467,11 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
                                           .offset = 0,
                                           .size = VK_WHOLE_SIZE};
         };
-        const std::array<VkBufferMemoryBarrier2, 8> pingPongBarriers{{
+        const std::array<VkBufferMemoryBarrier2, 4> pingPongBarriers{{
             pingPongBarrier(m_reservoirBuf[0].handle()),
             pingPongBarrier(m_reservoirBuf[1].handle()),
             pingPongBarrier(m_pathReservoirBuf[0].handle()),
             pingPongBarrier(m_pathReservoirBuf[1].handle()),
-            // PERF5 10b: wavefront buffers. The same-frame generate→GI write→read is
-            // ordered by the dedicated barrier below; this cross-frame barrier keeps
-            // frame N's accesses ahead of frame N+1's (the wave path buffers are
-            // rewritten every frame, the hit/collect buffers follow in 10c/10d).
-            pingPongBarrier(m_wavePathBuf[0].handle()),
-            pingPongBarrier(m_wavePathBuf[1].handle()),
-            pingPongBarrier(m_waveHitBuf.handle()),
-            pingPongBarrier(m_waveCollectBuf.handle()),
         }};
         const VkDependencyInfo pingPongDep{
             .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
@@ -653,66 +556,18 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         .reconnectShiftEnabled = params.reconnectShiftEnabled,
     };
 
-    const std::uint32_t gx = (m_cfg.width + 7u) / 8u;
-    const std::uint32_t gy = (m_cfg.height + 7u) / 8u;
-
-    // ---- PERF5 10b: generate pass — G-buffer load, camera-ray enqueue, collect ----
-    // ---- init (design §1). Same full-width dispatch shape as the GI pass; it    ----
-    // ---- shares the pipeline layout, so the GI push constants are pushed as-is. ----
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_generatePipeline);
-    m_descWriters[m_activeSlot].bind(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout);
-    vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
-    vkCmdDispatch(cmd, gx, gy, 1);
-
-    // generate → GI: this frame's wave-0 records must be visible to the GI
-    // dispatch (write→read on the ray buffer it consumed); the collect init rides
-    // along (read|write dst keeps it coherent for the 10c/10d consumers). Stages
-    // and access flags follow the repo's compute-to-compute barrier convention.
-    {
-        const std::array<VkBufferMemoryBarrier2, 2> genBarriers{{
-            {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-             .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-             .srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT,
-             .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-             .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
-             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-             .buffer = m_wavePathBuf[m_wavePathPingPong].handle(),
-             .offset = 0,
-             .size = VK_WHOLE_SIZE},
-            {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-             .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-             .srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT,
-             .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-             .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
-             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-             .buffer = m_waveCollectBuf.handle(),
-             .offset = 0,
-             .size = VK_WHOLE_SIZE},
-        }};
-        const VkDependencyInfo genDep{
-            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
-            .bufferMemoryBarrierCount = static_cast<std::uint32_t>(genBarriers.size()),
-            .pBufferMemoryBarriers = genBarriers.data(),
-        };
-        vkCmdPipelineBarrier2(cmd, &genDep);
-    }
-
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
     // MOD1: bind the descriptor buffer for the active slot (replaces vkCmdBindDescriptorSets).
     m_descWriters[m_activeSlot].bind(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout);
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
 
+    const std::uint32_t gx = (m_cfg.width + 7u) / 8u;
+    const std::uint32_t gy = (m_cfg.height + 7u) / 8u;
     vkCmdDispatch(cmd, gx, gy, 1);
 
     // A4: flip the reservoir ping-pong so this frame's "current" becomes next frame's "prev".
     m_reservoirPingPong = 1u - m_reservoirPingPong;
     m_pathReservoirPingPong = 1u - m_pathReservoirPingPong;
-    // PERF5 10b: wave ray-buffer ping-pong (10c writes wave N+1 successors into
-    // the other half; wave 0 is fully rewritten every frame, so the flip is
-    // bookkeeping-only in this stage).
-    m_wavePathPingPong = 1u - m_wavePathPingPong;
 }
 
 } // namespace theia

@@ -254,7 +254,6 @@ set(THEIA_ENTRY_SHADERS
     light_cull.comp.slang
     forward_cull.comp.slang
     gi.comp.slang
-    wavefront_generate.comp.slang
     motion_vector.comp.slang
     hiz_build.comp.slang
     taa.comp.slang
@@ -392,14 +391,8 @@ find_package(meshoptimizer CONFIG REQUIRED)
 # Harmonia's shared Slang modules (env_sample, math, bsdf, …) are the source
 # of truth; add their directory so slangc resolves imports from there.
 set(COMPILE_SLANG_EXTRA_INCLUDE_DIRS "${HARMONIA_SHADER_SOURCE_DIR}")
-# PERF5 10b: wave_common.slang is a Theia-local support module (imported by
-# gi.comp.slang + wavefront_generate.comp.slang) that is not in
-# compile_slang_shaders' built-in support-scan list — declare it explicitly so
-# edits retrigger the entry-shader compiles.
-set(COMPILE_SLANG_EXTRA_DEPENDS "${CMAKE_SOURCE_DIR}/shaders/wave_common.slang")
 compile_slang_shaders(theia_shaders "${THEIA_SHADER_OUTPUT_DIR}" ${THEIA_ENTRY_SHADERS})
 unset(COMPILE_SLANG_EXTRA_INCLUDE_DIRS)
-unset(COMPILE_SLANG_EXTRA_DEPENDS)
 
 # ── Layered targets (AR2, Harmonia pattern) ──────────────────────────────────
 # The include-DAG of ARCHITECTURE.md expressed as target_link_libraries — an

@@ -127,8 +127,7 @@ class GiPass {
     [[nodiscard]] bool initialize(const harmonia::DeviceContext& ctx,
                                   const Config& cfg,
                                   const harmonia::core::CommandPool& uploadPool,
-                                  const char* giSpv = "gi.comp.spv",
-                                  const char* generateSpv = "wavefront_generate.comp.spv");
+                                  const char* giSpv = "gi.comp.spv");
     void shutdown();
 
     /// Dispatch the GI accumulation pass. Call AFTER ForwardRenderer::recordFrame()
@@ -182,7 +181,7 @@ class GiPass {
     static_assert(sizeof(GiPushConstants) == 248);
 
     [[nodiscard]] bool createDescriptors();
-    [[nodiscard]] bool createPipelines(const char* giSpv, const char* generateSpv);
+    [[nodiscard]] bool createPipeline(const char* giSpv);
     void updateDescriptors(const FrameParams& params);
     void
     updateRestirDescriptors(const FrameParams& params,
@@ -205,10 +204,6 @@ class GiPass {
 
     harmonia::core::UniquePipelineLayout m_pipelineLayout;
     harmonia::core::UniquePipeline m_pipeline;
-    /// PERF5 10b: generate pass (camera-ray enqueue + collect init), dispatched
-    /// ahead of the GI dispatch every frame. Shares m_pipelineLayout (same
-    /// descriptor set + push-constant block as the GI shader).
-    harmonia::core::UniquePipeline m_generatePipeline;
 
     bool m_hdrFirstUse = true;
     const Scene* m_boundScene = nullptr;
@@ -241,27 +236,6 @@ class GiPass {
     bool m_pathReservoirsCleared = false;
     /// GI-ENH: Gaussian paired-neighbor pairing maps (binding 22, static after init).
     harmonia::core::Buffer m_pairingOffsetBuf{};
-
-    /// PERF5 10b: wavefront path buffers (PLAN.md "PERF5 wavefront design" §2).
-    /// Exact Slang std430 strides (float3 = 16 B align): WavePath 160, WaveHit 32,
-    /// WaveCollect 112 — the design's byte math pins them; sized to the render
-    /// resolution × kWaveSlotsPerPixel (recreated on resize via initialize()).
-    /// The CPU never indexes the contents.
-    static constexpr VkDeviceSize kWavePathStride = 160;
-    static constexpr VkDeviceSize kWaveHitStride = 32;
-    static constexpr VkDeviceSize kWaveCollectStride = 112;
-    /// Fixed per-pixel slot window: kinds 0..3 = adaptive samples, 4 = path-reservoir
-    /// local candidate (10c), 5..7 = spatial-replay candidates (10c). Slot =
-    /// pixelIndex * kWaveSlotsPerPixel + kind (no allocation atomics — deterministic
-    /// index space; the records' alive bit is the truth, buffers are never cleared).
-    static constexpr std::uint32_t kWaveSlotsPerPixel = 8;
-    /// Ray buffer ×2 for the per-wave ping-pong. 10b has only wave 0: generate
-    /// writes `cur` every frame and the GI dispatch reads it in the same frame;
-    /// wave N+1 successors are 10c.
-    harmonia::core::Buffer m_wavePathBuf[2]{};
-    std::uint32_t m_wavePathPingPong = 0;      ///< index of the buffer generate writes THIS frame
-    harmonia::core::Buffer m_waveHitBuf{};     ///< trace-pass output (10c) — allocated, unconsumed in 10b
-    harmonia::core::Buffer m_waveCollectBuf{}; ///< collect init by generate — consumed from 10d
 
     VkImageView m_boundMotionVectorView = VK_NULL_HANDLE;
 };

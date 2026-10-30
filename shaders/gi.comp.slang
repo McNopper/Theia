@@ -2,11 +2,7 @@
 //
 // Replaces Theia's flat-IBL indirect approximation with a correct unidirectional
 // Monte-Carlo estimator that converges to the Hyperion ground truth under frame
-// accumulation. PERF5 stage 10b: the entry consumes the wave-0 records that the
-// generate pass (wavefront_generate.comp.slang) enqueued — camera ray + per-sample
-// RNG crate — instead of loading the G-buffer and deriving camera rays inline;
-// trace + shade remain in this pass until 10c/10d. Runs over the forward pass
-// G-buffer: for every primary hit it spawns
+// accumulation. Runs over the forward pass G-buffer: for every primary hit it spawns
 // a BSDF continuation ray and walks 1..maxDepth path segments, evaluating the shared
 // Harmonia `integrateSurface` estimator at each secondary vertex (NEE for emissive
 // triangles + environment, emission with MIS guard, BSDF continuation, Russian
@@ -27,7 +23,6 @@ import env_sample;      // evalEnvImportancePdfDir
 import path_integrator; // ITracer, SurfaceHit, PathState, EnvNeeSample, evalEnvNEESample, integrateSurface, sampleEnvMapLatLong
 import medium_walk;     // shared volumetric random-walk math (runMediumWalk)
 import surface;         // shared OpenPBR surface-frame (texture-map) populator
-import wave_common;     // PERF5 10b: WavePath wave-0 records (generate-pass output)
 
 [[vk::push_constant]]
 cbuffer GiPC {
@@ -290,13 +285,6 @@ float targetPdfEnv(float3 Le, float3 bsdfTimesCos) {
 // uploaded once). Three concatenated self-inverse offset maps (254/230/210), one
 // packed int16x2 texel per uint (x low, y high).
 [[vk::binding(22, 0)]] StructuredBuffer<uint>              t_pairingOffsets;
-
-// PERF5 10b: wavefront ray buffer — wave-0 records written by the generate pass
-// (wavefront_generate.comp.slang) ahead of this dispatch (generate→GI barrier on
-// write→read). Slots are fixed per pixel: slot = pixelIndex * kWaveSlotsPerPixel
-// + kind, kinds 0..3 = the pixel's adaptive samples (design §2). This stage reads
-// the camera ray + RNG crate from the record; 10c/10d move trace + shade onto it.
-[[vk::binding(25, 0)]] StructuredBuffer<WavePath>          t_wavePathsCur;
 
 // ── GI-ENH (ReSTIR PT Enhanced §3): Gaussian paired-neighbor selection ────────
 // Texel (x, y) of each pairing map holds the offset to its unique partner (an
@@ -2086,49 +2074,33 @@ void main(uint3 tid : SV_DispatchThreadID) {
     const uint2 px = tid.xy;
     const int3 loadCoord = int3(int(px.x), int(px.y), 0);
 
-    // --- PERF5 10b: consume the wave-0 record enqueued by the generate pass ---
-    // (wavefront_generate.comp.slang ran ahead of this dispatch; the generate→GI
-    // barrier on the ray buffer orders its writes). Slots are fixed per pixel:
-    // kind 0 is this pixel's first adaptive sample. The record carries the camera
-    // ray and the per-sample RNG crate — the pre-10b entry's inline G-buffer load
-    // and camera-ray derivation moved into the generate pass verbatim.
-    const uint waveSlotBase = (px.y * screenWidth + px.x) * kWaveSlotsPerPixel;
-    const WavePath wave0 = t_wavePathsCur[waveSlotBase + 0u];
-    if (!wavePathAlive(wave0)) {
-        return; // background / non-geometry pixel (generate saw the instance sentinel, A1b)
+    // --- Primary surface from the forward G-buffer ---
+    const float4 giSample = t_giBuffer.Load(loadCoord);
+    // w = asfloat(instanceIdx+1): 0 means background / sky (A1b: changed from materialIdx+1).
+    const uint instIdxPlus1 = asuint(giSample.w);
+    if (instIdxPlus1 == 0u) {
+        return; // background / non-geometry pixel (and transparent pixels keep the sentinel)
     }
+    const uint primaryInstIdx = instIdxPlus1 - 1u;
+    // Derive the material index from the instance table — the ray-query primary hit
+    // below will use its own instIdx, but the fallback path needs this as a best-guess.
+    const uint materialIdx = instances[primaryInstIdx].materialIndex;
+    const float3 worldPos = giSample.xyz;
 
-    // --- Primary surface from the re-traced camera ray ---
     // Reconstruct the primary surface by re-tracing the camera ray to the recorded world
     // position; this works for opaque AND transparent (glass) pixels alike. The view-space
     // G-buffer normal is only needed as a fallback when the re-trace misses (e.g. the
     // transparent pass does not write the normal G-buffer), so it is computed lazily below.
-    // The direction is the record's G-buffer delta: the generate pass computed
-    // `worldPos - cameraPos` with this same expression and traceClosestHit normalizes
-    // internally — bit-identical to the pre-split inline derivation.
-    GiHit primaryHit = traceClosestHit(cameraPos.xyz, wave0.direction, kInf, kRayEpsilon);
+    GiHit primaryHit = traceClosestHit(cameraPos.xyz, worldPos - cameraPos.xyz, kInf, kRayEpsilon);
     // Trust the re-traced closest hit as the authoritative nearest surface. The rasterized
     // G-buffer materialIdx is draw-order dependent for transparent geometry (depth-write
     // disabled), so overlapping transparent surfaces can record the farther one; the inline
     // ray query is order-independent and always returns the geometrically nearest surface.
     // Matches industry practice (Q2RTX reflect_refract, PowerVR HybridTransparency, SEED
-    // "Hybrid Rendering for Real-Time Ray Tracing" RTG ch.25). The instance sentinel
-    // check above (via the record's alive bit) already handles background pixels; for
-    // non-background, the re-trace wins.
+    // "Hybrid Rendering for Real-Time Ray Tracing" RTG ch.25). The matIdxPlus1==0 sentinel
+    // check above already handles background pixels; for non-background, the re-trace wins.
     const bool primaryHitValid = primaryHit.hit;
-    // The rasterized world position / instance are needed ONLY on the rare re-trace
-    // miss; the pre-10b entry loaded them up front, this path loads them lazily so
-    // the common path consumes the wave record alone (the ReSTIR spatial-reuse
-    // passes below keep their own t_giBuffer reads — untouched this stage).
-    float3 primaryWorldPos = primaryHit.worldPos;
-    uint materialIdx = 0u;
-    if (!primaryHitValid) {
-        const float4 giSample = t_giBuffer.Load(loadCoord); // sentinel nonzero: the record is alive
-        primaryWorldPos = giSample.xyz;
-        // Derive the material index from the instance table — the fallback path
-        // needs this as a best-guess.
-        materialIdx = instances[asuint(giSample.w) - 1u].materialIndex;
-    }
+    const float3 primaryWorldPos = primaryHitValid ? primaryHit.worldPos : worldPos;
 
     const float3 wo = normalize(cameraPos.xyz - primaryWorldPos);
     SurfaceHit primary;
@@ -2258,17 +2230,9 @@ void main(uint3 tid : SV_DispatchThreadID) {
     float3 sumIndirect = 0.0.xxx;
     float3 sumEnvNee = 0.0.xxx;
     for (uint s = 0u; s < sampleCount; ++s) {
-        // PERF5 10b: the sample's RNG crate rides in its wave-0 record. The
-        // generate pass composed it with this loop's pre-split expression
-        //   composeRngSeed(px, frameSampleIndex * maxSamples + s, 0u, rngBaseSeed)
-        // (reserving maxSamples indices per frame keeps samples from overlapping
-        // across frames or within a pixel), so the Sobol stream crosses the pass
-        // boundary unchanged — no draw added, removed, or reordered (design §3).
-        const WavePath waveS = t_wavePathsCur[waveSlotBase + s];
-        RngState sampleSeed;
-        sampleSeed.key   = waveS.rng.x;
-        sampleSeed.index = waveS.rng.y;
-        sampleSeed.dim   = waveS.rng.z;
+        // Decorrelate each extra sample with a distinct Sobol' index. Reserving maxSamples
+        // indices per frame keeps samples from overlapping across frames or within a pixel.
+        RngState sampleSeed = composeRngSeed(px, frameSampleIndex * maxSamples + s, 0u, rngBaseSeed);
         if (restirPtPathEnabled != 0u) {
             // Path reservoir owns the multi-bounce walk; only primary env NEE remains.
             sumEnvNee += primaryEnvNeeOnly(primary, sampleSeed);
