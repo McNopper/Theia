@@ -40,6 +40,20 @@
 // recomputes. Dead slots (alive bit clear) are skipped: the buffers are never
 // cleared per frame, and no consumer reads the hit of a dead record.
 //
+// 10d WAVE LOOP: the pass now traces EVERY wave — wave 0's camera rays, then
+// the wave N+1 successor records the shade dispatch regenerated into the
+// ping-pong side (which half is `cur` flips per wave; selected by the
+// waveIndex push constant, uniform across the dispatch). At wave 0 only kind 0
+// is traced: the four adaptive-sample slots share the IDENTICAL camera ray
+// (same origin/direction/tMin/tMax — the per-sample RNG crate and collect
+// index are not trace inputs), so their queries are four copies of the same
+// computation and the shade consumer reconstructs the primary ONCE from record
+// 0's hit for all samples. The slots diverge at first shade (the BSDF/env-NEE
+// draws differ per sample crate), never at trace time — confirmed in
+// makeCameraWavePath: every field the query consumes is sample-independent.
+// Waves >= 1 trace all live sample slots (kinds 4..7 stay dead records until
+// their enqueue lands in a later stage).
+//
 // Push constants: the SAME cbuffer declaration as gi.comp.slang — all three
 // wavefront pipelines share one pipeline layout, so this copy must stay
 // field-for-field identical.
@@ -49,8 +63,10 @@ import wave_common;  // WavePath / WaveHit / kWaveHitMiss + slot/flag constants
 
 [[vk::binding(0, 0)]]  RaytracingAccelerationStructure       t_tlas;
 [[vk::binding(8, 0)]]  StructuredBuffer<GpuInstance>         instances;
-[[vk::binding(25, 0)]] StructuredBuffer<WavePath>            t_wavePathsCur; // wave-N ray buffer (read)
-[[vk::binding(27, 0)]] RWStructuredBuffer<WaveHit>           t_waveHits;     // trace-pass output
+// 10d: ONE physical ray buffer for every wave (the regenerate is in-place —
+// the shade rewrites its own pixel's slots between the wave barriers).
+[[vk::binding(25, 0)]] StructuredBuffer<WavePath>            t_wavePaths;
+[[vk::binding(27, 0)]] RWStructuredBuffer<WaveHit>           t_waveHits; // trace-pass output
 
 [[vk::push_constant]]
 cbuffer GiPC {
@@ -83,7 +99,17 @@ cbuffer GiPC {
     uint     pairingPerm2;                 // (unused here; layout parity)
     uint     pairingEnabled;               // (unused here; layout parity)
     uint     reconnectShiftEnabled;        // (unused here; layout parity)
+    uint     waveIndex;                    // current wave (0..waveCount-1)
+    uint     waveCount;                    // dispatched wave count (layout parity)
 };
+
+/// The wave's read side: which physical ray-buffer half holds this wave's
+/// records (binding 25 = even waves — generate writes wave 0 there; binding 26
+/// = odd waves — the shade's regenerate side). Uniform select on the push
+/// constant; both bindings exist in the layout.
+WavePath loadWavePath(uint slot) {
+    return t_wavePaths[slot];
+}
 
 /// Closest-hit query for one live path record — the verbatim `traceClosestHit`
 /// traversal, emitting the raw committed-hit data instead of a reconstructed
@@ -154,14 +180,21 @@ void main(uint3 tid : SV_DispatchThreadID) {
     const uint slotBase = pixelIndex * kWaveSlotsPerPixel;
 
     // Full-width wave traversal (design §1: closest-hit for EVERY live path in
-    // the wave's ray buffer). Dead slots exit on the alive flag; kinds 0..3 are
-    // the pixel's adaptive-sample camera rays in 10c, kinds 4..7 stay dead
-    // records (their enqueue is a later stage) and cost one flag test here.
-    for (uint k = 0u; k < kWaveSlotsPerPixel; ++k) {
-        const WavePath rec = t_wavePathsCur[slotBase + k];
-        if (!wavePathAlive(rec)) {
+    // the wave's ray buffer). At wave 0 the four sample slots share one physical
+    // ray — see the header note: only kind 0 is traced (the slot-0 single-trace
+    // optimization), the shade reuses its hit for all samples. At waves >= 1 the
+    // sample slots have diverged (each carries its own BSDF/env-NEE draws), so
+    // every live kind 0..3 is traced; kinds 4..7 stay dead records until their
+    // enqueue lands (later stage) and are not scanned. The alive gate is a
+    // 4-byte member probe — the full 160-B record is only fetched for live rays.
+    const uint kindCount = (waveIndex == 0u) ? 1u : kWaveSampleSlots;
+    for (uint k = 0u; k < kindCount; ++k) {
+        const uint slot = slotBase + k;
+        // The alive gate as a member probe — a 4-byte read; the full 160-B
+        // record is only fetched for live rays.
+        if ((t_wavePaths[slot].flags & kWaveFlagAlive) == 0u) {
             continue; // dead slot — its hit record is never read
         }
-        t_waveHits[slotBase + k] = traceRecord(rec);
+        t_waveHits[slot] = traceRecord(loadWavePath(slot));
     }
 }

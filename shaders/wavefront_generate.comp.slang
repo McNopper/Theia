@@ -18,6 +18,11 @@
 // pass consumes the same records. The ReSTIR reservoir passes are untouched
 // (they keep their own seeds and G-buffer loads inside gi.comp).
 //
+// Stage 10d: this pass runs ONCE per frame (wave 0 only) — the shade dispatch
+// regenerates waves 1..maxDepth into the ping-pong side (binding 26) itself.
+// The collect init (sampleEnvNee chain added) is CONSUMED by the 10d shade
+// waves + composite.
+//
 // Push constants: the SAME cbuffer declaration as gi.comp.slang — all wavefront
 // pipelines share one pipeline layout, so this copy must stay field-for-field
 // identical.
@@ -61,12 +66,17 @@ cbuffer GiPC {
     uint     pairingPerm2;                 // (unused here; layout parity)
     uint     pairingEnabled;               // (unused here; layout parity)
     uint     reconnectShiftEnabled;        // (unused here; layout parity)
+    uint     waveIndex;                    // (unused here — generate IS wave 0; layout parity)
+    uint     waveCount;                    // (unused here; layout parity)
 };
 
 /// Wave-0 record for one adaptive-sample slot: the camera ray plus the sample's
 /// RNG crate, seeded with the pre-split call-site semantics. Throughput = 1 and
 /// radiance = 0 — the megakernel's state initialization — and the medium fields
-/// are carried unconsumed until 10d wires the walk segmentation.
+/// are zero (the 10d shade consumes the record's medium fields per wave; the
+/// walk still starts and completes inside one shade invocation, so no wave ever
+/// reads a live insideMedium record — the fields are state carriers, not a
+/// suspension point).
 WavePath makeCameraWavePath(uint2 px, uint pixelIndex, uint sampleIndex, float3 cameraDelta, uint maxSamples) {
     WavePath rec;
     rec.origin          = cameraPos.xyz;
@@ -76,7 +86,7 @@ WavePath makeCameraWavePath(uint2 px, uint pixelIndex, uint sampleIndex, float3 
     rec.direction       = cameraDelta;
     rec.throughput      = float3(1.0, 1.0, 1.0);
     rec.radiance        = float3(0.0, 0.0, 0.0);
-    rec.mediumSigmaT    = float3(0.0, 0.0, 0.0); // medium-walk suspend/resume (10d, unconsumed)
+    rec.mediumSigmaT    = float3(0.0, 0.0, 0.0); // medium fields: state carriers (10d)
     rec.mediumAlbedo    = float3(0.0, 0.0, 0.0);
     rec.lastBsdfPdf     = 0.0;                   // no BSDF sampled yet (megakernel init)
     rec.tMin            = kRayEpsilon;           // the camera re-trace's self-intersection guard
@@ -99,32 +109,8 @@ WavePath makeCameraWavePath(uint2 px, uint pixelIndex, uint sampleIndex, float3 
     return rec;
 }
 
-/// Dead record for a pixel with no camera ray (background / sky sentinel). The
-/// buffers are never cleared per frame — writing alive=0 every frame is what
-/// makes the alive bit the slot's truth.
-WavePath makeDeadWavePath(uint pixelIndex, uint sampleIndex) {
-    WavePath rec;
-    rec.origin          = float3(0.0, 0.0, 0.0);
-    rec.direction       = float3(0.0, 0.0, 0.0);
-    rec.throughput      = float3(0.0, 0.0, 0.0);
-    rec.radiance        = float3(0.0, 0.0, 0.0);
-    rec.mediumSigmaT    = float3(0.0, 0.0, 0.0);
-    rec.mediumAlbedo    = float3(0.0, 0.0, 0.0);
-    rec.lastBsdfPdf     = 0.0;
-    rec.tMin            = 0.0;
-    rec.tMax            = 0.0;
-    rec.bouncesRemaining = 0u;
-    rec.iters           = 0u;
-    rec.depth           = 0u;
-    rec.pixelIndex      = pixelIndex;
-    rec.sampleIndex     = sampleIndex;
-    rec.rng             = uint3(0u, 0u, 0u);
-    rec.mediumG         = 0.0;
-    rec.mediumEta       = 1.0;
-    rec.mediumWalkIters = 0u;
-    rec.flags           = 0u; // alive bit clear
-    return rec;
-}
+// Dead slots are flags-only kills (waveSlotAlive probes read nothing else) —
+// there is no dead-record builder anymore.
 
 [numthreads(8, 8, 1)]
 void main(uint3 tid : SV_DispatchThreadID) {
@@ -134,21 +120,25 @@ void main(uint3 tid : SV_DispatchThreadID) {
     const uint2 px = tid.xy;
     const uint pixelIndex = px.y * screenWidth + px.x;
     const uint slotBase = pixelIndex * kWaveSlotsPerPixel;
-
     // Collect init (design §1): the per-pixel termination/composite record starts
-    // empty every frame. Allocated + initialized here; CONSUMED from 10d (stage
-    // 10c keeps the existing HDR accumulation path in gi.comp.slang).
+    // empty every frame. CONSUMED by the 10d shade waves + composite (the
+    // composite's activity gate is sampleCount == 0 — this init IS what marks
+    // background pixels inactive).
     WaveCollect col;
     col.sampleIndirect[0]  = float3(0.0, 0.0, 0.0);
     col.sampleIndirect[1]  = float3(0.0, 0.0, 0.0);
     col.sampleIndirect[2]  = float3(0.0, 0.0, 0.0);
     col.sampleIndirect[3]  = float3(0.0, 0.0, 0.0);
+    col.sampleEnvNee[0]    = float3(0.0, 0.0, 0.0);
+    col.sampleEnvNee[1]    = float3(0.0, 0.0, 0.0);
+    col.sampleEnvNee[2]    = float3(0.0, 0.0, 0.0);
+    col.sampleEnvNee[3]    = float3(0.0, 0.0, 0.0);
     col.restirDirect       = float3(0.0, 0.0, 0.0);
     col.restirPathIndirect = float3(0.0, 0.0, 0.0);
     col.restirM            = 0.0;
     col.sampleCount        = 0u;
-    col.pad[0]             = 0u;
-    col.pad[1]             = 0u;
+    col.flags              = 0u;
+    col.pad                = 0u;
     t_waveCollect[pixelIndex] = col;
 
     // --- Primary surface probe from the forward G-buffer (moved verbatim from
@@ -158,10 +148,13 @@ void main(uint3 tid : SV_DispatchThreadID) {
     const uint instIdxPlus1 = asuint(giSample.w);
     if (instIdxPlus1 == 0u) {
         // Background / non-geometry pixel (and transparent pixels keep the
-        // sentinel): dead records for ALL eight slots (Q2 — every first read
-        // is defined; the alive bit is the slot's truth).
+        // sentinel): kill ALL eight slots. A flags-only member store suffices —
+        // no consumer of a dead record reads beyond the alive bit (the shade
+        // exits on kind 0's alive probe; kinds 4..7 are probed by no stage this
+        // one enqueues), and at 160 B per record the full dead-record writes
+        // would be the generate pass's dominant cost on unified memory.
         for (uint k = 0u; k < kWaveSlotsPerPixel; ++k) {
-            t_wavePathsCur[slotBase + k] = makeDeadWavePath(pixelIndex, k);
+            t_wavePathsCur[slotBase + k].flags = 0u;
         }
         return;
     }
@@ -179,12 +172,13 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // Camera-ray enqueue for ALL four sample slots (fixed per-pixel slots, design
     // §2): slot s's record is consumed by the GI dispatch for sample s; the slots
     // beyond this pixel's sampleCount stay enqueued-but-unread this frame. Kinds
-    // 4..7 (reservoir-candidate slots of the later stages) get dead records —
-    // Q2: initialized every frame so their first read is defined.
+    // 4..7 (reservoir-candidate slots of the later stages) get flags-only kills —
+    // their enqueue is a later stage, and no consumer of a dead record reads
+    // beyond the alive bit.
     for (uint s = 0u; s < kWaveSampleSlots; ++s) {
         t_wavePathsCur[slotBase + s] = makeCameraWavePath(px, pixelIndex, s, cameraDelta, maxSamples);
     }
     for (uint k = kWaveSampleSlots; k < kWaveSlotsPerPixel; ++k) {
-        t_wavePathsCur[slotBase + k] = makeDeadWavePath(pixelIndex, k);
+        t_wavePathsCur[slotBase + k].flags = 0u;
     }
 }

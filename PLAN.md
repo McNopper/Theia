@@ -311,7 +311,78 @@ target; the parity/iteration resolution (320×240) costs ~215 MiB.
   shade-with-record; the 4-slot same-ray trace is the +1.26 ms delta vs 10b's
   1.10 ms same-machine — the slot-0 single-trace optimization is 10d scope,
   where the slots diverge).
-- **10d — async shadow rays + medium-walk segmentation:** consumes Harmonia's M2
+- **10d — DONE (shipped as the shade + regenerate loop: collect consumption, wave
+  N+1 successors, slot-0 single-trace; the original 10d scope below is
+  re-scoped):** the GI dispatch is the wavefront SHADE stage — the CPU records
+  `maxDepth + 1` (trace, shade) pairs per frame (generate runs once, wave 0
+  only). Wave 0 shades the primary vertices (surface reconstruction, ReSTIR
+  reservoirs, per-sample opacity gate + primary env NEE + BSDF sample, inline
+  medium walk) and regenerates wave 1's successors; waves ≥ 1 resume one record
+  per slot — `reconstructGiHit` from the recorded WaveHit, the shared
+  `integrateSurface`, the OpenPBR null-interaction chain INLINE in the
+  invocation (bounded by the carried loop-entry budget, today's `continue` +
+  re-trace), the inline medium walk — then either terminates the sample into
+  its `WaveCollect` slot (the core epilogue verbatim: exposure, NaN guard,
+  clamp) or writes the next successor. Radiance accumulates IN THE RECORD (the
+  wave barrier is the bounce-N → bounce-N+1 happens-before edge, design §3);
+  the RNG crate rides in the record; the last wave composites the collect
+  chains in s order and applies the megakernel's final HDR expression
+  unchanged. NO atomics-based radiance anywhere. The old per-sample
+  accumulation path is REMOVED: `estimateGiSample` (the sample-walk wrapper)
+  is gone; `estimateGiSampleCore` remains unchanged for the path-reservoir
+  candidate walks (their slot enqueue — kinds 4..7 — stays a later stage), so
+  `traceClosestHit` remains the inline tracer for the medium walk, the
+  null-interaction chain and the replay hops. The medium fields are ACTIVATED
+  as consumed state (the wave shade reconstructs `PathState` from the record
+  instead of re-deriving constants) — with NO cross-wave suspension: the walk
+  still starts and completes inside one shade invocation, so `insideMedium` is
+  never live across a wave (the fields are state carriers, exactly as the
+  design's stage-1 contract prescribes). **Slot-0 single-trace (adjudicated
+  byte-safe under (b)):** the four adaptive-sample slots share the IDENTICAL
+  camera ray (`makeCameraWavePath` varies only the RNG crate and collect index
+  — no trace input), the trace pass traces kind 0 only at wave 0, and the
+  shade reconstructs the primary once from record 0's hit for all samples; the
+  slots diverge at first shade, never at trace time. **Design amendments
+  (documented in code):** (1) `WaveCollect` grew 112 → 176 B — the design's
+  single `sampleIndirect[4]` cannot express the composite's TWO summation
+  chains bit-exactly (`sumIndirect` and `sumEnvNee` are separate
+  left-associated accumulators in the megakernel); the collect now carries
+  `sampleIndirect[4]` + `sampleEnvNee[4]` and the design's `pad` hosts the
+  composite's activity/validity flags (`sampleCount = 0` = pixel inactive;
+  bit0 = the legacy `maxSamples == 1 && !valid` early return). (2) The
+  physical ray ping-pong is dissolved — the regenerate is IN-PLACE (one
+  buffer, bindings alias one allocation's use; `m_wavePathBuf[1]` stays as the
+  10e compaction scratch): at fixed-width full dispatches the design's
+  dead-half re-write was ~250 MB/frame of stale-record traffic and dominated
+  the frame on unified memory. (3) Dead slots are 4-byte `flags` member stores
+  (no consumer of a dead record reads beyond the alive bit) and the generate
+  pass enqueues kinds 4..7 / background slots the same way. (4) When the ReSTIR
+  PT path reservoir owns ALL multi-bounce transport (the default), every
+  per-sample slot is PROVABLY dead after the wave-0 shade, so the CPU collapses
+  the train to ONE wave (`waveCount` push constant; the composite runs in the
+  wave-0 shade) — the full train remains for the legacy per-sample walk modes
+  (`--no-restir-pt-path`), where it was validated to converge to the same
+  estimator value (mean 0.5096 @64f vs the converged 0.5097 baseline). No GPU
+  readback, no indirect dispatch (fixed-width, Q1). **Timing (THEIA_PASS_TIMING,
+  cornell @320×240/256f): gi = 1.46 ms** (ladder: 0.71 monolithic / 1.10 (10b) /
+  2.33 (10c-unoptimized) / **1.46 (10d)** — the slot-0 recovery is the −0.87 ms
+  delta vs 10c; the wavefront remains above the monolithic 0.71 at parity
+  resolution (fixed dispatch train + record-buffer round-trips ≈ +0.75 ms,
+  work-invariant across resolutions), so abort criterion (b)'s 1080p
+  measurement must reproduce the paper's crossover before PERF4 stacks.
+  **Gates (all three scenes, vs the 10c baselines — the numbers are
+  pixel-for-pixel the 10c artifact, i.e. zero new deviation from the shade +
+  regenerate restructure):** cornell_classic 0.000000 / 1.000000000 / 0.0000
+  (7387/76800 px float-exact, max 2.608e-07 linear); cornell_spheres
+  0.000001 / 1.000000000 / 0.0385 (1004/76800 px, max 1.834e-04);
+  dragon_teapot 0.005414 / 0.999967309 under the medium-scene envelope
+  (≤ 0.05 / ≥ 0.9999; 6196/76800 px float-exact, 6 px > 1e-1 linear — green
+  channel in 6/6, scattered across 6 distinct 8×8 tiles, no contiguous
+  region) — deterministic (second render of the same build float-exact, 0
+  differing px). The artifact remains upstream-reportable (Slang
+  `NoContraction`).
+- **10d-legacy scope — async shadow rays + medium-walk segmentation (re-scoped;
+  blocked on Harmonia M2):** consumes Harmonia's M2
   estimator split (the `ITracer` emit→trace→gather shadow flow — shared, identical for
   both renderers); Theia adds the shadow-ray queue + gather pass and switches
   `runMediumWalk` to per-segment waves via the WavePath medium fields; touches

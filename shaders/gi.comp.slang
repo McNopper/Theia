@@ -10,20 +10,35 @@
 // writes the WaveHit records for every live slot; the wave-0 primary surface is
 // reconstructed from record 0 (reconstructGiHit — traceClosestHit's vertex
 // fetch + reconstruction statements verbatim) and the miss sentinel triggers
-// the Q1 G-buffer fallback. The inline wave-0 primary trace is GONE — the
-// trace pass is the single source of wave-0 hits. Verified under the CALIBRATED
-// gate (PLAN.md "PERF5 wavefront design" §3, amended from byte-equality): the
-// driver recomputes committed-hit barycentrics/rayT at the RayQuery site and FP
+// the Q1 G-buffer fallback. Verified under the CALIBRATED gate (PLAN.md
+// "PERF5 wavefront design" §3, amended from byte-equality): the driver
+// recomputes committed-hit barycentrics/rayT at the RayQuery site and FP
 // contraction follows the surrounding compiled context (Slang emits no
 // NoContraction decorations), so consuming the records in this dispatch shifts
 // the primary surface by 1–2 ULP on ~10% of the pixels (7387/76800 px on
 // cornell_classic @256f, max 2.6e-7 linear) — one deterministic driver-codegen
 // class, byte-equal across all restructured variants; not estimator
-// nondeterminism (same RNG streams, same draws, same statement order). This
-// dispatch executes the per-vertex logic unchanged (reconnection capture,
-// integrateSurface, medium walk, radiance accumulation; secondary re-traces and
-// shadow rays stay inline until 10d). Pipeline: generate → trace → GI with
-// buffer barriers between the dispatches.
+// nondeterminism (same RNG streams, same draws, same statement order).
+// PERF5 stage 10d: this dispatch is the wavefront SHADE + REGENERATE stage.
+// The CPU records maxDepth + 1 (trace, shade) pairs per frame; generate runs
+// once (wave 0). Wave 0 shades the primary vertices — surface reconstruction,
+// the ReSTIR reservoir passes, and the per-sample primary blocks (opacity gate,
+// primary env NEE, BSDF sample, inline medium walk) — and regenerates wave 1's
+// successor records into the non-read ping-pong half (binding 26). Every later
+// wave resumes one record per slot: surface reconstruction from the recorded
+// WaveHit, the shared integrateSurface, the OpenPBR null-interaction chain
+// (inline in the invocation, bounded by the carried loop-entry budget), the
+// inline medium walk — then either terminates the sample into its WaveCollect
+// slot or writes the next successor. Radiance accumulates IN THE RECORD (the
+// per-path FP order is preserved across the wave barriers: the wave boundary is
+// a happens-before edge between consecutive path segments, design §3); the RNG
+// crate rides in the record, so no draw is added, removed, or reordered. The
+// LAST wave's shade composites the collect slots in s order and applies the
+// megakernel's final HDR expression unchanged. The ReSTIR reservoir candidate
+// walks (traceGiPathCandidate / NoRR — the inline megakernel core) are
+// untouched this stage: their enqueue (slot kinds 4..7) is a later stage, and
+// traceClosestHit remains the inline tracer for the medium walk, the
+// null-interaction chain and the replay hop.
 // Runs over the forward pass
 // G-buffer: for every primary hit it spawns
 // a BSDF continuation ray and walks 1..maxDepth path segments, evaluating the shared
@@ -84,6 +99,13 @@ cbuffer GiPC {
                                            //   bit1 (2) = k>=3 hybrid reconnection shift
                                            // Step-through debug: THEIA_SHIFT_MASK.
                                            // (0 = replay-only; A/B via THEIA_NO_RECONNECTION)
+    uint     waveIndex;                    // PERF5 10d: current wave (0..waveCount-1)
+    uint     waveCount;                    // PERF5 10d: dispatched wave count — 1 when the
+                                           //   ReSTIR PT path reservoir owns ALL multi-bounce
+                                           //   transport (the per-sample slots are provably
+                                           //   dead after wave 0, so waves >= 1 are not
+                                           //   dispatched); maxDepth + 1 for the legacy
+                                           //   per-sample walks. The composite gates on it.
 };
 
 // ── A4: ReSTIR DI reservoir type ──────────────────────────────────────────────
@@ -310,20 +332,62 @@ float targetPdfEnv(float3 Le, float3 bsdfTimesCos) {
 // packed int16x2 texel per uint (x low, y high).
 [[vk::binding(22, 0)]] StructuredBuffer<uint>              t_pairingOffsets;
 
-// PERF5 10b: wavefront ray buffer — wave-0 records written by the generate pass
-// (wavefront_generate.comp.slang) ahead of this dispatch (generate→trace→GI
-// barriers on write→read). Slots are fixed per pixel: slot = pixelIndex *
-// kWaveSlotsPerPixel + kind, kinds 0..3 = the pixel's adaptive samples (design
-// §2). This dispatch reads the records for the alive gate and the per-sample RNG
-// crates; the wave-0 camera-ray trace itself moved to the trace pass (10c).
-[[vk::binding(25, 0)]] StructuredBuffer<WavePath>          t_wavePathsCur;
+// PERF5 10d: wavefront ray buffer — the regenerate is IN-PLACE: the shade reads
+// the wave's records and writes the next wave's successors to the SAME slots
+// (each thread touches only its own pixel's slots, so the inter-dispatch wave
+// barriers are the only ordering the scheme needs — no dead-half propagation,
+// which at fixed-width full dispatches would dominate the frame: every wave
+// would otherwise re-write every dead slot's 160-B record). ONE physical buffer
+// serves every wave — the design's per-wave ping-pong dissolved with the
+// fixed-width mandate's dead-half traffic; the C++ side keeps the second
+// allocation as the 10e stream-compaction scratch. Slots are fixed per pixel:
+// slot = pixelIndex * kWaveSlotsPerPixel + kind, kinds 0..3 = the pixel's
+// adaptive samples (design §2). The buffers are never cleared per frame — the
+// records' alive bit is the truth: a dead record PERSISTS in its slot until
+// the slot regenerates (dead slots are skipped, not rewritten).
+[[vk::binding(25, 0)]] RWStructuredBuffer<WavePath>        t_wavePaths;
 
 // PERF5 10c: trace-pass output — committed-hit records over the same slot
-// space, written by wavefront_trace.comp.slang ahead of this dispatch (the
-// trace→GI write→read barrier orders them). The wave-0 primary surface is
-// reconstructed from record 0 (see main); kinds 4..7 stay dead until their
-// enqueue lands (later stage).
+// space, written by wavefront_trace.comp.slang ahead of each shade dispatch
+// (the trace→shade write→read barrier orders them). Wave 0 reads record 0 only
+// (the slot-0 single-trace optimization: kinds 1..3 hold the identical camera
+// ray, so record 0's hit IS their hit); waves >= 1 read every live slot's hit.
+// Kinds 4..7 stay dead until their enqueue lands (later stage).
 [[vk::binding(27, 0)]] StructuredBuffer<WaveHit>           t_waveHits;
+
+// PERF5 10d: per-pixel collect record (generate-initialized) — the shade waves
+// accumulate the per-sample terms into it (indirect at each sample's terminating
+// wave, primary env NEE + reservoir terms at wave 0), and the last wave's shade
+// composites it (s-order chains + the megakernel's final expression).
+[[vk::binding(28, 0)]] RWStructuredBuffer<WaveCollect>     t_waveCollect;
+
+// Wave-buffer access (in-place: one physical buffer for every wave).
+WavePath loadWavePath(uint slot) {
+    return t_wavePaths[slot];
+}
+
+void storeWavePath(uint slot, WavePath p) {
+    t_wavePaths[slot] = p;
+}
+
+/// The alive gate as a MEMBER PROBE — a 4-byte read (Slang lowers direct member
+/// access on a structured buffer to a per-member load). Loading the whole
+/// 160-B record just to test one bit is the single most expensive no-op of the
+/// fixed-width wave dispatches: dead slots are the overwhelming majority at
+/// waves >= 1, and the full record must only be fetched for live paths.
+bool waveSlotAlive(uint slot) {
+    return (t_wavePaths[slot].flags & kWaveFlagAlive) != 0u;
+}
+
+/// Kill a slot with a 4-byte member store. A dead record's ONLY consumer is the
+/// alive probe (waveSlotAlive here, the trace pass's flags test) — the rest of
+/// the record is never read — so the kill writes the flags word alone instead
+/// of a full 160-B dead record (at fixed-width full dispatches that difference
+/// is 49 MB of stores per frame at the parity resolution on the PT path, where
+/// every sample slot is killed at wave 0).
+void killWaveSlot(uint slot) {
+    t_wavePaths[slot].flags = 0u;
+}
 
 // ── GI-ENH (ReSTIR PT Enhanced §3): Gaussian paired-neighbor selection ────────
 // Texel (x, y) of each pairing map holds the offset to its unique partner (an
@@ -1496,11 +1560,12 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
     return true;
 }
 
-bool estimateGiSample(SurfaceHit primary, RngState seed, float adaptiveClamp,
-                      out float3 outIndirect, out float3 outEnvNee) {
-    ReconnectionCapture recUnused = makeEmptyReconnectionCapture();
-    return estimateGiSampleCore(primary, seed, adaptiveClamp, true, outIndirect, outEnvNee, false, false, recUnused);
-}
+// estimateGiSample (the sample-walk wrapper with includePrimaryEnvNee = true) was
+// REMOVED in 10d: its only caller was gi.comp main's per-sample loop, which the
+// wavefront replaced — the sample walks now run as wave-0 primary blocks +
+// per-wave vertex shades (shadeWavePrimary / shadeWave below), with the radiance
+// chain accumulating in the record. The inline core below is KEPT unchanged for
+// the path-reservoir candidate walks (their slot enqueue is a later stage).
 
 /// GI2 full PT: one replayable multi-bounce indirect path candidate. Returns the
 /// walk's full indirect estimate g (throughput carries 1/pdf → g is the per-seed
@@ -2171,24 +2236,158 @@ float4 restirPtIndirect(SurfaceHit primary, uint2 px, float adaptiveClamp, inout
     return float4(contribution, float(r.M));
 }
 
-[numthreads(8, 8, 1)]
-void main(uint3 tid : SV_DispatchThreadID) {
-    if (tid.x >= screenWidth || tid.y >= screenHeight) {
+// ═══════════════ PERF5 10d: the wavefront shade + regenerate loop ═══════════════
+// The dispatch runs once per WAVE (the CPU records maxDepth + 1 trace+shade
+// pairs). Wave 0 = the primary-vertex shade (below); waves 1..maxDepth = one
+// bounce-loop entry per live slot (the megakernel loop's body, carried by the
+// record); the last wave composites the collect. `waveIndex` (push constant)
+// selects the ray ping-pong side and gates the primary/composite blocks.
+
+// kCaptureNone of the inline core (estimateGiSampleCore). The wave slots never
+// carry captureRe records (reconnection capture is path-reservoir-candidate
+// only — those walks stay inline in the core), so this only keeps the
+// reconstructed PathState complete for the shared integrateSurface.
+static const uint kWaveCaptureNone = 0xFFFFFFFEu;
+
+/// Serialize the walk state into the wave N+1 successor record — the regenerate
+/// write. Field-for-field the megakernel's loop state: the RNG crate rides in
+/// the record (design §3 — no draw added, removed, or reordered by the wave
+/// boundary), and the medium fields carry the walk state (10d: consumed — the
+/// next wave reconstructs PathState from them instead of re-deriving constants;
+/// the walk itself still starts and completes inside ONE shade invocation, so
+/// `insideMedium` is never live across a wave — these are state carriers, not a
+/// suspension point).
+void storeWaveSuccessor(uint slot, uint pixelIndex, uint sampleIndex,
+                        float3 origin, float3 dir, float rayTMin, uint successorDepth,
+                        PathState state, uint bouncesRemaining, uint itersLeft, bool alive) {
+    WavePath n;
+    n.origin           = origin;
+    n.direction        = dir;
+    n.throughput       = state.throughput;
+    n.radiance         = state.radiance;
+    n.mediumSigmaT     = state.mediumSigmaT;
+    n.mediumAlbedo     = state.mediumAlbedo;
+    n.lastBsdfPdf      = state.lastBsdfPdf;
+    n.tMin             = rayTMin; // kRayEpsilon | kNullInteractionEpsilon (pass-through resume)
+    n.tMax             = kInf;
+    n.bouncesRemaining = bouncesRemaining;
+    n.iters            = itersLeft; // loop-entry budget (bounds the inline null chain)
+    n.depth            = successorDepth;
+    n.pixelIndex       = pixelIndex;
+    n.sampleIndex      = sampleIndex;
+    n.rng              = uint3(state.seed.key, state.seed.index, state.seed.dim);
+    n.mediumG          = state.mediumG;
+    n.mediumEta        = state.mediumEta;
+    n.mediumWalkIters  = 0u; // the walk budget restarts each entry (no cross-wave suspension)
+    n.flags            = (alive ? kWaveFlagAlive : 0u)
+                       | (state.specularBounce ? kWaveFlagSpecularBounce : 0u)
+                       | (state.passedThrough ? kWaveFlagPassedThrough : 0u)
+                       | (state.insideMedium ? kWaveFlagInsideMedium : 0u);
+    storeWavePath(slot, n);
+}
+
+/// Per-sample termination: finalize the radiance chain into the collect slot —
+/// today's estimateGiSampleCore epilogue, verbatim (exposure, NaN/Inf guard →
+/// invalid, max(·,0), firefly clamp + per-sample suppression). The slot's
+/// env-NEE chain entry (wave-0 write) is preserved on success; the invalid path
+/// zeroes BOTH terms (today: `return false` leaves both outs at zero) and sets
+/// the legacy single-sample flag when maxSamples == 1. All collect access is
+/// MEMBER-WISE: the 176-B record is never materialized in registers (the shade
+/// dispatch is register-bound — a whole-struct local across the sample loop
+/// measurably spilled the reservoir path).
+void collectSample(uint pixelIndex, uint s, float3 stateRadiance, float adaptiveClamp,
+                   uint maxSamples) {
+    float3 indirect = stateRadiance * exposure;
+    if (!all(isfinite(indirect)) || any(isnan(indirect))) {
+        t_waveCollect[pixelIndex].sampleIndirect[s] = 0.0.xxx;
+        t_waveCollect[pixelIndex].sampleEnvNee[s]   = 0.0.xxx;
+        if (maxSamples == 1u) {
+            t_waveCollect[pixelIndex].flags |= kWaveCollectFlagSingleInvalid;
+        }
         return;
     }
-    const uint2 px = tid.xy;
-    const int3 loadCoord = int3(int(px.x), int(px.y), 0);
+    indirect = max(indirect, 0.0.xxx);
+    if (fireflyClampEnabled != 0u) {
+        // Hard ceiling on top of the per-sample firefly suppression below.
+        indirect = clamp(indirect, 0.0.xxx, (adaptiveClamp * 3.0).xxx);
+        // Per-sample firefly suppression (averaged across accumulated frames + adaptive samples).
+        const float avg = (indirect.x + indirect.y + indirect.z) * (1.0 / 3.0);
+        if (avg > adaptiveClamp) {
+            indirect *= adaptiveClamp / avg;
+        }
+    }
+    // else: estimator-pure capture (--output) — unclamped, converges to the unclamped ground truth.
+    t_waveCollect[pixelIndex].sampleIndirect[s] = indirect;
+}
 
-    // --- PERF5 10b: consume the wave-0 record enqueued by the generate pass ---
-    // (wavefront_generate.comp.slang ran ahead of this dispatch; the
-    // generate→trace→GI barriers on the ray + hit buffers order the writes).
+/// A pixel whose GI contribution is undefined at wave 0 (Q1 fallback failure,
+/// non-finite fallback material, emissive primary — the megakernel's early
+/// returns): kill the sample slots (their camera-ray records are alive and must
+/// never be traced at wave 1) and mark the collect inactive (sampleCount = 0 —
+/// the composite's activity gate). The pixel is left exactly as today's early
+/// return left it: the HDR target untouched.
+void deactivatePixel(uint pixelIndex, uint waveSlotBase) {
+    for (uint s = 0u; s < kWaveSampleSlots; ++s) {
+        killWaveSlot(waveSlotBase + s);
+    }
+    t_waveCollect[pixelIndex].sampleCount = 0u;
+}
+
+/// The 10d composite — the megakernel's per-pixel epilogue, verbatim: the two
+/// per-sample chains are summed in s order (the megakernel's loop order — each
+/// chain is a separate left-associated accumulator there, hence the two collect
+/// arrays) and today's final expression is applied unchanged. Runs ONCE, in the
+/// last wave's shade dispatch (every path's budget is exhausted by then — every
+/// slot has terminated and written its collect entry; the reading thread is the
+/// one that wrote them).
+void compositeCollect(uint2 px, uint pixelIndex) {
+    // Member-wise reads: only the fields the composite consumes leave memory.
+    const uint sampleCount = t_waveCollect[pixelIndex].sampleCount;
+    if (sampleCount == 0u) {
+        return; // inactive pixel (background / wave-0 fallback exit) — untouched, as today
+    }
+    if ((t_waveCollect[pixelIndex].flags & kWaveCollectFlagSingleInvalid) != 0u) {
+        // Preserve legacy behaviour on the non-adaptive path: a single invalid
+        // sample leaves the pixel's accumulated indirect value untouched. The
+        // direct term (ReSTIR DI or ReSTIR PT — whichever ran at wave 0) is
+        // still composited so direct keeps converging even when the GI bounce
+        // degenerates. (Today's maxSamples == 1 && !valid early return.)
+        const float3 restirDirect = t_waveCollect[pixelIndex].restirDirect;
+        if (restirDirect.x != 0.0 || restirDirect.y != 0.0 || restirDirect.z != 0.0) {
+            // GI2.7: M in alpha — OVERWRITE (not +=) so the forward pass's
+            // indirectWeight doesn't pollute the M channel.
+            hdrImage[px] = float4(hdrImage[px].xyz + restirDirect, t_waveCollect[pixelIndex].restirM);
+        }
+        return;
+    }
+    float3 sumIndirect = 0.0.xxx;
+    float3 sumEnvNee = 0.0.xxx;
+    for (uint s = 0u; s < sampleCount; ++s) {
+        sumIndirect += t_waveCollect[pixelIndex].sampleIndirect[s];
+        sumEnvNee += t_waveCollect[pixelIndex].sampleEnvNee[s];
+    }
+    const float invN = 1.0 / float(sampleCount);
+    // GI2.7: M in alpha — OVERWRITE (not +=) so the forward pass's indirectWeight
+    // doesn't pollute the M channel. RGB still adds to the forward pass's base color.
+    hdrImage[px] = float4(hdrImage[px].xyz + (sumIndirect + sumEnvNee) * invN + t_waveCollect[pixelIndex].restirDirect + t_waveCollect[pixelIndex].restirPathIndirect, t_waveCollect[pixelIndex].restirM);
+}
+
+/// Wave 0: the primary-vertex shade — today's main, verbatim up to the sample
+/// loop, with the per-sample walk prologues regenerating wave 1 instead of
+/// running the bounce loop inline. The wave-0 primary trace is NOT here: the
+/// trace pass is the single source of wave-0 hits (10c), and with the slot-0
+/// single-trace optimization (10d) it traced kind 0 only — correct because the
+/// four adaptive-sample slots share the IDENTICAL camera ray (makeCameraWavePath
+/// varies only the RNG crate and collect index, neither is a trace input), so
+/// record 0's committed hit IS the hit every sample's shade consumes. The slots
+/// diverge at first shade (the BSDF / env-NEE draws differ per sample crate).
+void shadeWavePrimary(uint2 px, int3 loadCoord, uint pixelIndex, uint waveSlotBase) {
+    // --- consume the wave-0 record enqueued by the generate pass (10b) ---
     // Slots are fixed per pixel: kind 0 is this pixel's first adaptive sample.
     // The record carries the per-sample RNG crate and the alive gate — the
     // pre-10b entry's inline G-buffer load and camera-ray derivation moved into
-    // the generate pass verbatim.
-    const uint waveSlotBase = (px.y * screenWidth + px.x) * kWaveSlotsPerPixel;
-    const WavePath wave0 = t_wavePathsCur[waveSlotBase + 0u];
-    if (!wavePathAlive(wave0)) {
+    // the generate pass verbatim. The alive gate is a 4-byte member probe.
+    if (!waveSlotAlive(waveSlotBase + 0u)) {
         return; // background / non-geometry pixel (generate saw the instance sentinel, A1b)
     }
 
@@ -2258,6 +2457,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
         const float3x3 viewRot = float3x3(view[0].xyz, view[1].xyz, view[2].xyz);
         float3 worldN = mul(viewN, viewRot);
         if (dot(worldN, worldN) < 1.0e-8) {
+            deactivatePixel(pixelIndex, waveSlotBase);
             return;
         }
         worldN = normalize(worldN);
@@ -2266,12 +2466,14 @@ void main(uint3 tid : SV_DispatchThreadID) {
         // the GI compute's descriptor set: a non-finite material would feed NaN/Inf straight
         // into the BSDF eval, ahead of the downstream isfinite() guards.
         if (!all(isfinite(mat.baseColorWeight.xyz)) || !all(isfinite(mat.emissionColorLum.xyz))) {
+            deactivatePixel(pixelIndex, waveSlotBase);
             return;
         }
         // Skip self-emissive primary surfaces: their radiance is the emitter itself, shown
         // directly by the forward pass; bounced light off an emitter is negligible.
         const float3 emission = max(mat.emissionColorLum.xyz, 0.0.xxx) * max(mat.emissionColorLum.w, 0.0);
         if (maxComp(emission) > 0.0) {
+            deactivatePixel(pixelIndex, waveSlotBase);
             return;
         }
         if (dot(worldN, wo) < 0.0) {
@@ -2297,6 +2499,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     const float3 primaryEmission = max(primary.mat.emissionColorLum.xyz, 0.0.xxx) *
                                    max(primary.mat.emissionColorLum.w, 0.0);
     if (maxComp(primaryEmission) > 0.0) {
+        deactivatePixel(pixelIndex, waveSlotBase);
         return;
     }
 
@@ -2335,7 +2538,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
     // A4/GI2: direct lighting from emissive triangles at the primary vertex. Both the
     // legacy ReSTIR DI and the GI2 ReSTIR PT paths route through the SAME reservoir
-    // (restirDiDirect) — PT absorbs DI per the sprint plan GI2 conflict resolution. The
+    // (restirDirect) — PT absorbs DI per the sprint plan GI2 conflict resolution. The
     // reservoir does initial-candidate RIS + temporal reuse + spatial reuse (Phase 2),
     // computes the unbiased weight W, and traces ONE shadow ray. The forward pass skips
     // its emissive-derived rect lights for both paths (shared setRestirDiActive semantic).
@@ -2376,48 +2579,451 @@ void main(uint3 tid : SV_DispatchThreadID) {
         restirM += pathResult.w;
     }
 
-    float3 sumIndirect = 0.0.xxx;
-    float3 sumEnvNee = 0.0.xxx;
+    // ── 10d: collect setup + the per-sample primary blocks (the regenerate) ──
+    // The collect record carries everything the LAST wave's composite needs; the
+    // per-sample terms accumulate exactly where the megakernel's loop left them:
+    // env NEE is a primary-vertex term (written once here — its whole chain is
+    // this invocation), the indirect chain is finalized at each sample's
+    // terminating wave with the core's epilogue (collectSample). All writes are
+    // MEMBER-WISE — the 176-B record is never materialized in registers (the
+    // shade dispatch is register-bound; a whole-struct local across the sample
+    // loop measurably spilled the reservoir path).
+    t_waveCollect[pixelIndex].restirDirect = restirDirect;
+    t_waveCollect[pixelIndex].restirPathIndirect = restirPathIndirect;
+    t_waveCollect[pixelIndex].restirM = restirM;
+    t_waveCollect[pixelIndex].sampleCount = sampleCount;
+    t_waveCollect[pixelIndex].flags = 0u;
+
     for (uint s = 0u; s < sampleCount; ++s) {
-        // PERF5 10b: the sample's RNG crate rides in its wave-0 record. The
-        // generate pass composed it with this loop's pre-split expression
+        // The sample's RNG crate rides in its wave-0 record. The generate pass
+        // composed it with the pre-split loop's expression
         //   composeRngSeed(px, frameSampleIndex * maxSamples + s, 0u, rngBaseSeed)
         // (reserving maxSamples indices per frame keeps samples from overlapping
         // across frames or within a pixel), so the Sobol stream crosses the pass
         // boundary unchanged — no draw added, removed, or reordered (design §3).
-        const WavePath waveS = t_wavePathsCur[waveSlotBase + s];
+        // Member-wise access: only the 12-byte crate is read (wave 0 = the
+        // binding-25 half).
         RngState sampleSeed;
-        sampleSeed.key   = waveS.rng.x;
-        sampleSeed.index = waveS.rng.y;
-        sampleSeed.dim   = waveS.rng.z;
+        sampleSeed.key   = t_wavePaths[waveSlotBase + s].rng.x;
+        sampleSeed.index = t_wavePaths[waveSlotBase + s].rng.y;
+        sampleSeed.dim   = t_wavePaths[waveSlotBase + s].rng.z;
         if (restirPtPathEnabled != 0u) {
             // Path reservoir owns the multi-bounce walk; only primary env NEE remains.
-            sumEnvNee += primaryEnvNeeOnly(primary, sampleSeed);
+            // No per-sample continuation exists — the slot's walk is complete here.
+            t_waveCollect[pixelIndex].sampleEnvNee[s] = primaryEnvNeeOnly(primary, sampleSeed);
+            killWaveSlot(waveSlotBase + s);
             continue;
         }
-        float3 sampleIndirect;
-        float3 sampleEnvNee;
-        const bool valid = estimateGiSample(primary, sampleSeed, adaptiveClamp, sampleIndirect, sampleEnvNee);
-        // Preserve legacy behaviour on the non-adaptive path: a single invalid sample leaves
-        // the pixel's accumulated indirect value untouched. The direct term (ReSTIR DI or
-        // ReSTIR PT — whichever ran above) is still composited so direct keeps converging
-        // even when the GI bounce degenerates.
-        if (maxSamples == 1u && !valid) {
-            if (restirDirect.x != 0.0 || restirDirect.y != 0.0 || restirDirect.z != 0.0) {
-                // GI2.7: M in alpha — OVERWRITE (not +=) so the forward pass's
-                // indirectWeight doesn't pollute the M channel. RGB still adds to
-                // the forward pass's base color via the read in the same expression.
-                hdrImage[px] = float4(hdrImage[px].xyz + restirDirect, restirM);
+
+        // ── the estimateGiSampleCore prologue, verbatim (captureRe = false) ──
+        PathState state;
+        state.radiance = 0.0.xxx;
+        state.throughput = 1.0.xxx;
+        state.depth = 0u;
+        state.seed = sampleSeed;
+        state.terminated = false;
+        state.specularBounce = false;
+        state.lastBsdfPdf = 0.0;
+        state.passedThrough = false;
+        state.insideMedium = false;
+        state.mediumSigmaT = 0.0.xxx;
+        state.mediumAlbedo = 0.0.xxx;
+        state.mediumG = 0.0;
+        state.mediumEta = 1.0;
+        state.captureRe = 0u;
+        state.reCaptured = 0u;
+        state.surfaceCount = 0u;
+        state.captureTarget = kWaveCaptureNone;
+        state.disableRR = 0u;
+        state.rec = makeEmptyReconnectionCapture();
+
+        const bool envEnabled = (hasEnvMap != 0u);
+        const bool envImportance = envEnabled && envImportanceWidth > 0u && envImportanceHeight > 0u;
+        TheiaTracer tracer;
+        float3 origin = 0.0.xxx;
+        float3 dir = 0.0.xxx;
+
+        // Primary-vertex opacity gate — this pass's half of mix(ambient-medium, surface, α).
+        // The two passes gate DIFFERENT terms, so they compose rather than double-count: the
+        // forward pass discards its fragment with probability (1-α), which weights the DIRECT
+        // term by α; here the same draw decides whether this pixel's INDIRECT term comes from
+        // the surface (α) or from continuing the camera ray into the background (1-α).
+        const float primaryOpacity = saturate(primary.mat.opacityFlagsPad.x);
+        const bool primaryPassThrough = randFloat(state.seed) < (1.0 - primaryOpacity);
+
+        // GI2.6: primary-vertex env NEE ownership is scene-type-dependent (see
+        // primaryEnvNeeOnly's note): emissive-lit scenes keep it here — 4
+        // independent samples with own shadow rays + MIS; IBL-only scenes route
+        // env through the reservoir. includePrimaryEnvNee = true (estimateGiSample).
+        NeeEventCapture capEnvUnused;
+        float3 primaryEnvNee = 0.0.xxx;
+        if (!primaryPassThrough) {
+            if (envImportance && emissiveTriangleCount > 0u) {
+                float3 sum = 0.0.xxx;
+                const uint count = 4u;
+                for (uint i = 0u; i < count; ++i) {
+                    EnvNeeSample envNee = evalEnvNEESample(
+                        tracer, primary,
+                        envMarginalCdf, envConditionalCdf,
+                        envImportanceWidth, envImportanceHeight, envEnabled, envLuminanceScale,
+                        t_envMap, s_env, state.seed, capEnvUnused);
+                    sum += envNee.contribution;
+                }
+                primaryEnvNee = sum / float(count);
+                if (!all(isfinite(primaryEnvNee)) || any(isnan(primaryEnvNee))) {
+                    primaryEnvNee = 0.0.xxx;
+                }
             }
-            return;
+
+            // --- Primary BSDF continuation (env/emissive direct handled per scene type above) ---
+            BSDFSample bs = sampleBSDF(primary.mat, primary.wo,
+                primary.normal, primary.T, primary.B, primary.coatN, primary.coatT, primary.coatB, primary.backface, state.seed);
+            if (bs.pdf <= 0.0 || maxComp(bs.weight) <= 0.0 || !all(isfinite(bs.weight))) {
+                // Today: `return false` — BOTH terms are discarded (the outs stay
+                // at their zero initialization), and on the non-adaptive path the
+                // pixel's indirect is skipped entirely (the collect flag).
+                t_waveCollect[pixelIndex].sampleIndirect[s] = 0.0.xxx;
+                t_waveCollect[pixelIndex].sampleEnvNee[s]   = 0.0.xxx;
+                if (maxSamples == 1u) {
+                    t_waveCollect[pixelIndex].flags |= kWaveCollectFlagSingleInvalid;
+                }
+                killWaveSlot(waveSlotBase + s);
+                continue;
+            }
+            // Shadow-terminator consistency at the primary vertex (Chiang 2019, see Harmonia
+            // bsdf_shared.slang): the continuation throughput carries the same microstructure
+            // shadowing that attenuates NEE, keeping the MIS integrand identical across
+            // techniques (mirrors the shared integrateSurface, which covers bounce 1+).
+            float gPrim;
+            float fPrim = shadowTerminatorFactor(primary.normal, primary.geoNormal,
+                                                 normalize(bs.direction), gPrim);
+            if (fPrim <= 0.0) {
+                state.terminated = true; // sampled direction self-shadowed by the microstructure
+            }
+            state.throughput = bs.weight * fPrim;
+            state.specularBounce = bs.isDelta;
+            state.lastBsdfPdf = bs.isDelta ? 1.0e30 : bs.pdf;
+            // G9/G10: capture a primary-vertex medium entry (bulk SSS / transmission scatter) so the
+            // shared walk runs on the first segment too, matching Hyperion's primary SSS handling.
+            state.insideMedium = bs.entersMedium;
+            state.mediumSigmaT = bs.mediumSigmaT;
+            state.mediumAlbedo = bs.mediumAlbedo;
+            state.mediumG      = bs.mediumG;
+            state.mediumEta    = bs.mediumEta;
+            origin = primary.position + primary.geoNormal * (dot(bs.direction, primary.geoNormal) >= 0.0 ? kRayEpsilon : -kRayEpsilon);
+            dir = normalize(bs.direction);
+        } else {
+            // Null interaction: resume the SAME camera ray with the continuation epsilon (a
+            // scattering-sized offset would step over coincident geometry — kNullInteractionEpsilon).
+            const float3 fwd = -primary.wo;
+            state.specularBounce = true;
+            state.lastBsdfPdf = 1.0e30; // delta pass-through for downstream MIS weighting
+            origin = primary.position
+                   + primary.geoNormal * (dot(fwd, primary.geoNormal) >= 0.0 ? kNullInteractionEpsilon
+                                                                             : -kNullInteractionEpsilon);
+            dir = normalize(fwd);
+            state.passedThrough = true;
         }
-        // Invalid samples on the adaptive path contribute zero (degenerate/non-finite outcome).
-        sumIndirect += sampleIndirect;
-        sumEnvNee += sampleEnvNee;
+
+        // G9/G10: if the primary continuation entered a medium, walk it before the
+        // surface loop. The walk starts AND completes inside this shade invocation
+        // (10d: no cross-wave suspension) — the successor carries the post-walk
+        // exit ray; the medium fields ride in the record as consumed state.
+        if (state.insideMedium) {
+            runMediumWalk(state, origin, dir);
+        }
+
+        // An OpenPBR opacity pass-through selects the ambient-medium side of
+        // mix(ambient, surface, geometry_opacity): no surface interaction happened, so it must
+        // NOT consume a bounce (charging it blacks out cut-out geometry wherever a ray grazes
+        // several crossings). `iter` is the separate termination guard, mirroring Hyperion's
+        // raygen loop and the medium walk's own budget. The loop-entry budget rides the
+        // record (iters); each wave consumes one entry, the inline null chain one per step.
+        //
+        // PATH-LENGTH PARITY with Hyperion (raygen.slang): the primary vertex is counted
+        // INSIDE the budget (see the core's primaryCharge note) — maxDepth = total surfaces
+        // on the path.
+        const uint primaryCharge = primaryPassThrough ? 0u : 1u;
+        const uint bounces = max(maxDepth, 1u) - primaryCharge;
+        const uint maxIters = bounces + kMaxNullInteractions;
+
+        // env-NEE slot: the core epilogue's guarded exposure product. The chain
+        // never crosses waves (primary-vertex term) — written once here, summed
+        // by the composite in s order.
+        float3 envNeeSlot = primaryEnvNee * exposure;
+        if (!all(isfinite(envNeeSlot)) || any(isnan(envNeeSlot))) {
+            envNeeSlot = 0.0.xxx;
+        }
+        t_waveCollect[pixelIndex].sampleEnvNee[s] = envNeeSlot;
+
+        if (state.terminated || bounces == 0u) {
+            // The loop never runs today (self-shadowed primary / exhausted
+            // budget): radiance is 0 — nothing was traced — and the sample is
+            // VALID with its env-NEE term only.
+            killWaveSlot(waveSlotBase + s);
+            continue;
+        }
+        // Regenerate wave 1: the loop's first entry. The pass-through primary
+        // resumes its ray with the continuation epsilon (the trace pass consumes
+        // rec.tMin); successorDepth = primaryCharge (the record's depth invariant:
+        // depth + bouncesRemaining == maxDepth at every write).
+        storeWaveSuccessor(waveSlotBase + s, pixelIndex, s, origin, dir,
+                           primaryPassThrough ? kNullInteractionEpsilon : kRayEpsilon,
+                           primaryCharge, state, bounces, maxIters, /*alive=*/true);
+    }
+    for (uint s = sampleCount; s < kWaveSampleSlots; ++s) {
+        // Beyond the pixel's sample count: killed without a single RNG draw
+        // (today: the loop never reaches them) — their camera-ray records must
+        // not be traced at wave 1.
+        killWaveSlot(waveSlotBase + s);
+    }
+}
+
+/// Waves 1..maxDepth: the per-slot secondary-vertex shade — the verbatim mirror
+/// of estimateGiSampleCore's bounce-loop BODY, with the loop's iteration carried
+/// by the wave index: one wave = one loop entry (today's `for (iter ...;
+/// bounce < bounces && !terminated && iter < maxIters; ++iter)` — the writer of
+/// a record guaranteed the condition held for the entry it regenerates). The
+/// bounce index is waveIndex - 1 (the primary consumed no loop entry; each real
+/// bounce advances exactly one wave). The OpenPBR null-interaction chain stays
+/// inline INSIDE this invocation (the design's stage-1 contract) and consumes
+/// one loop entry per step, exactly as today's `continue` does; the volumetric
+/// medium walk likewise starts and completes here (traceClosestHit remains the
+/// inline tracer for both, plus the reservoir replay hops — 10c).
+void shadeWave(uint2 px, uint pixelIndex, uint waveSlotBase) {
+    const uint bounce = waveIndex - 1u; // completed real bounces before this vertex
+
+    for (uint s = 0u; s < kWaveSampleSlots; ++s) {
+        const uint slot = waveSlotBase + s;
+        if (!waveSlotAlive(slot)) {
+            // Dead slot — skip. The in-place regenerate keeps every dead record
+            // dead in its slot (nothing re-alives a slot except the next
+            // frame's generate), so there is nothing to propagate.
+            continue;
+        }
+        const WavePath rec = loadWavePath(slot);
+
+        // PathState reconstruction FROM THE RECORD — the record IS the loop
+        // state. The medium fields are consumed here (10d activation) instead of
+        // re-deriving constants; `insideMedium` is never live across a wave (the
+        // walk completes in the writing invocation), so the flag reads false for
+        // every regenerated record — carried for the state's completeness.
+        PathState state;
+        state.radiance = rec.radiance;
+        state.throughput = rec.throughput;
+        state.depth = rec.depth;
+        state.seed.key = rec.rng.x;
+        state.seed.index = rec.rng.y;
+        state.seed.dim = rec.rng.z; // the RNG crate resumes exactly where the parent left it
+        state.terminated = false;
+        state.specularBounce = (rec.flags & kWaveFlagSpecularBounce) != 0u;
+        state.lastBsdfPdf = rec.lastBsdfPdf;
+        state.passedThrough = (rec.flags & kWaveFlagPassedThrough) != 0u;
+        state.insideMedium = (rec.flags & kWaveFlagInsideMedium) != 0u;
+        state.mediumSigmaT = rec.mediumSigmaT;
+        state.mediumAlbedo = rec.mediumAlbedo;
+        state.mediumG = rec.mediumG;
+        state.mediumEta = rec.mediumEta;
+        state.captureRe = 0u;
+        state.reCaptured = 0u;
+        state.surfaceCount = 0u;
+        state.captureTarget = kWaveCaptureNone;
+        state.disableRR = 0u;
+        state.rec = makeEmptyReconnectionCapture();
+
+        float3 origin = rec.origin;
+        float3 dir = rec.direction;
+        uint bounceBudget = rec.bouncesRemaining;
+        uint itersLeft = rec.iters;
+
+        // A3(b)/c1 per-pixel values — recomputed per wave with the wave-0
+        // expressions (a pure texture read + arithmetic; no RNG, so the value is
+        // the pixel constant the core's loop saw).
+        float variance = 0.0;
+        float adaptiveClamp = kFireflyClampDisplay;
+        if (hasGradientVariance != 0u) {
+            variance = t_gradientVariance.Load(int3(int(px.x), int(px.y), 0)).g;
+            adaptiveClamp = kFireflyClampDisplay * max(1.0, 1.0 + variance * 20.0);
+        }
+        const uint maxSamples = (hasGradientVariance != 0u)
+                                    ? max(min(giAdaptiveMaxSamples, kWaveSampleSlots), 1u)
+                                    : 1u;
+
+        const bool envEnabled = (hasEnvMap != 0u);
+        const bool envImportance = envEnabled && envImportanceWidth > 0u && envImportanceHeight > 0u;
+        TheiaTracer tracer;
+
+        // The trace pass already ran for this wave: the recorded committed hit
+        // (or the miss sentinel — which also covers the degenerate-index
+        // treat-as-miss, Q1) is today's `traceClosestHit` verdict.
+        const WaveHit waveHitRec = t_waveHits[slot];
+        GiHit h;
+        bool missed = (waveHitRec.instanceIdx == kWaveHitMiss);
+        if (missed) {
+            h.hit = false;
+            h.materialIdx = 0u;
+            h.worldPos = 0.0.xxx;
+            h.shadingNormal = float3(0.0, 1.0, 0.0);
+            h.geoNormal = float3(0.0, 1.0, 0.0);
+            h.uv = 0.0.xx;
+            h.tangent = 0.0.xxx;
+            h.dist = 0.0;
+        } else {
+            h = reconstructGiHit(waveHitRec);
+        }
+
+        // ── the loop body + the inline null-interaction chain ──
+        bool realBounce = false;
+        for (;;) {
+            if (missed) {
+                if (envEnabled) {
+                    const float3 Le = sampleEnvMapLatLong(t_envMap, s_env, dir) * envLuminanceScale;
+                    float misW = 1.0;
+                    // Weight BSDF-to-env against the matching environment-NEE strategy.
+                    if (envImportance) {
+                        const float envPdf = evalEnvImportancePdfDir(
+                            envMarginalCdf, envConditionalCdf, envImportanceWidth, envImportanceHeight, dir);
+                        misW = state.lastBsdfPdf / max(state.lastBsdfPdf + envPdf, 1.0e-6);
+                    }
+                    state.radiance += state.throughput * Le * misW;
+                }
+                break; // env-miss: the radiance chain is final
+            }
+
+            SurfaceHit surf = makeSurfaceHit(h, -dir);
+            // Reject a non-finite secondary material rather than propagating NaN through
+            // integrateSurface — terminate the path and keep the radiance accumulated so far.
+            if (!all(isfinite(surf.mat.baseColorWeight.xyz)) || !all(isfinite(surf.mat.emissionColorLum.xyz))) {
+                break;
+            }
+            // Prevent primary direct-light double count: camera->primary->emissive (bounce 0)
+            // is forward-owned direct (RectLight/emissive proxy), so GI must not add it.
+            const float3 surfEmission = max(surf.mat.emissionColorLum.xyz, 0.0.xxx)
+                                      * max(surf.mat.emissionColorLum.w, 0.0);
+            if (bounce == 0u && maxComp(surfEmission) > 0.0 && dot(surf.wo, surf.geoNormal) > 0.0) {
+                break;
+            }
+            // A3(a): path regularization — widen near-specular GGX lobes on secondary+ bounces
+            // to reduce firefly variance (Kaplanyan & Dachsbacher 2013; PBRT 4e §16). Trades a
+            // small known bias for much lower variance. Theia-only, flag-gated; Hyperion stays
+            // the unbiased ground truth. `bounce > 0` ⟺ waveIndex >= 2 (wave 1 is the loop's
+            // first entry — the primary vertex was shaded outside the loop).
+            //
+            // Exempt smooth dielectric transmission (glass): those surfaces refract via the exact
+            // Snell delta lobe (see bsdf.slang, baseRough < 0.05). Regularizing their roughness up
+            // to 0.3 would frost the glass and push it onto the microfacet-transmission path,
+            // broadening/strengthening refracted colour (e.g. the green cast of a gem on the floor)
+            // and diverging from Hyperion. Keep them sharp to preserve OpenPBR parity.
+            const bool smoothDielectricTransmission =
+                saturate(surf.mat.transmissionColorWeight.w) > 0.1 &&
+                surf.mat.specularRoughAnisoIor.x < 0.05;
+            if (a3RegularizationEnabled != 0u && bounce > 0u && !smoothDielectricTransmission) {
+                const float regStrength = 0.3; // roughness floor the lobe is widened toward
+                const float curRough = surf.mat.specularRoughAnisoIor.x;
+                // Smooth ramp: full effect at roughness 0, fades to nothing by regStrength.
+                const float regT = saturate((regStrength - curRough) / max(regStrength, 1.0e-4));
+                const float regRough = lerp(curRough, max(curRough, regStrength), regT);
+                surf.mat.specularRoughAnisoIor.x = regRough;
+                surf.mat.coatRoughAnisoIorDark.x = max(surf.mat.coatRoughAnisoIorDark.x, regRough * 0.5);
+            }
+            // (The core's reconnection-vertex selection + harvest blocks have no
+            // mirror here: they serve captureRe records only, and the wave slots
+            // never carry one — state.captureRe = 0 makes the shared
+            // integrateSurface's capture inert, statement-for-statement.)
+            // Depth counts real surface interactions: the primary consumed one
+            // (primaryCharge), so this vertex's depth is the parent's + 1 — the
+            // value the record carries (== bounce + primaryCharge, the core's
+            // per-entry assignment). Drives evalEmissionGuarded's `depth == 0`
+            // MIS guard and kRRMinDepth inside integrateSurface.
+            state.depth = rec.depth;
+            integrateSurface(tracer, surf,
+                emissiveTriangleCount, emissiveTriangles, emissiveCdf,
+                envMarginalCdf, envConditionalCdf,
+                envImportanceWidth, envImportanceHeight, envEnabled, envLuminanceScale,
+                t_envMap, s_env, state);
+            if (state.terminated) {
+                break;
+            }
+            origin = state.nextOrigin;
+            dir = state.nextDirection;
+            if (state.passedThrough) {
+                // A null interaction (opacity pass-through) RESUMES the ray instead of
+                // scattering it — same ray, same bounce index; the next loop entry uses
+                // the small continuation epsilon (the scattering guard would skip every
+                // surface within 1 mm of the cut-out). The chain stays INSIDE this shade
+                // invocation (design §1) and consumes one loop entry per step, exactly
+                // as today's `continue` + re-trace did.
+                --itersLeft;
+                if (itersLeft == 0u) {
+                    break; // today: the for-condition fails — the radiance is kept
+                }
+                h = traceClosestHit(origin, dir, kInf, kNullInteractionEpsilon);
+                missed = !h.hit;
+                continue;
+            }
+            --bounceBudget; // today: ++bounce
+            --itersLeft;    // today: the for-header ++iter
+
+            // G9/G10: if the BSDF sample entered a bulk subsurface / transmission-scatter medium,
+            // run the shared volumetric random walk here (its own bounded budget) before
+            // regenerating the surface bounce loop from the refracted exit ray. Starts and
+            // completes in this invocation — the successor carries the post-walk ray.
+            if (state.insideMedium) {
+                runMediumWalk(state, origin, dir);
+                if (state.terminated) {
+                    break;
+                }
+            }
+            realBounce = true;
+            break;
+        }
+
+        if (realBounce) {
+            // Regenerate: the successor is alive iff the NEXT loop entry is
+            // allowed by today's for-condition (bounce < bounces && iter <
+            // maxIters); otherwise the continuation ray is never traced (the
+            // megakernel exits the loop) and the radiance is final.
+            const bool alive = (bounceBudget > 0u) && (itersLeft > 0u);
+            storeWaveSuccessor(slot, pixelIndex, s, origin, dir, kRayEpsilon,
+                               rec.depth + 1u, state, bounceBudget, itersLeft, alive);
+            if (alive) {
+                continue; // the path lives on — its collect entry is written at termination
+            }
+        } else {
+            killWaveSlot(slot);
+        }
+        // Termination: finalize the sample's radiance chain (the core epilogue).
+        collectSample(pixelIndex, s, state.radiance, adaptiveClamp, maxSamples);
+    }
+}
+
+[numthreads(8, 8, 1)]
+void main(uint3 tid : SV_DispatchThreadID) {
+    if (tid.x >= screenWidth || tid.y >= screenHeight) {
+        return;
+    }
+    const uint2 px = tid.xy;
+    const int3 loadCoord = int3(int(px.x), int(px.y), 0);
+    const uint pixelIndex = px.y * screenWidth + px.x;
+    const uint waveSlotBase = pixelIndex * kWaveSlotsPerPixel;
+
+    if (waveIndex == 0u) {
+        // Wave 0: the primary-vertex shade + the regenerate writes (wave 1).
+        shadeWavePrimary(px, loadCoord, pixelIndex, waveSlotBase);
+        if (waveIndex + 1u == waveCount) {
+            // Collapsed single-wave train (the ReSTIR PT path reservoir owns ALL
+            // multi-bounce transport, so every per-sample slot terminated in the
+            // wave-0 shade above): the composite runs HERE.
+            compositeCollect(px, pixelIndex);
+        }
+        return;
     }
 
-    const float invN = 1.0 / float(sampleCount);
-    // GI2.7: M in alpha — OVERWRITE (not +=) so the forward pass's indirectWeight
-    // doesn't pollute the M channel. RGB still adds to the forward pass's base color.
-    hdrImage[px] = float4(hdrImage[px].xyz + (sumIndirect + sumEnvNee) * invN + restirDirect + restirPathIndirect, restirM);
+    // Waves 1..maxDepth: one bounce-loop entry per live slot, then — on the last
+    // wave — the composite (every path's budget is exhausted by then, so all
+    // collect entries are final; the composite reads only THIS thread's pixel).
+    shadeWave(px, pixelIndex, waveSlotBase);
+    if (waveIndex + 1u == waveCount) {
+        compositeCollect(px, pixelIndex);
+    }
 }
