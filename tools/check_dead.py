@@ -45,7 +45,7 @@ import os
 import re
 import sys
 
-CHECK_DEAD_VERSION = "1.1.1"
+CHECK_DEAD_VERSION = "1.1.2"
 
 SKIP_EXIT = 77
 
@@ -57,7 +57,7 @@ DEFAULT_EXCLUDES = {
 }
 
 # Excluded directory-name substrings (applied at every depth).
-DEFAULT_EXCLUDE_SUBSTRINGS = ("_deps", "CMakeFiles", "__pycache__")
+DEFAULT_EXCLUDE_SUBSTRINGS = ("_deps", "CMakeFiles", "__pycache__", "vcpkg_installed")
 
 HEADER_EXTS = {".hpp", ".h", ".hh", ".hxx", ".inl"}
 SOURCE_EXTS = {".cpp", ".cc", ".cxx"}
@@ -83,7 +83,8 @@ def detect_roots(repo: str) -> list[str]:
     roots = []
     for name in sorted(os.listdir(repo)):
         p = os.path.join(repo, name)
-        if (not os.path.isdir(p) or name.startswith(".") or name in DEFAULT_EXCLUDES
+        if (not os.path.isdir(p) or name.startswith(".") or name.startswith("build")
+                or name in DEFAULT_EXCLUDES
                 or any(x in name for x in DEFAULT_EXCLUDE_SUBSTRINGS)):
             continue
         for dp, dn, fn in os.walk(p):
