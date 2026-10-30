@@ -228,12 +228,12 @@ endif()
 FetchContent_Declare(
     aether
     GIT_REPOSITORY https://github.com/McNopper/Aether.git
-    GIT_TAG v0.8.0
+    GIT_TAG v0.8.1
 )
 FetchContent_Declare(
     harmonia
     GIT_REPOSITORY https://github.com/McNopper/Harmonia.git
-    GIT_TAG v0.7.16
+    GIT_TAG v0.7.18
 )
 # slang-math arrives transitively: Aether and Harmonia are its direct consumers
 # and pin it in their own CMakeLists; Harmonia is the renderer-tier vendor
