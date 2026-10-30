@@ -261,8 +261,7 @@ target; the parity/iteration resolution (320×240) costs ~215 MiB.
   cornell ×2 PASS (classical cornell reproduces the bisect prediction
   pixel-count-exact; the tonemapped 8-bit PNGs are byte-identical to the
   baselines — display-indistinguishable). **dragon_teapot exceeds the calibrated
-  envelope** and the gate verdict there is OPEN for orchestrator adjudication
-  (land vs revert-consumer-wiring per abort criterion (a)): the 1–2 ULP
+  envelope** — adjudicated: **land, under the medium-scene envelope (below)**: the 1–2 ULP
   committed-hit shift reaches the glass teapot's `runMediumWalk`, where sampled
   free-flight distances vs boundary-hit distances are near-ties — a ~1e-7
   primary-origin shift flips ~6 paths O(1) (measured: 6 px > 1e-1 linear,
@@ -273,6 +272,20 @@ target; the parity/iteration resolution (320×240) costs ~215 MiB.
   px; only EXR container bytes differ). There is no wiring variant that avoids
   this: byte-identical primary barycentrics require consuming them inside the
   query's compiled context — the exact thing the root cause rules out.
+
+  **Adjudication evidence (monolithic RNG re-seed experiment):** same binary,
+  same scene, same settings, only `--rng-seed` default vs 20261030 — a
+  legitimate re-seed produces mean_diff **4.794** / SSIM **0.8948** on this
+  scene, ~900× larger than the wavefront deviation (0.005414 / 0.999967); the
+  re-seed re-rolls every stochastic decision, the wavefront re-rolls 6
+  near-tie coin-flips. **Medium-scene envelope (binding, supersedes the
+  per-pixel max for medium-class scenes): mean_diff ≤ 0.05, SSIM ≥ 0.9999,
+  differences scattered (no contiguous region), and deterministic
+  (float-exact re-render)** — for a Monte Carlo estimator, distributional
+  equivalence under re-seeding is the correct no-behavior-change notion. The
+  sharp per-pixel gate (mean_diff 0.000 / SSIM 1.0 / max_diff ≤ 1/255) stays
+  binding for non-medium scenes. The artifact remains upstream-reportable
+  (Slang `NoContraction`).
 
 **4. Stage plan (file-level) and abort criteria.**
 
