@@ -354,6 +354,62 @@ struct GiHit {
 /// volumetric medium segments — a miss within maxDist is an in-medium scattering event).
 /// `tMin` is the ray self-intersection guard (kRayEpsilon for surface bounces; kMediumEpsilon
 /// inside a medium, matching Hyperion — dense media have free-flight distances below kRayEpsilon).
+/// Surface reconstruction from a committed triangle hit: the vertex fetch and GiHit
+/// assembly extracted from traceClosestHit (PERF5 salvage) so the reconstruction is
+/// callable by name. `committedBary`/`committedRayT` must be taken from the caller's
+/// RayQuery while it is in the committed state.
+GiHit reconstructGiHitFromQuery(float2 committedBary, float committedRayT, uint instIdx, uint tri) {
+    GiHit hit;
+    hit.hit = false;
+    hit.materialIdx = 0u;
+    hit.worldPos = 0.0.xxx;
+    hit.shadingNormal = float3(0.0, 1.0, 0.0);
+    hit.geoNormal = float3(0.0, 1.0, 0.0);
+
+    const GpuInstance inst = instances[instIdx];
+    const uint base = inst.indexOffset + tri * 3u;
+    if (base + 2u >= inst.indexOffset + inst.indexCount) {
+        return hit;
+    }
+
+    const uint i0 = indices[base + 0u];
+    const uint i1 = indices[base + 1u];
+    const uint i2 = indices[base + 2u];
+    // Vertices live in object space; the instance transform places them.
+    const float4x4 o2w = instanceTransforms[instIdx];
+    const float3x3 normalMat = transpose(inverse3x3((float3x3)o2w));
+    const float3 p0 = mul(o2w, float4(vertices[i0].position, 1.0)).xyz;
+    const float3 p1 = mul(o2w, float4(vertices[i1].position, 1.0)).xyz;
+    const float3 p2 = mul(o2w, float4(vertices[i2].position, 1.0)).xyz;
+    const float3 n0 = normalize(mul(normalMat, vertices[i0].normal));
+    const float3 n1 = normalize(mul(normalMat, vertices[i1].normal));
+    const float3 n2 = normalize(mul(normalMat, vertices[i2].normal));
+    const float2 uv0 = vertices[i0].uv;
+    const float2 uv1 = vertices[i1].uv;
+    const float2 uv2 = vertices[i2].uv;
+
+    const float2 b = committedBary;
+    const float3 bary = float3(1.0 - b.x - b.y, b.x, b.y);
+    // RAW outward-winding geometric normal (Hyperion's HitInfo contract): the side
+    // information is carried by the sign of dot(geoNormal, wo) at the consumers —
+    // makeSurfaceHit flips a local copy to face wo and derives SurfaceHit.backface
+    // (C7 dielectric exit branch), runMediumWalk needs the TRUE outward normal for the
+    // exit refraction/TIR and the inside/outside ray offsets. Pre-flipping it here
+    // (ray-facing) would erase the side bit: backface would always read false and the
+    // medium walk would refract against a wrong-signed normal (broken exits, spurious
+    // re-entry, repeated absorption).
+    hit.worldPos = p0 * bary.x + p1 * bary.y + p2 * bary.z;
+    TriangleGeometry g = reconstructTriangleGeometry(p0, p1, p2, n0, n1, n2, uv0, uv1, uv2, bary);
+    hit.uv = g.uv;
+    hit.tangent = g.tangent;
+    hit.shadingNormal = g.shadingNormal;
+    hit.geoNormal = g.geoNormal;
+    hit.materialIdx = inst.materialIndex;
+    hit.dist = committedRayT;
+    hit.hit = true;
+    return hit;
+}
+
 GiHit traceClosestHit(float3 origin, float3 dir, float maxDist, float tMin) {
     GiHit hit;
     hit.hit = false;
@@ -385,50 +441,8 @@ GiHit traceClosestHit(float3 origin, float3 dir, float maxDist, float tMin) {
         return hit;
     }
 
-    const uint instIdx = q.CommittedInstanceID();
-    const GpuInstance inst = instances[instIdx];
-    const uint tri = q.CommittedPrimitiveIndex();
-    const uint base = inst.indexOffset + tri * 3u;
-    if (base + 2u >= inst.indexOffset + inst.indexCount) {
-        return hit;
-    }
-
-    const uint i0 = indices[base + 0u];
-    const uint i1 = indices[base + 1u];
-    const uint i2 = indices[base + 2u];
-    // Vertices live in object space; the instance transform places them.
-    const float4x4 o2w = instanceTransforms[instIdx];
-    const float3x3 normalMat = transpose(inverse3x3((float3x3)o2w));
-    const float3 p0 = mul(o2w, float4(vertices[i0].position, 1.0)).xyz;
-    const float3 p1 = mul(o2w, float4(vertices[i1].position, 1.0)).xyz;
-    const float3 p2 = mul(o2w, float4(vertices[i2].position, 1.0)).xyz;
-    const float3 n0 = normalize(mul(normalMat, vertices[i0].normal));
-    const float3 n1 = normalize(mul(normalMat, vertices[i1].normal));
-    const float3 n2 = normalize(mul(normalMat, vertices[i2].normal));
-    const float2 uv0 = vertices[i0].uv;
-    const float2 uv1 = vertices[i1].uv;
-    const float2 uv2 = vertices[i2].uv;
-
-    const float2 b = q.CommittedTriangleBarycentrics();
-    const float3 bary = float3(1.0 - b.x - b.y, b.x, b.y);
-    // RAW outward-winding geometric normal (Hyperion's HitInfo contract): the side
-    // information is carried by the sign of dot(geoNormal, wo) at the consumers —
-    // makeSurfaceHit flips a local copy to face wo and derives SurfaceHit.backface
-    // (C7 dielectric exit branch), runMediumWalk needs the TRUE outward normal for the
-    // exit refraction/TIR and the inside/outside ray offsets. Pre-flipping it here
-    // (ray-facing) would erase the side bit: backface would always read false and the
-    // medium walk would refract against a wrong-signed normal (broken exits, spurious
-    // re-entry, repeated absorption).
-    hit.worldPos = p0 * bary.x + p1 * bary.y + p2 * bary.z;
-    TriangleGeometry g = reconstructTriangleGeometry(p0, p1, p2, n0, n1, n2, uv0, uv1, uv2, bary);
-    hit.uv = g.uv;
-    hit.tangent = g.tangent;
-    hit.shadingNormal = g.shadingNormal;
-    hit.geoNormal = g.geoNormal;
-    hit.materialIdx = inst.materialIndex;
-    hit.dist = q.CommittedRayT();
-    hit.hit = true;
-    return hit;
+    return reconstructGiHitFromQuery(q.CommittedTriangleBarycentrics(), q.CommittedRayT(),
+                                     q.CommittedInstanceID(), q.CommittedPrimitiveIndex());
 }
 
 /// G9/G10: run the volumetric random walk inside the compute GI loop. All walk math
