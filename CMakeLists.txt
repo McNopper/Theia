@@ -534,7 +534,8 @@ if(PROJECT_IS_TOP_LEVEL)
         if(CHECK_DEAD_ENGINE)
             add_test(NAME test_dead
                      COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/check_dead.py
-                             --repo "${CMAKE_SOURCE_DIR}")
+                             --repo "${CMAKE_SOURCE_DIR}"
+                             --family "${CMAKE_SOURCE_DIR}/..")
             set_tests_properties(test_dead PROPERTIES SKIP_RETURN_CODE 77 LABELS analysis RUN_SERIAL TRUE)
         endif()
     endif()

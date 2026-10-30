@@ -15,6 +15,13 @@ correctness by itself - every finding needs a human triage before deletion):
                       FetchContent_MakeAvailable()/FetchContent_Populate()
                       (name comparison normalized: lowercase, '-' == '_').
 
+Family mode (--family DIR): headers with zero intra-repo consumers get a
+second chance against a lazily-built include index of the sibling repos
+under DIR - a header orphaned in its own repo may be consumed cross-repo
+(the Harmonia core/Env.hpp incident: deleted on a single-repo verdict,
+broke Theia's CI). Rescued headers are reported with their consumers; they
+are findings no more.
+
 Generic by design: the repo layout is derived (top-level source-containing
 directories, like check_arch's detect_roots); nothing is per-repo hardcoded.
 Justified findings go into tools/check_dead.exceptions - one entry per line:
@@ -23,7 +30,8 @@ Justified findings go into tools/check_dead.exceptions - one entry per line:
 
 where <check> is orphan-headers | never-compiled | fetchcontent. Lines
 starting with '#' and blank lines are ignored.  Missing exceptions file is
-normal.
+normal.  The file is parsed BOM-tolerantly (utf-8-sig) - Windows tooling
+loves to add one.
 
 Exit codes: 0 = clean, 1 = findings, 77 = nothing scanned (skip, per the
 analysis-lane SKIP_RETURN_CODE convention).
@@ -37,7 +45,7 @@ import os
 import re
 import sys
 
-CHECK_DEAD_VERSION = "1.0.0"
+CHECK_DEAD_VERSION = "1.1.1"
 
 SKIP_EXIT = 77
 
@@ -108,7 +116,7 @@ def load_exceptions(repo: str) -> list[tuple[str, str]]:
     entries: list[tuple[str, str]] = []
     if not os.path.isfile(path):
         return entries
-    with open(path, encoding="utf-8") as fh:
+    with open(path, encoding="utf-8-sig") as fh:
         for raw in fh:
             line = raw.strip()
             if not line or line.startswith("#"):
@@ -205,7 +213,64 @@ def cmake_mentions(repo: str, rel_source: str) -> bool:
     return False
 
 
-def run(repo: str, report: bool) -> int:
+def build_family_includes(family: str, own_repo: str) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    """(include-spec -> sibling repos, sibling -> normalized file paths).
+    Only called lazily when orphan candidates exist."""
+    index: dict[str, set[str]] = {}
+    member_files: dict[str, set[str]] = {}
+    if not os.path.isdir(family):
+        return index, member_files
+    for name in sorted(os.listdir(family)):
+        member = os.path.join(family, name)
+        if (not os.path.isdir(member) or os.path.abspath(member) == os.path.abspath(own_repo)
+                or name.startswith(".") or name in DEFAULT_EXCLUDES
+                or any(x in name for x in DEFAULT_EXCLUDE_SUBSTRINGS)):
+            continue
+        for dp, dn, fn in os.walk(member):
+            dn[:] = [d for d in dn if d not in DEFAULT_EXCLUDES
+                     and not any(x in d for x in DEFAULT_EXCLUDE_SUBSTRINGS)]
+            for f in fn:
+                ext = os.path.splitext(f)[1]
+                if ext not in HEADER_EXTS and ext not in SOURCE_EXTS:
+                    continue
+                rel = norm(os.path.relpath(os.path.join(dp, f), member))
+                member_files.setdefault(name, set()).add(rel)
+                try:
+                    with open(os.path.join(dp, f), encoding="utf-8",
+                              errors="replace") as fh:
+                        text = fh.read()
+                except OSError:
+                    continue
+                for inc in INCLUDE_RE.findall(text):
+                    index.setdefault(norm(inc), set()).add(name)
+    return index, member_files
+
+
+def family_consumes(index: dict[str, set[str]], member_files: dict[str, set[str]],
+                    key: str) -> set[str]:
+    """Sibling repos whose include specs resolve to the header `key`
+    (exact, or suffix match in either direction - the same philosophy as
+    the intra-repo resolution).  A sibling that contains its own COPY of
+    the header (same path modulo leading components - e.g. a vendored
+    snapshot of the family) is self-referential, not a consumer, and is
+    excluded."""
+    consumers: set[str] = set()
+    variants = {key}
+    parts = key.split("/")
+    if len(parts) > 1:
+        variants.add("/".join(parts[1:]))
+    for spec, repos in index.items():
+        if spec == key or key.endswith("/" + spec) or spec.endswith("/" + key):
+            for repo in repos:
+                files = member_files.get(repo, set())
+                copied = any(v in files or any(f.endswith("/" + v) for f in files)
+                             for v in variants)
+                if not copied:
+                    consumers.add(repo)
+    return consumers
+
+
+def run(repo: str, report: bool, family: str | None) -> int:
     roots = detect_roots(repo)
     if not roots:
         print("check_dead: no source roots found - nothing to scan")
@@ -221,12 +286,24 @@ def run(repo: str, report: bool) -> int:
 
     findings: dict[str, list[str]] = {"orphan-headers": [], "never-compiled": [],
                                       "fetchcontent": []}
+    rescued: list[tuple[str, set[str]]] = []
 
-    # 1. orphan headers - zero incoming include edges
+    # 1. orphan headers - zero incoming include edges (intra-repo; family
+    #    mode gives cross-repo consumers a second look)
     edges = build_include_edges(repo, files)
-    for h in headers:
-        if not edges[h] and not excepted("orphan-headers", h, exceptions):
-            findings["orphan-headers"].append(h)
+    orphan_candidates = [h for h in headers if not edges[h]]
+    family_index: dict[str, set[str]] | None = None
+    if orphan_candidates and family:
+        family_index, member_files = build_family_includes(family, repo)
+    for h in orphan_candidates:
+        if excepted("orphan-headers", h, exceptions):
+            continue
+        if family_index is not None:
+            consumers = family_consumes(family_index, member_files, h)
+            if consumers:
+                rescued.append((h, consumers))
+                continue
+        findings["orphan-headers"].append(h)
 
     # 2. never-compiled - not in compile db AND not mentioned in any CMake file
     db_path = find_compile_db(repo)
@@ -262,6 +339,8 @@ def run(repo: str, report: bool) -> int:
 
     # Report
     total = sum(len(v) for v in findings.values())
+    for h, consumers in sorted(rescued):
+        print(f"info  cross-repo consumer: {h} (consumed by {', '.join(sorted(consumers))})")
     for check, items in findings.items():
         label = "PASS" if not items else "FAIL"
         print(f"{label} {check}: {len(items)}")
@@ -284,10 +363,14 @@ def main(argv=None) -> int:
     ap.add_argument("--version", action="version", version=f"check_dead {CHECK_DEAD_VERSION}")
     ap.add_argument("--repo", default=os.path.dirname(here),
                     help="repository root to check (default: the directory above this script)")
+    ap.add_argument("--family", default=None,
+                    help="directory containing sibling repos - orphan-header candidates "
+                         "get a second look against their include graphs (cross-repo "
+                         "consumers rescue the header)")
     ap.add_argument("--report", action="store_true",
                     help="also print the derived scan roots and file counts")
     args = ap.parse_args(argv)
-    return run(os.path.abspath(args.repo), args.report)
+    return run(os.path.abspath(args.repo), args.report, args.family)
 
 
 if __name__ == "__main__":
