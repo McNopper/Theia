@@ -45,21 +45,27 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
 
 ## At a glance
 
-- **Release:** v0.7.17 - I6 verified (frames-per-flip shipped Harmonia-side v0.7.15, consumed by Theia; 5 CPU contract tests added); pins: slang-math v0.5.0, Aether v0.8.0, Harmonia v0.7.16.
-  depth/camera, all under the large-module limits) + AR1 consumption. Lockstep
-  reference: Harmonia v0.7.14, Hyperion v0.7.14 (Aether v0.7.7, slang-math v0.4.0).
+- **Release:** v0.8.0 - the PERF5 wavefront arc: stage-1 designed, built, measured,
+  and **parked** (bit-identical renders at 320p and 1080p, at ~2x the monolithic GI
+  cost - record-traffic dominated; the full stage-1 pipeline is preserved on
+  `perf5/wavefront-stage1` with the calibrated + medium-scene verification gates
+  adjudicated against an RNG re-seed experiment) + `PassTimer` per-pass GPU
+  instrumentation (`THEIA_PASS_TIMING=1`), the move-reset `ViewAccumulationGate`
+  contract (8 tests), the `reconstructGiHitFromQuery` salvage extraction, and the
+  check-dead family gate. Renders are bit-identical to the pre-split baselines at
+  both resolutions. Pins: slang-math v0.8.0 (transitive via Harmonia), Aether
+  v0.8.0, Harmonia v0.7.18. 33 CPU module tests + the family analysis lanes.
+- **Prior:** v0.7.17 - I6 verified (frames-per-flip shipped Harmonia-side v0.7.15,
+  consumed by Theia; 5 CPU contract tests added).
 - **Quality gates (family-uniform):** blocking lint (Q2-Q6) on every push -
   clang-format pinned 22.1.3, ruff contract in `ruff.toml` (identical x5), cppcheck,
   bandit, actionlint 1.7.12, yamllint. Coverage stays a local activity (the test
   suite needs a GPU).
-- **Next:** MOD4 v1 needs a **Harmonia-side change** (swapchain present-fence +
-  release path — see the MOD4 row) and is sequenced by the orchestrator. The
-  shared-estimator next-up items (GI-SMS, C9, DN3, LS2, PERF5/PERF4, C11, C12)
-  are tracked in `Harmonia/PLAN.md` and wire into `gi.comp.slang` when they land.
-  slang-math override pin moved to **v0.5.0** (this repo's `CMakeLists.txt`
-  declares `slang_math` ahead of the transitive Aether/Harmonia release pins —
-  first-declaration-wins; family policy "use latest slang-math"; additive SM4
-  release, no API change needed by Theia).
+- **Next:** PERF4 re-plans as a **combined wavefront + reordering arc** against the
+  measured budget (entry gate: the reordering must recover the measured ~2x; see
+  the PERF5 design section). The shared-estimator next-up items (GI-SMS, C9, DN3,
+  LS2, C11, C12) are tracked in `Harmonia/PLAN.md` and wire into `gi.comp.slang`
+  when they land.
 ## How to continue
 
 ### Roadmap
@@ -520,6 +526,15 @@ low-spp reference).
 
 ## Baseline
 
+- **v0.8.0** (consumes Harmonia v0.7.18, Aether v0.8.0, slang-math v0.8.0 transitive):
+  **PERF5 wavefront arc + engine hardening.** Stage-1 wavefront (generate/trace/shade
+  over persistent records) built to bit-identity at 320p and 1080p, measured at ~2x
+  the monolithic GI cost (record-traffic dominated; 4x dead-slot waste at
+  maxSamples=1), and parked on `perf5/wavefront-stage1` per criterion (b). Kept on
+  main: `PassTimer` (THEIA_PASS_TIMING), the calibrated + medium-scene verification
+  gates (RNG re-seed adjudication, ~900x margin), the move-reset
+  `ViewAccumulationGate` contract, `reconstructGiHitFromQuery` salvage extraction,
+  check-dead 1.1.2 (family mode). 33 CPU module tests.
 - **v0.7.14** (consumes Harmonia v0.7.13): **code health: the scene module
   joins `namespace theia` + the arch gate.** `theia/scene` (`Scene`, `GpuInstance`,
   `GpuInstanceBounds`, `GpuMeshlet`) was the family's last global-namespace module — now
