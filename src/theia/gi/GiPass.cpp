@@ -79,7 +79,8 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx,
                         const Config& cfg,
                         const harmonia::core::CommandPool& uploadPool,
                         const char* giSpv,
-                        const char* generateSpv) {
+                        const char* generateSpv,
+                        const char* traceSpv) {
     m_ctx = &ctx;
     m_cfg = cfg;
     m_hdrFirstUse = true;
@@ -214,7 +215,7 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx,
     if (!createDescriptors()) {
         return false;
     }
-    if (!createPipelines(giSpv, generateSpv)) {
+    if (!createPipelines(giSpv, generateSpv, traceSpv)) {
         return false;
     }
     return true;
@@ -238,6 +239,7 @@ void GiPass::shutdown() {
     m_boundMotionVectorView = VK_NULL_HANDLE;
     m_pipeline.reset();
     m_generatePipeline.reset();
+    m_tracePipeline.reset();
     m_pipelineLayout.reset();
     for (auto& w : m_descWriters) {
         w.shutdown(); // MOD1: replaces pool + sets
@@ -290,8 +292,10 @@ bool GiPass::createDescriptors() {
         {25, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // PERF5 10b wavefront ray
                                                                                           // buffer (cur, RW)
         {26, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // PERF5 wavefront ray buffer
-                                                                                          // (prev, RW; 10c successors)
-        {27, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // PERF5 wavefront hits (10c)
+                                                                                          // (prev, RW; 10d successors)
+        {27, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // PERF5 10c wavefront hits
+                                                                                          // (trace writes; GI
+                                                                                          // consumes since 10c)
         {28, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // PERF5 wavefront collect
                                                                                           // (10d)
     }};
@@ -337,7 +341,7 @@ bool GiPass::createDescriptors() {
     return true;
 }
 
-bool GiPass::createPipelines(const char* giSpv, const char* generateSpv) {
+bool GiPass::createPipelines(const char* giSpv, const char* generateSpv, const char* traceSpv) {
     const VkPushConstantRange pcRange{
         .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
         .offset = 0,
@@ -357,10 +361,15 @@ bool GiPass::createPipelines(const char* giSpv, const char* generateSpv) {
     }
     m_pipelineLayout = harmonia::core::UniquePipelineLayout{m_ctx->device, pipelineLayout};
 
-    // PERF5 10b: two compute pipelines against the shared layout — the generate
-    // pass (camera-ray enqueue + collect init, dispatched first) and the GI pass
-    // (consumes the wave-0 records).
+    // PERF5 wavefront: three compute pipelines against the shared layout — the
+    // generate pass (camera-ray enqueue + collect init), the 10c trace pass
+    // (verbatim RayQuery over the wave-0 records → hit buffer), and the GI
+    // shade pass (consumes records + hits). Recorded in that order, with
+    // buffer barriers between the dispatches.
     if (!createComputePipeline(m_ctx->device, m_pipelineLayout, generateSpv, m_generatePipeline)) {
+        return false;
+    }
+    if (!createComputePipeline(m_ctx->device, m_pipelineLayout, traceSpv, m_tracePipeline)) {
         return false;
     }
     if (!createComputePipeline(m_ctx->device, m_pipelineLayout, giSpv, m_pipeline)) {
@@ -428,8 +437,10 @@ void GiPass::updateRestirDescriptors(const FrameParams& params, std::uint32_t sl
     auto& w = m_descWriters[slot % kDescriptorSlots];
     m_activeSlot = slot % kDescriptorSlots;
     // PERF5 10b: wavefront buffers — 25/26 ray ping-pong (cur = generate's write
-    // target, read by the GI dispatch the same frame), 27 hits (10c), 28 collect
-    // (10d). Written every frame like the reservoir ping-pong bindings.
+    // target, read by the trace + GI dispatches the same frame), 27 hits (10c:
+    // the trace dispatch writes them; the GI dispatch consumes them the same
+    // frame — the trace→GI barrier below orders that edge), 28 collect (10d).
+    // Written every frame like the reservoir ping-pong bindings.
     w.writeStorageBufferHandle(*m_ctx, 25, m_wavePathBuf[m_wavePathPingPong]);
     w.writeStorageBufferHandle(*m_ctx, 26, m_wavePathBuf[1u - m_wavePathPingPong]);
     w.writeStorageBufferHandle(*m_ctx, 27, m_waveHitBuf);
@@ -561,10 +572,11 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
             pingPongBarrier(m_reservoirBuf[1].handle()),
             pingPongBarrier(m_pathReservoirBuf[0].handle()),
             pingPongBarrier(m_pathReservoirBuf[1].handle()),
-            // PERF5 10b: wavefront buffers. The same-frame generate→GI write→read is
-            // ordered by the dedicated barrier below; this cross-frame barrier keeps
-            // frame N's accesses ahead of frame N+1's (the wave path buffers are
-            // rewritten every frame, the hit/collect buffers follow in 10c/10d).
+            // PERF5 10b: wavefront buffers. The same-frame generate→trace→GI
+            // write→read edges are ordered by the dedicated barriers below; this
+            // cross-frame barrier keeps frame N's accesses ahead of frame N+1's
+            // (the wave path + hit buffers are rewritten every frame by
+            // generate/trace, the collect buffer follows in 10d).
             pingPongBarrier(m_wavePathBuf[0].handle()),
             pingPongBarrier(m_wavePathBuf[1].handle()),
             pingPongBarrier(m_waveHitBuf.handle()),
@@ -664,9 +676,9 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
     vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
     vkCmdDispatch(cmd, gx, gy, 1);
 
-    // generate → GI: this frame's wave-0 records must be visible to the GI
-    // dispatch (write→read on the ray buffer it consumed); the collect init rides
-    // along (read|write dst keeps it coherent for the 10c/10d consumers). Stages
+    // generate → trace: this frame's wave-0 records must be visible to the trace
+    // dispatch (write→read on the ray buffer it consumes); the collect init rides
+    // along (read|write dst keeps it coherent for the 10d consumers). Stages
     // and access flags follow the repo's compute-to-compute barrier convention.
     {
         const std::array<VkBufferMemoryBarrier2, 2> genBarriers{{
@@ -699,6 +711,50 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         vkCmdPipelineBarrier2(cmd, &genDep);
     }
 
+    // ---- PERF5 10c: trace pass — the verbatim traceClosestHit RayQuery ----
+    // ---- traversal over the live wave-0 records → the hit buffer.        ----
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_tracePipeline);
+    m_descWriters[m_activeSlot].bind(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout);
+    vkCmdPushConstants(cmd, m_pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+    vkCmdDispatch(cmd, gx, gy, 1);
+
+    // trace → GI: the trace pass's hit-record writes must be visible before the
+    // GI dispatch reads them (the shade dispatch reconstructs the primary
+    // surface from record 0 since 10c — the barrier is part of the wavefront
+    // contract); the ray buffer rides along — the
+    // shade dispatch reads the wave-0 records (alive gate + per-sample RNG
+    // crates), and this edge re-covers generate's writes for that read.
+    {
+        const std::array<VkBufferMemoryBarrier2, 2> traceBarriers{{
+            {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+             .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+             .srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT,
+             .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+             .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
+             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+             .buffer = m_waveHitBuf.handle(),
+             .offset = 0,
+             .size = VK_WHOLE_SIZE},
+            {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+             .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+             .srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT,
+             .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+             .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
+             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+             .buffer = m_wavePathBuf[m_wavePathPingPong].handle(),
+             .offset = 0,
+             .size = VK_WHOLE_SIZE},
+        }};
+        const VkDependencyInfo traceDep{
+            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .bufferMemoryBarrierCount = static_cast<std::uint32_t>(traceBarriers.size()),
+            .pBufferMemoryBarriers = traceBarriers.data(),
+        };
+        vkCmdPipelineBarrier2(cmd, &traceDep);
+    }
+
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
     // MOD1: bind the descriptor buffer for the active slot (replaces vkCmdBindDescriptorSets).
     m_descWriters[m_activeSlot].bind(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout);
@@ -709,9 +765,10 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
     // A4: flip the reservoir ping-pong so this frame's "current" becomes next frame's "prev".
     m_reservoirPingPong = 1u - m_reservoirPingPong;
     m_pathReservoirPingPong = 1u - m_pathReservoirPingPong;
-    // PERF5 10b: wave ray-buffer ping-pong (10c writes wave N+1 successors into
-    // the other half; wave 0 is fully rewritten every frame, so the flip is
-    // bookkeeping-only in this stage).
+    // PERF5: wave ray-buffer ping-pong (Q2 protocol: once the walk segments into
+    // waves — 10d — the shade dispatch writes wave N+1 successors into the
+    // non-read half it has bound as binding 26; wave 0 is fully rewritten every
+    // frame, so the flip is bookkeeping-only until then).
     m_wavePathPingPong = 1u - m_wavePathPingPong;
 }
 

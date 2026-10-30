@@ -3,9 +3,10 @@
 // The record structs are the binding spec from the stage-1 design (PLAN.md
 // "PERF5 wavefront design (stage 10a)", §2 buffer layout); every wavefront pass
 // shares them — the generate pass writes the wave-0 records
-// (wavefront_generate.comp.slang), the GI dispatch consumes them
-// (gi.comp.slang), and the later stages (10c trace/shade, 10d shadow/medium
-// gather, 10e compaction) build on the same layout. The byte math is pinned by
+// (wavefront_generate.comp.slang), the trace pass consumes them and produces the
+// hit records (wavefront_trace.comp.slang), the GI dispatch consumes record +
+// hit (gi.comp.slang), and the later stages (10d shadow/medium gather, 10e
+// compaction) build on the same layout. The byte math is pinned by
 // the design (Slang float3 = 16 B stride/align in structured buffers, std430):
 //   WavePath    156 B → 160 B (16-aligned)
 //   WaveHit      28 B →  32 B (8-aligned)
@@ -63,15 +64,22 @@ struct WavePath {
     uint   flags;           // 4   kWaveFlag* bits — bit0 alive is the slot's truth
 };                          // 156 B → 160 B (16-aligned)
 
-/// Trace-pass output, same index space as WavePath (10c; allocated in 10b).
+/// Trace-pass output, same index space as WavePath (written by the 10c trace
+/// pass, consumed by the shade-side GI dispatch).
 struct WaveHit {
     float2 barycentrics; // 8
     float  t;            // 4   CommittedRayT (medium boundary transmittance needs it)
-    uint   instanceIdx;  // 4   0xFFFFFFFF = miss
+    uint   instanceIdx;  // 4   kWaveHitMiss = miss
     uint   primitiveIdx; // 4
     uint   frontFace;    // 4   committed-hit front-face bit
     uint   pad;          // 4
 };                       // 32 B
+
+/// WaveHit.instanceIdx miss sentinel (design §2): the trace pass writes it for
+/// rays that miss (or hit a degenerate-index triangle — the pre-split
+/// treat-as-miss semantic); the consuming dispatch then applies its fallback
+/// (wired in 10c: the wave-0 primary's Q1 G-buffer fallback in gi.comp.slang).
+static const uint kWaveHitMiss = 0xFFFFFFFFu;
 
 /// Per-pixel termination + composite inputs (initialized by the generate pass;
 /// consumed from 10d — stage 10b keeps the existing HDR accumulation path).

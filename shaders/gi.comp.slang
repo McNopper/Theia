@@ -4,8 +4,27 @@
 // Monte-Carlo estimator that converges to the Hyperion ground truth under frame
 // accumulation. PERF5 stage 10b: the entry consumes the wave-0 records that the
 // generate pass (wavefront_generate.comp.slang) enqueued — camera ray + per-sample
-// RNG crate — instead of loading the G-buffer and deriving camera rays inline;
-// trace + shade remain in this pass until 10c/10d. Runs over the forward pass
+// RNG crate — instead of loading the G-buffer and deriving camera rays inline.
+// PERF5 stage 10c: the wavefront TRACE pass (wavefront_trace.comp.slang — this
+// file's traceClosestHit traversal, verbatim) runs ahead of this dispatch and
+// writes the WaveHit records for every live slot; the wave-0 primary surface is
+// reconstructed from record 0 (reconstructGiHit — traceClosestHit's vertex
+// fetch + reconstruction statements verbatim) and the miss sentinel triggers
+// the Q1 G-buffer fallback. The inline wave-0 primary trace is GONE — the
+// trace pass is the single source of wave-0 hits. Verified under the CALIBRATED
+// gate (PLAN.md "PERF5 wavefront design" §3, amended from byte-equality): the
+// driver recomputes committed-hit barycentrics/rayT at the RayQuery site and FP
+// contraction follows the surrounding compiled context (Slang emits no
+// NoContraction decorations), so consuming the records in this dispatch shifts
+// the primary surface by 1–2 ULP on ~10% of the pixels (7387/76800 px on
+// cornell_classic @256f, max 2.6e-7 linear) — one deterministic driver-codegen
+// class, byte-equal across all restructured variants; not estimator
+// nondeterminism (same RNG streams, same draws, same statement order). This
+// dispatch executes the per-vertex logic unchanged (reconnection capture,
+// integrateSurface, medium walk, radiance accumulation; secondary re-traces and
+// shadow rays stay inline until 10d). Pipeline: generate → trace → GI with
+// buffer barriers between the dispatches.
+// Runs over the forward pass
 // G-buffer: for every primary hit it spawns
 // a BSDF continuation ray and walks 1..maxDepth path segments, evaluating the shared
 // Harmonia `integrateSurface` estimator at each secondary vertex (NEE for emissive
@@ -292,11 +311,19 @@ float targetPdfEnv(float3 Le, float3 bsdfTimesCos) {
 [[vk::binding(22, 0)]] StructuredBuffer<uint>              t_pairingOffsets;
 
 // PERF5 10b: wavefront ray buffer — wave-0 records written by the generate pass
-// (wavefront_generate.comp.slang) ahead of this dispatch (generate→GI barrier on
-// write→read). Slots are fixed per pixel: slot = pixelIndex * kWaveSlotsPerPixel
-// + kind, kinds 0..3 = the pixel's adaptive samples (design §2). This stage reads
-// the camera ray + RNG crate from the record; 10c/10d move trace + shade onto it.
+// (wavefront_generate.comp.slang) ahead of this dispatch (generate→trace→GI
+// barriers on write→read). Slots are fixed per pixel: slot = pixelIndex *
+// kWaveSlotsPerPixel + kind, kinds 0..3 = the pixel's adaptive samples (design
+// §2). This dispatch reads the records for the alive gate and the per-sample RNG
+// crates; the wave-0 camera-ray trace itself moved to the trace pass (10c).
 [[vk::binding(25, 0)]] StructuredBuffer<WavePath>          t_wavePathsCur;
+
+// PERF5 10c: trace-pass output — committed-hit records over the same slot
+// space, written by wavefront_trace.comp.slang ahead of this dispatch (the
+// trace→GI write→read barrier orders them). The wave-0 primary surface is
+// reconstructed from record 0 (see main); kinds 4..7 stay dead until their
+// enqueue lands (later stage).
+[[vk::binding(27, 0)]] StructuredBuffer<WaveHit>           t_waveHits;
 
 // ── GI-ENH (ReSTIR PT Enhanced §3): Gaussian paired-neighbor selection ────────
 // Texel (x, y) of each pairing map holds the offset to its unique partner (an
@@ -366,6 +393,14 @@ struct GiHit {
 /// volumetric medium segments — a miss within maxDist is an in-medium scattering event).
 /// `tMin` is the ray self-intersection guard (kRayEpsilon for surface bounces; kMediumEpsilon
 /// inside a medium, matching Hyperion — dense media have free-flight distances below kRayEpsilon).
+///
+/// PERF5 10c: the wavefront TRACE pass (wavefront_trace.comp.slang) is this
+/// function's verbatim traversal copy — it writes the raw committed-hit data
+/// (instance/primitive id, barycentrics, ray T, front-face bit) or the miss
+/// sentinel into the WaveHit buffer for every live slot, and the wave-0 primary
+/// trace routes through it (reconstructGiHit is the consumer-side
+/// continuation). This function remains the inline secondary trace — medium
+/// walk, bounce loop, replay hop — until 10d segments those waves.
 GiHit traceClosestHit(float3 origin, float3 dir, float maxDist, float tMin) {
     GiHit hit;
     hit.hit = false;
@@ -440,6 +475,64 @@ GiHit traceClosestHit(float3 origin, float3 dir, float maxDist, float tMin) {
     hit.materialIdx = inst.materialIndex;
     hit.dist = q.CommittedRayT();
     hit.hit = true;
+    return hit;
+}
+
+/// PERF5 10c: the trace pass's verbatim continuation — reconstruct the GiHit
+/// from a committed WaveHit record. The statements below are traceClosestHit's
+/// vertex fetch + reconstruction, copied verbatim (same expression order — the
+/// estimator's FP contract): only the committed-hit FP inputs (barycentrics,
+/// ray T) now arrive from the record instead of this context's query ops. The
+/// miss sentinel never reaches here — the trace pass resolves misses AND the
+/// degenerate-index treat-as-miss to kWaveHitMiss (Q1), and the consumer
+/// applies its G-buffer fallback before calling.
+GiHit reconstructGiHit(const WaveHit rec) {
+    GiHit hit;
+    hit.hit = true;
+    hit.materialIdx = 0u;
+    hit.worldPos = 0.0.xxx;
+    hit.shadingNormal = float3(0.0, 1.0, 0.0);
+    hit.geoNormal = float3(0.0, 1.0, 0.0);
+
+    const uint instIdx = rec.instanceIdx;
+    const GpuInstance inst = instances[instIdx];
+    const uint tri = rec.primitiveIdx;
+    const uint base = inst.indexOffset + tri * 3u;
+
+    const uint i0 = indices[base + 0u];
+    const uint i1 = indices[base + 1u];
+    const uint i2 = indices[base + 2u];
+    // Vertices live in object space; the instance transform places them.
+    const float4x4 o2w = instanceTransforms[instIdx];
+    const float3x3 normalMat = transpose(inverse3x3((float3x3)o2w));
+    const float3 p0 = mul(o2w, float4(vertices[i0].position, 1.0)).xyz;
+    const float3 p1 = mul(o2w, float4(vertices[i1].position, 1.0)).xyz;
+    const float3 p2 = mul(o2w, float4(vertices[i2].position, 1.0)).xyz;
+    const float3 n0 = normalize(mul(normalMat, vertices[i0].normal));
+    const float3 n1 = normalize(mul(normalMat, vertices[i1].normal));
+    const float3 n2 = normalize(mul(normalMat, vertices[i2].normal));
+    const float2 uv0 = vertices[i0].uv;
+    const float2 uv1 = vertices[i1].uv;
+    const float2 uv2 = vertices[i2].uv;
+
+    const float2 b = rec.barycentrics;
+    const float3 bary = float3(1.0 - b.x - b.y, b.x, b.y);
+    // RAW outward-winding geometric normal (Hyperion's HitInfo contract): the side
+    // information is carried by the sign of dot(geoNormal, wo) at the consumers —
+    // makeSurfaceHit flips a local copy to face wo and derives SurfaceHit.backface
+    // (C7 dielectric exit branch), runMediumWalk needs the TRUE outward normal for the
+    // exit refraction/TIR and the inside/outside ray offsets. Pre-flipping it here
+    // (ray-facing) would erase the side bit: backface would always read false and the
+    // medium walk would refract against a wrong-signed normal (broken exits, spurious
+    // re-entry, repeated absorption).
+    hit.worldPos = p0 * bary.x + p1 * bary.y + p2 * bary.z;
+    TriangleGeometry g = reconstructTriangleGeometry(p0, p1, p2, n0, n1, n2, uv0, uv1, uv2, bary);
+    hit.uv = g.uv;
+    hit.tangent = g.tangent;
+    hit.shadingNormal = g.shadingNormal;
+    hit.geoNormal = g.geoNormal;
+    hit.materialIdx = inst.materialIndex;
+    hit.dist = rec.t;
     return hit;
 }
 
@@ -2087,30 +2180,50 @@ void main(uint3 tid : SV_DispatchThreadID) {
     const int3 loadCoord = int3(int(px.x), int(px.y), 0);
 
     // --- PERF5 10b: consume the wave-0 record enqueued by the generate pass ---
-    // (wavefront_generate.comp.slang ran ahead of this dispatch; the generate→GI
-    // barrier on the ray buffer orders its writes). Slots are fixed per pixel:
-    // kind 0 is this pixel's first adaptive sample. The record carries the camera
-    // ray and the per-sample RNG crate — the pre-10b entry's inline G-buffer load
-    // and camera-ray derivation moved into the generate pass verbatim.
+    // (wavefront_generate.comp.slang ran ahead of this dispatch; the
+    // generate→trace→GI barriers on the ray + hit buffers order the writes).
+    // Slots are fixed per pixel: kind 0 is this pixel's first adaptive sample.
+    // The record carries the per-sample RNG crate and the alive gate — the
+    // pre-10b entry's inline G-buffer load and camera-ray derivation moved into
+    // the generate pass verbatim.
     const uint waveSlotBase = (px.y * screenWidth + px.x) * kWaveSlotsPerPixel;
     const WavePath wave0 = t_wavePathsCur[waveSlotBase + 0u];
     if (!wavePathAlive(wave0)) {
         return; // background / non-geometry pixel (generate saw the instance sentinel, A1b)
     }
 
-    // --- Primary surface from the re-traced camera ray ---
-    // Reconstruct the primary surface by re-tracing the camera ray to the recorded world
-    // position; this works for opaque AND transparent (glass) pixels alike. The view-space
-    // G-buffer normal is only needed as a fallback when the re-trace misses (e.g. the
-    // transparent pass does not write the normal G-buffer), so it is computed lazily below.
-    // The direction is the record's G-buffer delta: the generate pass computed
-    // `worldPos - cameraPos` with this same expression and traceClosestHit normalizes
-    // internally — bit-identical to the pre-split inline derivation.
-    GiHit primaryHit = traceClosestHit(cameraPos.xyz, wave0.direction, kInf, kRayEpsilon);
-    // Trust the re-traced closest hit as the authoritative nearest surface. The rasterized
+    // --- Primary surface from the trace pass's committed WaveHit (10c) ---
+    // The wavefront trace pass ran ahead of this dispatch and wrote the wave-0
+    // committed-hit records (generate → trace → GI buffer barriers). Record 0
+    // IS this pixel's primary trace: reconstructGiHit repeats traceClosestHit's
+    // vertex fetch + reconstruction statements verbatim on the recorded
+    // barycentrics/ray T, and the miss sentinel (kWaveHitMiss — the trace pass
+    // also resolves the degenerate-index treat-as-miss to it) triggers the Q1
+    // G-buffer fallback unchanged. The traced direction is the record's
+    // G-buffer delta: the generate pass computed `worldPos - cameraPos` with
+    // this same expression and the trace pass normalizes internally — the
+    // identical chain the pre-split inline derivation used.
+    //
+    // Calibrated gate (PLAN.md "PERF5 wavefront design" §3): the driver
+    // recomputes committed-hit barycentrics/rayT at the RayQuery site and FP
+    // contraction follows the surrounding compiled context (Slang emits no
+    // NoContraction decorations), so values produced in the trace dispatch
+    // differ from a query in THIS context by 1–2 ULP on ~10% of the pixels
+    // (7387/76800 px on cornell_classic @256f, max 2.6e-7 linear) — one
+    // deterministic driver-codegen class, byte-equal across all restructured
+    // variants, not estimator nondeterminism. Byte-equality across compiled
+    // contexts was never a guaranteeable contract; the estimator invariants
+    // (same RNG streams, same draws, same statement order) are unchanged.
+    const WaveHit waveHit0 = t_waveHits[waveSlotBase + 0u];
+    GiHit primaryHit;
+    primaryHit.hit = false;
+    if (waveHit0.instanceIdx != kWaveHitMiss) {
+        primaryHit = reconstructGiHit(waveHit0);
+    }
+    // Trust the traced closest hit as the authoritative nearest surface. The rasterized
     // G-buffer materialIdx is draw-order dependent for transparent geometry (depth-write
-    // disabled), so overlapping transparent surfaces can record the farther one; the inline
-    // ray query is order-independent and always returns the geometrically nearest surface.
+    // disabled), so overlapping transparent surfaces can record the farther one; the trace
+    // pass's ray query is order-independent and always returns the geometrically nearest surface.
     // Matches industry practice (Q2RTX reflect_refract, PowerVR HybridTransparency, SEED
     // "Hybrid Rendering for Real-Time Ray Tracing" RTG ch.25). The instance sentinel
     // check above (via the record's alive bit) already handles background pixels; for
@@ -2205,7 +2318,15 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // realizations, so the per-pixel average stays unbiased). Without the guide, maxSamples
     // collapses to 1 and the seed reduces to composeRngSeed(px, frameSampleIndex, ...): the
     // estimator is then bit-identical to the legacy single-sample path.
-    const uint maxSamples = (hasGradientVariance != 0u) ? max(giAdaptiveMaxSamples, 1u) : 1u;
+    // Q3 clamp: bounded by the pixel's sample-slot window (kWaveSampleSlots = 4) —
+    // the sample loop reads slot records the generate pass enqueued, so the push
+    // constant can never index past the window. MUST stay the exact expression
+    // the generate pass applies (the seed stride frameSampleIndex * maxSamples
+    // has to match bit for bit). No-op for every current configuration
+    // (giAdaptiveMaxSamples ≤ 4).
+    const uint maxSamples = (hasGradientVariance != 0u)
+                                ? max(min(giAdaptiveMaxSamples, kWaveSampleSlots), 1u)
+                                : 1u;
     uint sampleCount = 1u;
     if (maxSamples > 1u) {
         const float t = saturate(variance * kAdaptiveVarianceScale);

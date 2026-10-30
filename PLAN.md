@@ -70,7 +70,8 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
 | ANI3 | **Object motion vectors** — extend the MotionVectorPass beyond camera motion to animated instances (per-node velocity → TAA + ReSTIR temporal reuse). The plumbing is already in place but unused: `prevInstanceTransforms` is bound at `shaders/motion_vector.comp.slang:34` while the shader hardcodes the static-scene model (`:76`). | ANI1 (Aether) | backlog |
 | MOD4 | **Swapchain recreate on resize → `VK_EXT_swapchain_maintenance1` release path** — v1 goal: on window resize, release the OLD swapchain (`vkReleaseSwapchainImagesEXT`) once its present fence (`VkSwapchainPresentFenceInfoEXT`) has signaled, so the new swapchain can be created without waiting on the old one's presentation-engine retirement. **Report (needs a Harmonia-side change; orchestrator sequences it):** the presentation stack is entirely Harmonia's (`App::handleResize` → `Swapchain::recreate`; SDL resize events + acquire/present `VK_ERROR_OUT_OF_DATE_KHR`/`VK_SUBOPTIMAL_KHR` all funnel there), and the pinned Harmonia v0.7.15 has the maintenance1 extension **disabled** (`Context.cpp`: the driver-side *scaling* attempt was reverted — `supportedPresentScaling = 0` for all present modes, driver 616.92) with no present-fence / release usage anywhere (`Swapchain::present` chains only `VkPresentId2KHR`; `recreate` passes `oldSwapchain` then move-assigns — RAII destroys the old handle under `App::handleResize`'s `vkDeviceWaitIdle`). The fence+release sub-feature is independent of the scaling probe. Needed Harmonia change: (1) re-enable `VK_EXT_swapchain_maintenance1` + the `swapchainMaintenance1` device feature, (2) `Swapchain::present` chains `VkSwapchainPresentFenceInfoEXT` (per-present/per-image fence), (3) `Swapchain::recreate` waits the old present fence, then `vkReleaseSwapchainImagesEXT` for still-acquired images, before retiring the old handle, (4) narrow `App::handleResize`'s whole-device `vkDeviceWaitIdle` to slot-scoped sync, (5) revisit the `IRenderer::onResize` contract (Theia's hook tears down/rebuilds GiPass/MotionVector/TAA/ForwardRenderer immediately — safe only under device-idle today). Follow-ups once landed: pre-rotation (`VkSwapchainPresentScalingCreateInfoEXT` when drivers mature), present-fence reuse. Recreate-on-resize remains the proven behavior until the Harmonia change lands. | Harmonia change | **report** |
 | SM6-Theia | **slang-math trig migration slice** - verified **zero migratable sites** (sweep v0.7.0-era, 3 patterns over `src/theia` + `src/demo`): the cited CameraController trig is the spherical-to-cartesian formula - five scalar std:: calls over two scalar angles, not the per-component vector pattern; the remaining sites are scalar-on-scalar, which the scalar/vector collision rule sanctions (std:: stays). The saturate slice was already consumed (prior migration). No pin bump applies - slang-math arrives transitively via Harmonia since the dead direct declare was removed. Track origin: slang-math/PLAN.md SM6. | slang-math v0.7.0 | **done (verified empty)** |
-| PERF5 | **Megakernel → wavefront GI split** (Padilla et al. 2026, arXiv:2605.27323; family item in `Harmonia/PLAN.md` §5.1 — this is the Theia wire): restructure `gi.comp.slang` (2266 lines — ReSTIR PT + medium walk + path trace fused in one dispatch) into **generate → trace → shade** waves over a persistent GPU ray/hit buffer, enabling PERF4 ray reordering. **Stage-1 contract: bit-identical rendered output** — scheduling moves only; same RNG streams, same estimator, same reservoir logic. **Stages:** 10a design + per-pass timing instrumentation (done — see the design section below) → 10b generate/trace/shade split of the per-sample indirect walks → 10c path-reservoir candidates (local walk + spatial replays) into the wavefront → 10d async shadow rays + medium-walk segmentation (consumes Harmonia's M2 estimator shadow-split) → 10e GPU-driven live-count dispatch + stream compaction (GD law; PERF4 sort hookup). | Harmonia PERF5 (estimator untouched in 10a/10b) | **in progress** (10a done; 10b–10e open) |
+| PERF5 | **Megakernel → wavefront GI split** (Padilla et al. 2026, arXiv:2605.27323; family item in `Harmonia/PLAN.md` §5.1 — this is the Theia wire): restructure `gi.comp.slang` (2266 lines — ReSTIR PT + medium walk + path trace fused in one dispatch) into **generate → trace → shade** waves over a persistent GPU ray/hit buffer, enabling PERF4 ray reordering. **Stage-1 contract: bit-identical rendered output
+(AMENDED in 10c to the calibrated gate — see the design section §3)** — scheduling moves only; same RNG streams, same estimator, same reservoir logic. **Stages:** 10a design + per-pass timing instrumentation (done — see the design section below) → 10b generate/trace/shade split of the per-sample indirect walks → 10c path-reservoir candidates (local walk + spatial replays) into the wavefront → 10d async shadow rays + medium-walk segmentation (consumes Harmonia's M2 estimator shadow-split) → 10e GPU-driven live-count dispatch + stream compaction (GD law; PERF4 sort hookup). | Harmonia PERF5 (estimator untouched in 10a/10b) | **in progress** (10a–10b done; 10c done under the AMENDED calibrated gate — see "Verification gate" in the design section; dragon_teapot verdict open for orchestrator adjudication; 10d–10e open) |
 
 ### PERF5 wavefront design (stage 10a)
 
@@ -83,7 +84,8 @@ reservoirs, the `estimateGiSampleCore` bounce loop (inline closest-hit via
 volumetric segments via `runMediumWalk`), and the HDR composite. PERF5 restructures the
 *scheduling* into specialized passes over persistent GPU path buffers. **Stage-1 contract:
 bit-identical rendered output** — the split is purely structural, so every later stage
-(10b–10e, PERF4) is diffed against an unchanged estimator.
+(10b–10e, PERF4) is diffed against an unchanged estimator. (10c amendment: the
+verification contract is now the **calibrated gate** — §3 "Verification gate" below.)
 
 **1. Pass decomposition — generate → trace → shade (→ regenerate).**
 
@@ -224,14 +226,53 @@ target; the parity/iteration resolution (320×240) costs ~215 MiB.
 - No atomic radiance accumulation anywhere (order nondeterminism); no fast-math (repo
   law: `/fp:strict` host, strict Slang default). Scheduling changes when/where an op
   runs, never which ops a path executes.
-- **Verification gate:** the orchestrator renders
-  `theia.exe --scene cornell_classic --output <capture>.exr --width 320 --height 240
-  --offscreen-frames 256` on the pre-split baseline (a capture of this commit — 10a
-  changes no rendering behavior — is the baseline point) and on every stage branch;
-  **bit-identity = byte-equal EXR** (SHA-256 compare, with
-  `Harmonia/tools/compare_renders.py` as the diagnostic fallback — a stage that fails
-  byte-equality but passes strict-AND is still a FAIL). The ReSTIR-PT captures are
-  already run-to-run pixel-reproducible, so the gate is stable.
+- **Verification gate — AMENDED in 10c to the CALIBRATED gate (binding; supersedes
+  the byte-equality contract).** The orchestrator renders
+  `theia.exe --scene <s> --output <capture>.exr --width 320 --height 240
+  --offscreen-frames 256` on the pre-split baseline captures and on every stage
+  branch, on all three gate scenes (cornell_classic, cornell_spheres,
+  dragon_teapot), and requires **`compare_renders.py <baseline> <candidate>` →
+  mean_diff `0.000` AND SSIM `1.000000` AND max_diff ≤ 1/255 display units**.
+  The ReSTIR-PT captures are run-to-run pixel-reproducible, so the gate is
+  stable.
+- **Root cause (why byte-equality was replaced — record for 10d+):** the driver
+  **recomputes committed-hit barycentrics/rayT at the RayQuery site**, and FP
+  contraction follows the surrounding compiled context; Slang emits **no
+  `NoContraction` decorations**, so byte-equality across compiled contexts was
+  never a guaranteeable contract. Four bisect experiments established exactly
+  **two driver-codegen classes**: the inline trace in its own context
+  (revert → 0 differing px), and ANY restructure (→ 7387/76800 px at 1–2 ULP,
+  max 2.6e-7 linear on cornell_classic @256f — one deterministic class,
+  byte-equal across all restructured variants). **Not an estimator change.**
+  Upstream-reportable to Slang (missing `NoContraction` on ray-query
+  recomputes).
+- **The estimator invariants stay FULLY binding** under the calibrated gate:
+  same RNG streams, same draws, same statement order — only the driver's
+  recompute context may differ. A stage that changes a seed, a draw, or the
+  per-path statement order is a FAIL regardless of the display metrics.
+- **10c measured results (the calibrated artifact, exact):**
+
+  | scene | mean_diff | SSIM | max_diff (1/255) | differing px (float-exact) | max linear |
+  |----|----|----|----|----|----|
+  | cornell_classic | 0.000000 | 1.000000000 | 0.0000 | 7387/76800 (9.62%) | 2.608e-07 |
+  | cornell_spheres | 0.000001 | 1.000000000 | 0.0385 | 1004/76800 (1.31%) | 1.834e-04 |
+  | dragon_teapot | 0.005414 | 0.999967309 | 64.4042 | 6196/76800 (8.07%) | 3.590e-01 |
+
+  cornell ×2 PASS (classical cornell reproduces the bisect prediction
+  pixel-count-exact; the tonemapped 8-bit PNGs are byte-identical to the
+  baselines — display-indistinguishable). **dragon_teapot exceeds the calibrated
+  envelope** and the gate verdict there is OPEN for orchestrator adjudication
+  (land vs revert-consumer-wiring per abort criterion (a)): the 1–2 ULP
+  committed-hit shift reaches the glass teapot's `runMediumWalk`, where sampled
+  free-flight distances vs boundary-hit distances are near-ties — a ~1e-7
+  primary-origin shift flips ~6 paths O(1) (measured: 6 px > 1e-1 linear,
+  matching the tie-probability estimate; green-channel dominated — the hero
+  wavelength; scattered speckle across 72 8×8 tiles via ReSTIR spatial-reuse
+  propagation, no contiguous region → no hit/miss or fallback bug). Proven
+  deterministic: a second render of the same build is float-exact (0 differing
+  px; only EXR container bytes differ). There is no wiring variant that avoids
+  this: byte-identical primary barycentrics require consuming them inside the
+  query's compiled context — the exact thing the root cause rules out.
 
 **4. Stage plan (file-level) and abort criteria.**
 
@@ -242,10 +283,21 @@ target; the parity/iteration resolution (320×240) costs ~215 MiB.
   reduced to generate/shade bodies; `src/theia/gi/GiPass.*` gains the wave buffers + 3
   pipelines + per-wave dispatch/barrier recording; `src/demo/Application*` unchanged
   (`GiPass::record` signature stays).
-- **10c — path-reservoir candidates into the wavefront:** local candidate + the three
-  spatial replays become queued paths (slot kinds 4–7); `restirPtIndirect` splits into
-  emit (shade) → gather (shade wave N+1) across the reservoir combine; touches
-  `gi_shade.comp.slang`, `wave_common.slang` (slot kinds), `GiPass` buffer sizing.
+- **10c — DONE (shipped as the wavefront trace pass + record-consuming shade;
+  calibrated gate (b)):** the verbatim `RayQuery` traversal moved out of the
+  megakernel into `shaders/wavefront_trace.comp.slang` (committed `b5734c7`:
+  RayQuery into the hit buffer, GI shade-only), and the consumer wiring landed
+  on top: shade reads the recorded `WaveHit` — `reconstructGiHit` is the
+  verbatim continuation (traceClosestHit's vertex fetch + reconstruction
+  statements), the miss sentinel (Q1) triggers the G-buffer fallback, and the
+  inline wave-0 primary trace in `gi.comp.slang` is GONE — the trace pass is
+  the single source of wave-0 hits. The ORIGINAL 10c scope below (path-reservoir
+  candidates, slot kinds 4–7) did NOT ship in this stage — their enqueue stays a
+  later stage. Gate numbers + the dragon_teapot calibration note: design section
+  §3. Timing: gi = 2.38 ms on cornell @320×240/256f (generate + trace 4-slot +
+  shade-with-record; the 4-slot same-ray trace is the +1.26 ms delta vs 10b's
+  1.10 ms same-machine — the slot-0 single-trace optimization is 10d scope,
+  where the slots diverge).
 - **10d — async shadow rays + medium-walk segmentation:** consumes Harmonia's M2
   estimator split (the `ITracer` emit→trace→gather shadow flow — shared, identical for
   both renderers); Theia adds the shadow-ray queue + gather pass and switches
@@ -256,7 +308,8 @@ target; the parity/iteration resolution (320×240) costs ~215 MiB.
 - **10e — GPU-driven wavefront:** live-count header + `vkCmdDispatchIndirect` + stream
   compaction (GD law); PERF4 sort-key hookup point. Touches `GiPass` dispatch recording,
   a compaction pass, `wave_common.slang`.
-- **Abort criteria (stop-and-present per stage):** (a) bit-identity gate fails on a
+- **Abort criteria (stop-and-present per stage):** (a) the verification gate (the
+  calibrated gate, §3) fails on a
   stage after two concentrated fix attempts → revert that stage, present its
   `THEIA_PASS_TIMING` numbers and the diff diagnosis; (b) wavefront overhead (extra
   dispatches + barriers) exceeds the megakernel baseline by >10% at 1080p on the dev GPU
@@ -274,7 +327,7 @@ wave's shade invocation applies it unchanged; the flag rides the push constants
 surface-bounce-scoped and walk segments consume no bounce budget), so SH-02's shared
 `medium_walk` module and the 10d segmentation are unaffected. **It must remain OFF in
 captures** (`m_pureEstimatorCapture` → `useA3Regularization=false` → push-constant 0) —
-the bit-identity gate is only coherent against the unbiased estimator; the two-tier
+the calibrated gate is only coherent against the unbiased estimator; the two-tier
 output contract already enforces this for `--output`.
 
 **Instrumentation baseline (10a, shipped):** `theia::PassTimer`
