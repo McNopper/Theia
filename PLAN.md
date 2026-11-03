@@ -107,8 +107,25 @@ The first build exposed uninitialized-output warnings and the first HDR check
 normalized on-GPU, which can underflow its own reciprocal; explicit initialization
 and raw-output/host-double comparison repair those issues without relaxing the
 relative tolerance. These attempts remain in the saved logs. Native wiring now
-compiles; Hyperion byte-exact and actual local/reuse rendered gates are pending.
+compiles. Hyperion sampler/prior bytes remain exact (recorded hashes); eight
+selected Theia local/reuse frame tests pass (exit 0, zero validation diagnostics).
+Reuse-on mirror ratios are .998317 / 1.000240 / .997181 / .999980 and the aggregate
+128-frame MSE reuse/local ratio is .491742. Local configured mirror, glass,
+absorption, SDS and depth-cutoff receipts retain their earlier values.
 This numeric unit receipt does not accept general rendered reuse or complete #2.
+
+**Next rendered slice:** add reuse-enabled closed-glass, pure-absorption and SDS
+mirror-prefix fixtures using the existing independent Snell/Beer/virtual-emitter
+oracles (not a second implementation of the renderer). Four fixed seeds × 512
+frames each; subtract independent direct lighting and require 2% caustic RGB per
+seed. Reuse-enabled insufficient receiver depth must retain only PT-owned direct
+prefix lighting. A shared fixture driver is justified by these three simultaneous
+consumers and their identical reset/completion/RGB grading invariants; geometry
+and prediction builders remain unchanged. Verify with
+`Theia/build/tests/theia_module_tests.exe --gtest_filter="SmsGiReuseGlassFrameFixture.*:SmsGiReuseAbsorptionFrameFixture.*:SmsGiReuseSdsFrameFixture.*:SmsGiReuseSdsDepthFrameFixture.*"`.
+The existing mirror reuse gate also needs a no-op/disabled-reuse control that
+fails its MSE improvement assertion. Curved/mixed-depth/visibility acceptance and
+equal-time performance remain separate subsequent slices.
 
 **GI-SMS #2 staged verification plan (Theia `257c8b4`, Harmonia `042fc74`):**
 keep monolithic GI; wavefront stage-1 stays parked. Development/WIP pushes only;
