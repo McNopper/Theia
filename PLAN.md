@@ -38,6 +38,12 @@ root (`0.010009538` versus `0.004099860`). This is a concrete Jacobian defect,
 not merely heavy-tail variance. Optional max-factor diagnostics are implemented;
 the estimator is still restored to production settings and remains experimental.
 
+**Concrete defect isolated:** independent oracle shows production transmission
+constraint uses `wi + eta*wo`, which is normal—rather than tangent—at a curved
+glass root. Correcting this changes shared solver roots and the geometric
+Jacobian together and requires coordinated fixture updates. Do not tune sampling
+or merge until that correction and fresh C1 acceptance exist.
+
 **Living source of truth for outstanding work.** Shipped items are removed from the work
 lists; the shipped record is the *Baseline* below and `git log`. Only outstanding work is
 tracked here.
