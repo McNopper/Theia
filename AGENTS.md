@@ -133,6 +133,11 @@ the 320×240 parity resolution.
   paths freeze motion parameters before advancing previous VP. The shared host's
   order is GI → MotionVector → TAA → Accumulation → Denoiser → ToneMap. Moving these
   passes does not itself enable SMS; candidate integration is tracked in PLAN.md.
+- **Local SMS scene adapter:** `shaders/sms_scene.slang` reads Theia's native set-0
+  triangle resources and implements the shared projector contract. Native RT
+  triangle/normal, planar R/TT, production-fallback and raw-occlusion fixtures are
+  tested. This is not yet active SMS/GI candidate or ReSTIR integration. Do not
+  use a shading-reconstruction failure as proof that a shadow ray is clear.
 - **The path reservoir has NO temporal merge — do not add one back.** A streamed temporal
   merge (yesterday's merged reservoir as today's input) double-counts re-selected history on
   heavy-tailed path candidates: measured −2.8% darker on cornell indirect @1024f, reproduced

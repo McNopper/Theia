@@ -120,6 +120,38 @@ the 256-byte GI push budget. Keep initial SMS work and all continuations on the
 graphics queue; the ordinary no-SMS async path remains unchanged. Async SMS needs
 explicit work-buffer ownership support before it can be enabled; do not silently
 run exclusive SMS buffers across queue families.
+Scene-adapter slice: add the renderer-owned triangle reader with GiPass's native
+set-0 bindings, instance transforms and nearest RT instance/primitive identity.
+Acceptance uses independent transformed-triangle normal/derivative and planar
+mirror/Snell roots, including nonuniform transforms and raw outward normals:
+`theia_module_tests.exe --gtest_filter=SmsSceneFixture.*`. An old/wrong transform
+normal control must fail; the exact candidate must pass validation. Until these
+tests run, this adapter is not a verified capability or active GI integration.
+Build finding: recompiling GI exposes three pre-existing unsupported Slang
+`constexpr` warnings. Replace them with `const`, which is exactly how Slang
+already interpreted them; require the GI SPIR-V SHA-256 to remain
+`5e7cbe7c711f4ef084bd2dc2432b8d0508aba4067a55fe8af6b091eb51256063`.
+The first probe build also lacked its direct `common` import for kInf; fix the
+import rather than masking the compile error. Neither issue is a flaky test.
+Source-review support finding: zero vertex normals, exact cancellation and tiny
+blended normals must preserve production's geometric-normal fallback, including
+the squared-length `>1e-8` branch and zero fallback derivatives. Add selected
+`SmsSceneFixture.NativeReaderPreservesProductionGeometricFallback` and
+`SmsSceneFixture.NativeVisibilityDoesNotDependOnShadingNormals` checks before
+claiming the adapter complete. Retain the hit as an opaque blocker independently
+of shading reconstruction via an explicit raw occlusion query. Test a rejected
+fallback/always-visible control, with exact restored pass. The common visibility
+call site/Hyperion counterpart require a separate behavior fix after the exact
+shared-source refactoring receipt, before active Theia SMS is accepted.
+Executed native-adapter receipt: four actual-GPU geometry/fallback/visibility
+tests pass; wrong matrix, rejected fallback, wrong cutoff and missing occlusion
+controls each fail (exit 1), exact restores pass (exit 0), validation-clean.
+The 25° large-slab failure is fixed by committed-ray position reconstruction;
+0/25/55° position/residual/Jacobian gates pass unchanged. Source review confirms
+the fallback model/raw-query contract; shared/Hyperion visibility wiring remains
+explicitly outstanding. Full H142/Hy69/T38 passes with zero validation messages;
+Theia reference remains 0/76,800 changed pixels. The three const-only keyword
+repairs preserve the exact previously recorded GI shader SHA-256.
 
 ### Roadmap
 
