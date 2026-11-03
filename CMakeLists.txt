@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(theia VERSION 0.8.0 LANGUAGES C CXX)
+project(theia VERSION 0.8.1 LANGUAGES C CXX)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
@@ -233,7 +233,7 @@ FetchContent_Declare(
 FetchContent_Declare(
     harmonia
     GIT_REPOSITORY https://github.com/McNopper/Harmonia.git
-    GIT_TAG v0.7.18
+    GIT_TAG v0.7.19
 )
 # slang-math arrives transitively: Aether and Harmonia are its direct consumers
 # and pin it in their own CMakeLists; Harmonia is the renderer-tier vendor

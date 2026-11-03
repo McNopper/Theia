@@ -1,5 +1,7 @@
 # PLAN — Theia
 
+**Release:** v0.8.1 - timestamp-query lifecycle fix, shared BSDF/lifetime fixes via Harmonia v0.7.19, and refreshed README gallery. SMS remains on its development branch.
+
 **Living source of truth for outstanding work.** Shipped items are removed from the work
 lists; the shipped record is the *Baseline* below and `git log`. Only outstanding work is
 tracked here.
@@ -45,18 +47,8 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
 
 ## At a glance
 
-- **Release:** v0.8.0 - the PERF5 wavefront arc: stage-1 designed, built, measured,
-  and **parked** (bit-identical renders at 320p and 1080p, at ~2x the monolithic GI
-  cost - record-traffic dominated; the full stage-1 pipeline is preserved on
-  `perf5/wavefront-stage1` with the calibrated + medium-scene verification gates
-  adjudicated against an RNG re-seed experiment) + `PassTimer` per-pass GPU
-  instrumentation (`THEIA_PASS_TIMING=1`), the move-reset `ViewAccumulationGate`
-  contract (8 tests), the `reconstructGiHitFromQuery` salvage extraction, and the
-  check-dead family gate. Renders are bit-identical to the pre-split baselines at
-  both resolutions. Pins: slang-math v0.8.0 (transitive via Harmonia), Aether
-  v0.8.0, Harmonia v0.7.18. 33 CPU module tests + the family analysis lanes.
-- **Prior:** v0.7.17 - I6 verified (frames-per-flip shipped Harmonia-side v0.7.15,
-  consumed by Theia; 5 CPU contract tests added).
+- **Release:** v0.8.1 - timestamp lifecycle fix and general shared fixes; Harmonia v0.7.19, Aether v0.8.1. README gallery refreshed at 1280x720 / 256 frames. No SMS integration.
+- **Prior:** v0.8.0 - PERF5 wavefront arc adjudicated and parked; PassTimer instrumentation.
 - **Quality gates (family-uniform):** blocking lint (Q2-Q6) on every push -
   clang-format pinned 22.1.3, ruff contract in `ruff.toml` (identical x5), cppcheck,
   bandit, actionlint 1.7.12, yamllint. Coverage stays a local activity (the test
@@ -877,6 +869,7 @@ low-spp reference).
 
 ## Baseline
 
+- **v0.8.1** (consumes Harmonia v0.7.19, Aether v0.8.1): **timestamp lifecycle and shared rendering correctness.** Query pairs reset on their owning command buffers for first/reused/skipped use; shared BSDF/lifetime fixes consumed via Harmonia. All 30 README scenes regenerated at 1280x720 / 256 frames with validation (8 changed, 22 pixel-identical). Full local 34/34; all lint lanes. No SMS integration.
 - **v0.8.0** (consumes Harmonia v0.7.18, Aether v0.8.0, slang-math v0.8.0 transitive):
   **PERF5 wavefront arc + engine hardening.** Stage-1 wavefront (generate/trace/shade
   over persistent records) built to bit-identity at 320p and 1080p, measured at ~2x
