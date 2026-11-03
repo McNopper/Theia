@@ -3,6 +3,8 @@
 import sms_context;
 
 void initializeSmsPixel(uint2 pixel) {
+    if (all(pixel==uint2(0,0)) && smsDiagnosticsEnabled())
+        for (uint i=0u;i<kSmsDiagCount;++i) t_smsDiagnostics[i]=0u;
     if (smsEnabled==0u) return;
     GiSmsContext context=t_smsProducer[0];
     uint slot=pixel.y*screenWidth+pixel.x;
@@ -41,6 +43,7 @@ void produceSmsReceiver(uint2 pixel,GiHit initialHit,SurfaceHit initialSurface) 
             failSmsPixel(slot); return;
         }
         if (smsCapturePathReceiver(path,surface.mat,remaining)) {
+            smsDiagnostic(kSmsDiagEligible);
             SmsWorkRecord work=context.work[slot];
             work.words[0]=uint4(asuint(hit.worldPos),hit.materialIdx);
             work.words[1]=uint4(asuint(hit.shadingNormal),kSmsPrepare);

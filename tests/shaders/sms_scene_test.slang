@@ -44,8 +44,9 @@ void main(uint3 id : SV_DispatchThreadID) {
         if (pc.mode>=4u) {
             SmsManifoldVertex target[2];
             uint targetDepth=pc.mode==6u ? 3u : count+2u;
+            uint shiftFailures;
             bool shifted=smsShiftInverseChecked(scene,input.origin.xyz,count+2u,
-                input.origin.xyz+float3(input.light.w,0,0),targetDepth,input.light.xyz,root,count,target);
+                input.origin.xyz+float3(input.light.w,0,0),targetDepth,input.light.xyz,root,count,target,shiftFailures);
             if (shifted) {
                 result.position=float4(target[0].position,1);
                 result.geometric=float4(target[1].position,0);

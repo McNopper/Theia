@@ -331,8 +331,10 @@ def stage_performance(case: str, reference: Path) -> None:
         timings[mode] = float(np.median(samples))
         log(f"pilot {case} {mode}: median completed-frame time {timings[mode]:.3f}s / {TIMING_PILOT_FRAMES}f")
     results = {}
+    timing_valid = {}
     for mode in ("off", "local", "reuse"):
         results[mode] = {}
+        timing_valid[mode] = {}
         per_frame = timings[mode] / TIMING_PILOT_FRAMES
         for target in TARGET_SECONDS:
             frames = max(1, round(target / per_frame))
@@ -343,14 +345,15 @@ def stage_performance(case: str, reference: Path) -> None:
                 refined = True
                 frames = max(1, round(frames * target / elapsed))
                 _, elapsed = render_theia(f"timecheck2_{case}_{mode}_{target}_{frames}", scene, mode, frames, SEEDS[0])
-                if abs(elapsed - target) > target * TIME_TOLERANCE:
-                    raise SystemExit(f"equal-time {case} {mode} @{target}s: timing refinement did not meet 5%")
+            timing_valid[mode][str(target)] = abs(elapsed - target) <= target * TIME_TOLERANCE
+            if not timing_valid[mode][str(target)]:
+                log(f"equal-time {case} {mode} @{target}s: timing inconclusive after one refinement")
             energies, mses, times = [], [], []
             per_seed = {}
             for seed in SEEDS:
                 path, elapsed = render_theia(f"eqt_{case}_{mode}_{target}_{seed}", scene, mode, frames, seed)
                 if abs(elapsed - target) > target * TIME_TOLERANCE:
-                    raise SystemExit(f"equal-time {case} {mode} @{target}s seed {seed}: budget outside 5%")
+                    timing_valid[mode][str(target)] = False
                 energies.append(roi_energy(path, roi))
                 mses.append(roi_mse(reference, path, roi))
                 times.append(elapsed)
@@ -360,7 +363,7 @@ def stage_performance(case: str, reference: Path) -> None:
             stderr = float(np.std(mses, ddof=1) / np.sqrt(len(mses)))
             results[mode][str(target)] = {"frames": frames, "refined": refined, "ratios": ratios,
                 "mse": mse, "mse_standard_error": stderr, "mean_seconds": float(np.mean(times)),
-                "min_seconds": min(times), "max_seconds": max(times), "seeds": per_seed}
+                "min_seconds": min(times), "max_seconds": max(times), "timing_within_5_percent": timing_valid[mode][str(target)], "seeds": per_seed}
             log(f"equal-time {case} {mode} @{target}s: frames={frames} MSE={mse:.7g}±{stderr:.3g}; "
                 f"times={times}")
     for target in TARGET_SECONDS:
@@ -368,6 +371,10 @@ def stage_performance(case: str, reference: Path) -> None:
             record({"stage": "performance", "case": case, "status": "no-benefit", "results": results,
                     "provenance": provenance(case)})
             raise SystemExit(f"equal-time {case}: reuse did not reduce MSE at {target}s")
+    if not all(timing_valid[mode][str(target)] for mode in ("off", "local", "reuse") for target in TARGET_SECONDS):
+        record({"stage": "performance", "case": case, "status": "timing-inconclusive", "results": results,
+                "provenance": provenance(case)})
+        raise SystemExit(f"equal-time {case}: timing inconclusive; quality is not an accepted equal-time result")
     record({"stage": "performance", "case": case, "status": "accepted", "results": results,
             "provenance": provenance(case)})
 

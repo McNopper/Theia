@@ -175,7 +175,7 @@ void GiPass::shutdown() {
 }
 
 bool GiPass::createDescriptors() {
-    const std::array<VkDescriptorSetLayoutBinding, 26> bindings{{
+    const std::array<VkDescriptorSetLayoutBinding, 27> bindings{{
         {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // TLAS
         {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // hdr (RW)
         {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // giBuffer
@@ -211,12 +211,13 @@ bool GiPass::createDescriptors() {
                                                                                           // RO)
         {25, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // immutable SMS producer
                                                                                           // context
+        {26, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // optional SMS counters
     }};
 
     // MOD1: no UPDATE_AFTER_BIND — incompatible with DESCRIPTOR_BUFFER layouts.
     constexpr VkDescriptorBindingFlags kTextureFlags = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
-    const std::array<VkDescriptorBindingFlags, 26> bindingFlags{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, kTextureFlags,
-                                                                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    const std::array<VkDescriptorBindingFlags, 27> bindingFlags{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, kTextureFlags,
+                                                                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = static_cast<std::uint32_t>(bindingFlags.size()),
@@ -239,7 +240,7 @@ bool GiPass::createDescriptors() {
 
     // MOD1: descriptor buffers (replaces the pool + allocated sets).
     for (std::uint32_t si = 0; si < kDescriptorSlots; ++si) {
-        if (!m_descWriters[si].init(*m_ctx, setLayout, 26, si == 0 ? "theia.gi.descBuf0" : "theia.gi.descBuf1")) {
+        if (!m_descWriters[si].init(*m_ctx, setLayout, 27, si == 0 ? "theia.gi.descBuf0" : "theia.gi.descBuf1")) {
             harmonia::core::Logger::error("GiPass: failed to create descriptor buffer slot {}", si);
             for (std::uint32_t j = 0; j <= si; ++j)
                 m_descWriters[j].shutdown();
@@ -394,6 +395,7 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         return;
     }
     m_smsFrameActive = usesSms(params.scene->emissiveTriangleCount(), params.maxDepth);
+    m_smsDiagnosticsReported = false;
     if (cmd == VK_NULL_HANDLE || (m_smsFrameActive && skipPreBarriers)) {
         m_frameError = VK_ERROR_INITIALIZATION_FAILED;
         return;

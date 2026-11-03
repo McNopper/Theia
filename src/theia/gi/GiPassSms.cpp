@@ -1,8 +1,10 @@
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <span>
 #include <utility>
 
+#include "harmonia/core/Env.hpp"
 #include "harmonia/core/Logger.hpp"
 #include "theia/gi/GiPass.hpp"
 #include "theia/renderer/ShaderPath.hpp"
@@ -18,6 +20,18 @@ static_assert(sizeof(SmsProducerContext) == 24);
 
 bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
     SmsProducerContext context{};
+    m_smsDiagEnabled = harmonia::core::getEnvString("THEIA_SMS_DIAGNOSTICS") == std::optional<std::string>{"1"};
+    auto diagnostics =
+        harmonia::core::Buffer::create(*m_ctx,
+                                       16 * sizeof(std::uint32_t),
+                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                       VMA_MEMORY_USAGE_GPU_TO_CPU,
+                                       "theia.sms.diagnostics");
+    if (!diagnostics)
+        return false;
+    m_smsDiagnostics = std::move(*diagnostics);
+    const std::array<std::uint32_t, 16> zeros{};
+    m_smsDiagnostics.uploadData(zeros.data(), sizeof(zeros));
     if (m_cfg.smsEnabled) {
         const auto pixels = std::uint64_t{m_cfg.width} * m_cfg.height;
         if (pixels == 0 || pixels > harmonia::pipeline::SmsPass::kMaxCapacity || m_cfg.smsPartitionResolution == 0 ||
@@ -68,7 +82,7 @@ bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
         context = {m_sms.workBuffer().deviceAddress(),
                    m_smsPrefixes.deviceAddress(),
                    m_cfg.smsPartitionResolution,
-                   m_cfg.smsSpatialReuse ? 1U : 0U};
+                   (m_cfg.smsSpatialReuse ? 1U : 0U) | (m_smsDiagEnabled ? 2U : 0U)};
     }
     // Immutable configuration, uploaded only at initialization/resize. A disabled
     // context is real configuration, never a host-written hot-path work counter.
@@ -81,9 +95,39 @@ bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
     if (!buffer)
         return false;
     m_smsContext = std::move(*buffer);
-    for (auto& writer : m_descWriters)
+    for (auto& writer : m_descWriters) {
         writer.writeStorageBufferHandle(*m_ctx, 25, m_smsContext);
+        writer.writeStorageBufferHandle(*m_ctx, 26, m_smsDiagnostics);
+    }
     return true;
+}
+
+void GiPass::reportSmsDiagnostics() const noexcept {
+    if (!m_smsDiagEnabled || m_smsDiagnosticsReported)
+        return;
+    m_smsDiagnosticsReported = true;
+    std::array<std::uint32_t, 16> counters{};
+    if (m_smsDiagnostics.readData(counters.data(), sizeof(counters)) != VK_SUCCESS) {
+        harmonia::core::Logger::error("Theia SMS diagnostics readback failed (observation only)");
+        return;
+    }
+    harmonia::core::Logger::info(
+        "sms_diag eligible={} roots={} canonical={} domains={} candidates={} canonicalInv={}/{} neighborInv={}/{} "
+        "selected={} topologyFail={} solverFail={} visibilityFail={} supportFail={}",
+        counters[0],
+        counters[1],
+        counters[2],
+        counters[3],
+        counters[4],
+        counters[6],
+        counters[5],
+        counters[8],
+        counters[7],
+        counters[9],
+        counters[10],
+        counters[11],
+        counters[12],
+        counters[13]);
 }
 
 std::expected<bool, VkResult> GiPass::frameReady() const noexcept {
@@ -91,8 +135,10 @@ std::expected<bool, VkResult> GiPass::frameReady() const noexcept {
         return std::unexpected(m_frameError);
     if (!m_frameRecorded)
         return std::unexpected(VK_ERROR_INITIALIZATION_FAILED);
-    if (!m_smsFrameActive)
+    if (!m_smsFrameActive) {
+        reportSmsDiagnostics();
         return true;
+    }
     const auto completion = m_sms.completion();
     if (!completion) {
         m_frameError = completion.error();
@@ -103,7 +149,10 @@ std::expected<bool, VkResult> GiPass::frameReady() const noexcept {
         m_frameError = VK_ERROR_UNKNOWN;
         return std::unexpected(m_frameError);
     }
-    return completion->status == harmonia::pipeline::SmsQueueCompletion::Ready;
+    const bool ready = completion->status == harmonia::pipeline::SmsQueueCompletion::Ready;
+    if (ready)
+        reportSmsDiagnostics();
+    return ready;
 }
 
 VkResult GiPass::recordContinuation(VkCommandBuffer cmd) noexcept {

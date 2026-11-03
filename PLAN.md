@@ -8,6 +8,16 @@ fresh-output, provenance, per-seed metrics and completed-frame equal-time checks
 Nine CPU tests and real C1 smoke pass; full C1 reference/correctness and shift
 outcome diagnostics follow. No SMS main merge or quality claim is implied.
 
+**SMS diagnosis checkpoint:** the curved-caster failure was inward OBJ winding,
+not a fundamental ReSTIR limitation. After fixing only face order, the first C1
+frame has 883 roots and 2,259 selected neighbor paths; off reports zero. Optional
+`THEIA_SMS_DIAGNOSTICS=1` uses a separate descriptor buffer and completed-frame
+readback, leaving the 24-byte ABI intact and default behavior unchanged. Failure
+reasons are returned to the caller for shift topology/solver/visibility/support.
+The outward fixture test, diagnostic mirror test and full 58/58 suite pass with
+zero validation diagnostics/skips. Fresh C1 reference/correctness/performance
+runs are still required; no main merge or finished-feature claim is implied.
+
 **Living source of truth for outstanding work.** Shipped items are removed from the work
 lists; the shipped record is the *Baseline* below and `git log`. Only outstanding work is
 tracked here.

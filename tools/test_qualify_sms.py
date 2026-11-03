@@ -150,5 +150,41 @@ class QualificationHarnessTests(unittest.TestCase):
         self.assertTrue(record[0]["results"]["reuse"]["2.0"]["refined"])
 
 
+    def test_performance_budget_deviation_is_inconclusive(self):
+        record = []
+
+        def render(label, scene, mode, frames, seed):
+            if mode == "off" and seed == 2026 and "8.0" in label and label.startswith("eqt_"):
+                return Path(label + ".exr"), 10.0
+            return Path(label + ".exr"), frames / 32.0
+
+        with (patch.object(q, "prepare_run_dir", return_value=self.scene),
+              patch.object(q, "render_theia", side_effect=render),
+              patch.object(q, "roi_energy", return_value=np.array([10.0, 20.0, 30.0])),
+              patch.object(q, "roi_mse", side_effect=lambda ref, cand, roi: 0.5 if "reuse" in cand.name else 1.0),
+              patch.object(q, "record", side_effect=record.append),
+              self.assertRaisesRegex(SystemExit, "timing inconclusive")):
+                q.stage_performance("C1", Path("reference.exr"))
+        self.assertEqual(record[0]["status"], "timing-inconclusive")
+        self.assertFalse(record[0]["results"]["off"]["8.0"]["timing_within_5_percent"])
+
+
+
+    def test_shared_sms_sphere_casters_have_outward_winding(self):
+        for path in sorted(q.ASSETS.glob("sms_sphere_*.obj")):
+            vertices, faces = [], []
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if line.startswith("v "):
+                    vertices.append(tuple(map(float, line.split()[1:4])))
+                elif line.startswith("f "):
+                    faces.append(tuple(int(value.split("/")[0]) - 1 for value in line.split()[1:4]))
+            points = np.array(vertices)
+            triangles = points[np.array(faces)]
+            geometric = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
+            outward = (geometric * triangles.mean(axis=1)).sum(axis=1)
+            self.assertGreater(float(outward.min()), 0.0, f"Inward caster winding: {path.name}")
+
+
+
 if __name__ == "__main__":
     unittest.main()

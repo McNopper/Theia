@@ -153,7 +153,7 @@ class GiPass {
         return m_cfg.smsEnabled && emitterCount != 0 && depth >= 3;
     }
     [[nodiscard]] bool completionRequired() const noexcept {
-        return m_frameError != VK_SUCCESS || (m_frameRecorded && m_smsFrameActive);
+        return m_frameError != VK_SUCCESS || (m_frameRecorded && (m_smsFrameActive || m_smsDiagEnabled));
     }
     [[nodiscard]] std::expected<bool, VkResult> frameReady() const noexcept;
     [[nodiscard]] VkResult recordContinuation(VkCommandBuffer cmd) noexcept;
@@ -201,6 +201,7 @@ class GiPass {
     [[nodiscard]] bool createDescriptors();
     [[nodiscard]] bool createPipeline(const char* giSpv);
     [[nodiscard]] bool createSmsResources(const harmonia::core::CommandPool& uploadPool);
+    void reportSmsDiagnostics() const noexcept;
     void updateDescriptors(const FrameParams& params);
     void
     updateRestirDescriptors(const FrameParams& params,
@@ -224,7 +225,9 @@ class GiPass {
     harmonia::core::UniquePipelineLayout m_pipelineLayout;
     harmonia::core::UniquePipeline m_pipeline;
     harmonia::pipeline::SmsPass m_sms;
-    harmonia::core::Buffer m_smsContext, m_smsPrefixes, m_smsPrior;
+    harmonia::core::Buffer m_smsContext, m_smsPrefixes, m_smsPrior, m_smsDiagnostics;
+    bool m_smsDiagEnabled = false;
+    mutable bool m_smsDiagnosticsReported = false;
     mutable VkResult m_frameError = VK_SUCCESS;
     bool m_frameRecorded = false, m_smsFrameActive = false;
 

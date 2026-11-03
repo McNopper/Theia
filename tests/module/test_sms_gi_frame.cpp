@@ -11,12 +11,14 @@
 #include <iostream>
 #include <limits>
 #include <numbers>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "fixtures/VulkanTestFixture.hpp"
 #include "harmonia/core/Buffer.hpp"
+#include "harmonia/core/Env.hpp"
 #include "harmonia/core/Image.hpp"
 #include "harmonia/core/VulkanHandle.hpp"
 #include "harmonia/pipeline/AccumulationPass.hpp"
@@ -611,6 +613,45 @@ class SmsGiReuseFrameFixture : public SmsGiConfiguredFrameFixture {
     bool spatialReuse() const noexcept override { return reuse; }
     bool reuse = false;
 };
+
+namespace {
+struct SmsDiagnosticEnvironment {
+    std::optional<std::string> previous = harmonia::core::getEnvString("THEIA_SMS_DIAGNOSTICS");
+    SmsDiagnosticEnvironment() {
+#ifdef _WIN32
+        EXPECT_EQ(_putenv_s("THEIA_SMS_DIAGNOSTICS", "1"), 0);
+#else
+        EXPECT_EQ(setenv("THEIA_SMS_DIAGNOSTICS", "1", 1), 0);
+#endif
+    }
+    ~SmsDiagnosticEnvironment() {
+#ifdef _WIN32
+        static_cast<void>(_putenv_s("THEIA_SMS_DIAGNOSTICS", previous ? previous->c_str() : ""));
+#else
+        if (previous)
+            static_cast<void>(setenv("THEIA_SMS_DIAGNOSTICS", previous->c_str(), 1));
+        else
+            static_cast<void>(unsetenv("THEIA_SMS_DIAGNOSTICS"));
+#endif
+    }
+};
+} // namespace
+
+TEST_F(SmsGiReuseFrameFixture, DiagnosticsCountActualRootsAndAcceptedShifts) {
+    const SmsDiagnosticEnvironment diagnostics;
+    reuse = true;
+    ASSERT_NO_FATAL_FAILURE(createGi());
+    std::uint64_t continuations = 0;
+    testing::internal::CaptureStdout();
+    for (std::uint32_t index = 0; index < 4; ++index)
+        ASSERT_NO_FATAL_FAILURE(frame(index, 17, continuations));
+    const std::string log = testing::internal::GetCapturedStdout();
+    EXPECT_NE(log.find("sms_diag"), std::string::npos) << log;
+    EXPECT_EQ(log.find("roots=0"), std::string::npos) << log;
+    EXPECT_EQ(log.find("domains=0"), std::string::npos) << log;
+    EXPECT_EQ(log.find("neighborInv=0/0"), std::string::npos) << log;
+    EXPECT_EQ(log.find("selected=0"), std::string::npos) << log;
+}
 
 TEST_F(SmsGiReuseFrameFixture, SpatialMirrorPreservesEnergyAndImprovesSameBudgetError) {
     double localMse = 0, reuseMse = 0;

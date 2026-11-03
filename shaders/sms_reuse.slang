@@ -38,6 +38,7 @@ bool smsSpatialEstimate(uint slot,uint width,uint height,SmsWorkRecord canonical
     float4 prefix=context.prefixes[slot];
     bool localCandidate; float localUcw;
     if (!smsLocalCandidate(canonical,prefix.w,localCandidate,localUcw)) return false;
+    if (localCandidate) smsDiagnostic(kSmsDiagCanonicalCandidates);
     SmsManifoldVertex original[2]; uint originalCount=0u;
     original[0]=original[1]=(SmsManifoldVertex)0;
     if (localCandidate) smsLoadRoot(canonical,original,originalCount);
@@ -69,14 +70,22 @@ bool smsSpatialEstimate(uint slot,uint width,uint height,SmsWorkRecord canonical
             if (any(source.words[15].zw!=uint2(width,height)) ||
                 !smsLocalCandidate(source,sourcePrefix.w,sourceCandidate,sourceUcw)) return false;
             domain=smsPhase(source)!=kSmsAbsent;
+            if (domain) smsDiagnostic(kSmsDiagNeighborDomains);
         }
         float proxyAtCanonical=kSmsLogZero;
         bool canonicalSupport=false;
         if (localCandidate && domain) {
+            smsDiagnostic(kSmsDiagCanonicalAttempts);
             SmsManifoldVertex shifted[2];
+            uint shiftFailures;
             canonicalSupport=smsShiftInverseChecked(scene,smsReceiverPosition(canonical),canonical.words[13].w,
-                smsReceiverPosition(source),source.words[13].w,smsLightPosition(canonical),original,originalCount,shifted);
+                smsReceiverPosition(source),source.words[13].w,smsLightPosition(canonical),original,originalCount,shifted,shiftFailures);
+            if ((shiftFailures&kSmsShiftSupportFailure)!=0u) smsDiagnostic(kSmsDiagSupportFailures);
+            if ((shiftFailures&kSmsShiftTopologyFailure)!=0u) smsDiagnostic(kSmsDiagTopologyFailures);
+            if ((shiftFailures&kSmsShiftSolverFailure)!=0u) smsDiagnostic(kSmsDiagSolverFailures);
+            if ((shiftFailures&kSmsShiftVisibilityFailure)!=0u) smsDiagnostic(kSmsDiagVisibilityFailures);
             if (canonicalSupport) {
+                smsDiagnostic(kSmsDiagCanonicalAccepts);
                 float3 sourceValue;
                 if (!smsShiftIntegrand(scene,source,sourcePrefix.xyz,canonical,shifted,originalCount,sourceValue)) return false;
                 proxyAtCanonical=smsReuseTarget(sourceValue);
@@ -88,10 +97,20 @@ bool smsSpatialEstimate(uint slot,uint width,uint height,SmsWorkRecord canonical
             weights[0]=smsLogAdd(weights[0],part);
         }
         if (!domain || !sourceCandidate) continue;
+        smsDiagnostic(kSmsDiagNeighborCandidates);
+        smsDiagnostic(kSmsDiagNeighborAttempts);
         SmsManifoldVertex sourceRoot[2],shifted[2]; uint count;
         smsLoadRoot(source,sourceRoot,count);
+        uint shiftFailures;
         if (!smsShiftInverseChecked(scene,smsReceiverPosition(source),source.words[13].w,
-            smsReceiverPosition(canonical),canonical.words[13].w,smsLightPosition(source),sourceRoot,count,shifted)) continue;
+            smsReceiverPosition(canonical),canonical.words[13].w,smsLightPosition(source),sourceRoot,count,shifted,shiftFailures)) {
+            if ((shiftFailures&kSmsShiftSupportFailure)!=0u) smsDiagnostic(kSmsDiagSupportFailures);
+            if ((shiftFailures&kSmsShiftTopologyFailure)!=0u) smsDiagnostic(kSmsDiagTopologyFailures);
+            if ((shiftFailures&kSmsShiftSolverFailure)!=0u) smsDiagnostic(kSmsDiagSolverFailures);
+            if ((shiftFailures&kSmsShiftVisibilityFailure)!=0u) smsDiagnostic(kSmsDiagVisibilityFailures);
+            continue;
+        }
+        smsDiagnostic(kSmsDiagNeighborAccepts);
         float3 targetValue;
         if (!smsShiftIntegrand(scene,canonical,prefix.xyz,source,shifted,count,targetValue)) return false;
         float target=smsReuseTarget(targetValue),unused,mis;
@@ -104,5 +123,6 @@ bool smsSpatialEstimate(uint slot,uint width,uint height,SmsWorkRecord canonical
         if (!smsLogResamplingAdd(reservoir,i,targets[i],ucws[i],weights[i],selection[i])) return false;
     if (reservoir.weightSum==kSmsLogZero) return true;
     if (reservoir.selected>=4u) return false;
+    if (reservoir.selected>0u) smsDiagnostic(kSmsDiagSelectedNeighbors);
     return smsLogResamplingEstimate(reservoir,values[reservoir.selected],estimate);
 }

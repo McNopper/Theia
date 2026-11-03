@@ -21,7 +21,8 @@ import sms_resampling;
 #define SMS_EMITTERS t_smsEmitters
 #define SMS_EMITTER_CDF t_smsEmitterCdf
 #define SMS_STORE_LOCAL_TARGET(slot,work,value) \
-    { bool smsReuse=(t_smsProducer[0].flags&1u)!=0u; \
+    { if (any((value)>0.0.xxx)) smsDiagnostic(kSmsDiagRoots); \
+      bool smsReuse=(t_smsProducer[0].flags&1u)!=0u; \
       float smsPhi=t_smsProducer[0].prefixes[slot].w; \
       if (!smsCacheLocalTarget(smsReuse,(value),asfloat((work).words[5].w),smsPhi)) \
           { smsQueueError(pc,kSmsQueueNumericError); return; } \
