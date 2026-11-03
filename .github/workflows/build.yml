@@ -3,8 +3,10 @@ name: Build
 on:
   push:
     branches:
-      - '**'
+      - main
   pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 concurrency:
@@ -90,6 +92,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: McNopper/Harmonia
+          # GI-SMS lives off main in both repos; match the coordinated source
+          # branch for PR/manual builds without changing release dependency pins.
+          ref: >-
+            ${{ (github.head_ref || github.ref_name) == 'dev/gi-sms-restir' && 'dev/gi-sms-restir'
+              || (github.head_ref || github.ref_name) == 'wip/gi-sms-spatial-reuse' && 'wip/gi-sms-spatial-reuse'
+              || 'main' }}
           path: Harmonia
           lfs: true
       - uses: actions/checkout@v4
