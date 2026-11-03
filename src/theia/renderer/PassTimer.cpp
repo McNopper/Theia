@@ -87,6 +87,11 @@ void PassTimer::write(const VkCommandBuffer cmd, const Query query) {
     if (!m_enabled) {
         return;
     }
+    // Reset each pair on the queue that owns this pass, including first use and
+    // passes skipped in earlier frames. Device-side reset needs no hostQueryReset
+    // feature, and must precede the pair's first write, not just its first read.
+    if (query == kGiBegin || query == kMotionBegin || query == kTaaBegin)
+        vkCmdResetQueryPool(cmd, m_pools[m_activeSlot], static_cast<std::uint32_t>(query), 2);
     vkCmdWriteTimestamp2(
         cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, m_pools[m_activeSlot], static_cast<std::uint32_t>(query));
     m_writtenMask[m_activeSlot] |= 1U << static_cast<std::uint32_t>(query);
@@ -138,9 +143,8 @@ void PassTimer::logSlot(const std::uint32_t slot) {
     }
     harmonia::core::Logger::info("timing:{}", line);
 
-    // Safe: availability (WAIT_BIT above) implies the writing command buffer completed,
-    // and this frame's timestamps are recorded after this reset.
-    vkResetQueryPool(m_device, pool, 0, kQueryCount);
+    // Each next begin hook resets its own pair on the owning queue. No host reset
+    // (and no hostQueryReset feature) is required.
 }
 
 } // namespace theia

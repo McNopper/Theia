@@ -38,7 +38,7 @@ int main(int argc, char* argv[]) {
         if (window != nullptr) {
             harmonia::vulkan_init::Context::Config cfg;
             cfg.appName = "TheiaModuleTests";
-            cfg.enableValidation = false;
+            cfg.enableValidation = true;
             cfg.window = window.get();
 
             auto ctx = harmonia::vulkan_init::Context::create(cfg);

@@ -68,6 +68,59 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
   when they land.
 ## How to continue
 
+**GI-SMS #2 staged verification plan (Theia `257c8b4`, Harmonia `042fc74`):**
+keep monolithic GI; wavefront stage-1 stays parked. No push, tags, release or pins.
+
+| Slice | Acceptance / independent oracle | Verification |
+| --- | --- | --- |
+| Ready-stage ordering | Both queue paths record MotionVector/TAA only in `onSceneFrameReady`; preserve GI → MotionVector → TAA → Accumulation → Denoiser → ToneMap. Freeze motion params before updating previous VP. | Baseline/candidate deterministic offscreen EXR comparison via `check_theia_reference_noop.py`, full `ctest --test-dir build -LE analysis -V`; presentation path validation capture separately. |
+| Common sampler mathematics | Move common light proposal, supported-tail sampling, contribution and resumable initial/repeat/prior logic down to Harmonia; renderer scene/texture adapters stay independent. No change to frozen endpoints or trial law. | Hyperion mirror/slab/Beer/SDS receipts and negative controls; family `verify_reference_sampling.ps1`, byte-exact existing controls. |
+| Theia local candidates | Actual renderer geometry and emitter identities; exact supported PT/SMS partition in local/replay/reconnection evaluations; pending/error work never accumulates or exports. | Independent planar mirror/Snell/Beer fixtures and Hyperion comparison, missing/doubled-energy and forced-GPU-error controls, full-slot/continuation checks. |
+| Manifold spatial reuse | Read only unmerged local candidates; preserve emitter point, inverse-check shifts, J=1 for delta/static-light-area domain, generalized pairwise MIS with support failures. No recursive temporal merge. | Finite-domain support/MIS controls plus actual planar/curved rendered energy, wrong inverse/support/MIS controls rejected. |
+| Final acceptance | Curved/complex scene convergence, equal-time quality, reciprocal tails/runtime and stability established; both review galleries regenerated for user approval before any publication. | Fixed-seed linear EXR receipts, timing/counter logs, repeated-run stability and review images, per central Harmonia PLAN. |
+
+These are staged deliverables, not completed capabilities. GPU suites/renders
+remain strictly serial across repositories. Each slice records its evidence and
+small local checkpoint before the next behavioral change.
+Readiness validation finding: the actual interactive moving-camera run exercised
+TAA but failed on pre-existing PassTimer query resets (VUID 03864 first use,
+02665 hostQueryReset not enabled). This blocks trustworthy performance evidence.
+Narrow fix plan: reset each pass's query pair on its own command buffer before
+the begin timestamp; remove host reset, leaving device features unchanged. Verify
+real moving-camera timing/TAA and a GPU component test spanning first use, slot
+reuse and a previously skipped TAA pair. A no-reset mutant must fail validation.
+Then re-run the original readiness capture/no-op and family regression. This is
+not permission for unrelated timing or device-layer redesign.
+Executed timer checks: the actual GPU first/reused/skipped-pair test passes;
+the test-process-only no-reset control fails the expected VUID 03864 / callback
+count assertion (exit 1), exact restored call path passes (exit 0). The actual
+interactive run exercises 8 moving-camera TAA frames with zero validation
+messages. Theia module tests now enable validation, matching Hyperion's lane.
+Joint family gate passes H142/Hy69/T34 validation-clean; canonical architecture
+and H/Hy tidy/dead pass. Theia's 320×240, 32-frame reference capture has exactly
+0/76,800 changed pixels. Source-only review finds no introduced ready-order,
+deferred-parameter, image-ownership or query-reset blocker. This does not claim
+active SMS, async SMS buffer ownership or final quality/performance acceptance.
+Spatial-MIS oracle preparation: GRIS 2022 Eq.37 with one canonical domain and
+N neighbor domains gives `m0(y)=sum_j[p0(y)/(p0(y)+N*pj<-j(y))]/N` and
+`mi(y)=pi<-i(y)/(p0(y)+N*pi<-i(y))`. A failed/inverse-invalid shift means the
+corresponding `pi<-i=0`, not a constant 1/(N+1) weight. Exact rational-domain
+enumeration (`verify_sms_pairwise_model.py` in the approved scratch directory)
+preserves RGB=(10,10,10), including alternative target scalings. Constant MIS
+fails at RGB=(22/3,7,23/3). This verifies the planned oracle only; no Theia SMS
+reuse implementation is claimed. Proxy targets are not PDFs; reciprocal counts
+must never be substituted as exact densities in ordinary balance MIS.
+The one-root Bernoulli counterexample gives .801396145800 instead of 1 when
+inverse counts are misused as exact PDFs in balance MIS (sampler successes .5/.25).
+Producer wiring proposal: one independently PT-sampled specular prefix / SMS slot
+per pixel, separate from the adaptive/replayed PT candidate pool. Preserve its
+raw receiver and prefix RGB in renderer-owned auxiliary storage for later shifts.
+Use a small immutable descriptor-backed producer context rather than exceeding
+the 256-byte GI push budget. Keep initial SMS work and all continuations on the
+graphics queue; the ordinary no-SMS async path remains unchanged. Async SMS needs
+explicit work-buffer ownership support before it can be enabled; do not silently
+run exclusive SMS buffers across queue families.
+
 ### Roadmap
 
 | ID | Task | Deps | Status |
