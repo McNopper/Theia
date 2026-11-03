@@ -85,6 +85,7 @@ class Application final : public harmonia::app::App, public harmonia::app::IRend
     }
     [[nodiscard]] std::pair<VkCommandBuffer, VkSemaphore>
     onBeforeSceneStages(VkCommandBuffer renderCmd) noexcept override;
+    void onSceneFrameReady(VkCommandBuffer cmd) noexcept override;
 
   private:
     struct CameraMatrices {
@@ -188,7 +189,7 @@ class Application final : public harmonia::app::App, public harmonia::app::IRend
     std::array<VkSemaphore, 2> m_gfxDoneSemaphores = {VK_NULL_HANDLE, VK_NULL_HANDLE};
     std::array<VkSemaphore, 2> m_asyncSemaphores = {VK_NULL_HANDLE, VK_NULL_HANDLE};
     bool m_asyncComputeEnabled = false;
-    /// Pending motion-vector params set in record() and consumed by onBeforeSceneStages().
+    /// Frozen before previous VP advances; consumed only after GI completion.
     MotionVectorPass::FrameParams m_pendingMvp{};
 };
 

@@ -128,6 +128,11 @@ the 320×240 parity resolution.
   re-entry, repeated Beer–Lambert). Consumers flip a local copy by wo (`makeSurfaceHit`, mirroring
   Hyperion's `shadeSurface`) or use it as the true interface outward normal (`runMediumWalk`
   offsets/Fresnel/refract, backface detection).
+- **Completion staging for local GI-SMS work:** MotionVector/TAA record only in
+  `Application::onSceneFrameReady`, after all scene continuations finish. Both queue
+  paths freeze motion parameters before advancing previous VP. The shared host's
+  order is GI → MotionVector → TAA → Accumulation → Denoiser → ToneMap. Moving these
+  passes does not itself enable SMS; candidate integration is tracked in PLAN.md.
 - **The path reservoir has NO temporal merge — do not add one back.** A streamed temporal
   merge (yesterday's merged reservoir as today's input) double-counts re-selected history on
   heavy-tailed path candidates: measured −2.8% darker on cornell indirect @1024f, reproduced

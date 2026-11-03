@@ -439,14 +439,20 @@ void Application::submitSingleQueueGI(VkCommandBuffer cmd,
     }
 
     GiPass::FrameParams gp = buildGiFrameParams(view, curViewProj);
+    m_pendingMvp = buildMotionVectorParams(curViewProj);
     m_passTimer.giBegin(cmd);
     m_giPass.record(cmd, gp);
     m_passTimer.giEnd(cmd);
+}
 
+void Application::onSceneFrameReady(VkCommandBuffer cmd) noexcept {
+    if (!giActive())
+        return;
+    // The host invokes this only after a resumable scene frame is complete.
+    // Keep dependent presentation work out of both initial GI queue paths.
     if (m_motionVectorPass.isInitialized()) {
-        const MotionVectorPass::FrameParams mvp = buildMotionVectorParams(curViewProj);
         m_passTimer.motionBegin(cmd);
-        m_motionVectorPass.record(cmd, mvp);
+        m_motionVectorPass.record(cmd, m_pendingMvp);
         m_passTimer.motionEnd(cmd);
     }
     if (m_taaPass.isInitialized() && m_useTaa && m_cameraMoving) {
@@ -579,7 +585,7 @@ std::pair<VkCommandBuffer, VkSemaphore> Application::onBeforeSceneStages(VkComma
         r != VK_SUCCESS)
         harmonia::core::Logger::error("async compute graphics submit failed: {}", static_cast<std::int32_t>(r));
 
-    // ── Submit 2: async compute (GI + MotionVector) ──
+    // ── Submit 2: async compute (GI only) ──
     const VkCommandBufferSubmitInfo asyncCmdInfo{
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO,
         .pNext = nullptr,
@@ -704,26 +710,8 @@ std::pair<VkCommandBuffer, VkSemaphore> Application::onBeforeSceneStages(VkComma
     const std::array<VkImageMemoryBarrier2, 4> gfxAcquire{hdrAcquire, gbufferAcquire, giBufferAcquire, depthToGeneral};
     harmonia::core::pipelineBarrier(stagesCmd, gfxAcquire);
 
-    // MotionVectorPass runs on the graphics queue so motionVectorImage stays in the
-    // graphics family. giBuffer is now SHADER_READ_ONLY_OPTIMAL on the graphics queue.
-    if (m_motionVectorPass.isInitialized()) {
-        m_passTimer.motionBegin(stagesCmd);
-        m_motionVectorPass.record(stagesCmd, m_pendingMvp);
-        m_passTimer.motionEnd(stagesCmd);
-    }
-    // C4: TAA after MotionVectorPass, before denoiser (async path). Runs only while the
-    // camera is moving (fresh, non-accumulated frame); a static view is converged by
-    // progressive accumulation, which TAA would blur.
-    // AABB clamp handles stale history — no passthrough needed on motion resume.
-    if (m_taaPass.isInitialized() && m_useTaa && m_cameraMoving) {
-        m_passTimer.taaBegin(stagesCmd);
-        m_taaPass.record(stagesCmd,
-                         TaaPass::FrameParams{
-                             .alpha = kTaaBlendAlpha,
-                             .firstFrame = false,
-                         });
-        m_passTimer.taaEnd(stagesCmd);
-    }
+    // Motion vectors and TAA are deferred to onSceneFrameReady on this graphics
+    // command buffer, after any GI continuation has completed.
 
     return {stagesCmd, m_asyncSemaphores[slot]};
 }
