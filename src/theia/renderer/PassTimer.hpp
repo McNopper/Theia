@@ -38,15 +38,15 @@ namespace theia {
 /// by adding entries here.
 ///
 /// Sync model: frames use 2 slots (harmonia::app::FrameSync::kFrameSlots), one
-/// query pool per slot. `beginFrame(slot)` reads + logs + resets the slot's pool
+/// query pool per slot. `beginFrame(slot)` reads + logs the slot's pool
 /// — the data there is frame N-2's batch. That read is safe to block on
 /// (VK_QUERY_RESULT_WAIT_BIT): the graphics slot fence was already waited by the
 /// App frame loop, and in async-compute mode the GI timestamps' completion is
 /// guaranteed by the same timeline-semaphore wait (value − 2) the async submit
 /// performs later in this frame — WAIT_BIT merely parks the host there earlier.
-/// Resetting after the read is legal because availability implies the writing
-/// command buffer completed, and the reset happens before this frame records new
-/// timestamps into the same pool.
+/// Each pass's begin hook resets its own query pair on the owning command buffer
+/// before writing, including first use and a pass skipped in preceding frames.
+/// No host query reset or additional device feature is needed.
 ///
 /// The GI pair is recorded on whichever command buffer carries the dispatch that
 /// frame (async-compute or graphics queue); per-pass elapsed times are within one
@@ -76,7 +76,7 @@ class PassTimer {
     void shutdown();
 
     /// Host-side frame hook — call once per frame BEFORE recording any pass:
-    /// logs the slot's completed batch (frame N-2), resets its pool, and arms
+    /// logs the slot's completed batch (frame N-2), and arms
     /// the slot this frame's timestamp hooks write into. No-op when disabled.
     void beginFrame(std::uint32_t slot);
 
