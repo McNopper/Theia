@@ -138,6 +138,8 @@ the 320×240 parity resolution.
   triangle/normal, planar R/TT, production-fallback and raw-occlusion fixtures are
   tested. This is not yet active SMS/GI candidate or ReSTIR integration. Do not
   use a shading-reconstruction failure as proof that a shadow ray is clear.
+  Native `sms_sample`, `sms_prior_build` and one-candidate `sms_resolve` entries
+  compile against this adapter/shared sampler, but are not yet wired into GiPass.
 - **The path reservoir has NO temporal merge — do not add one back.** A streamed temporal
   merge (yesterday's merged reservoir as today's input) double-counts re-selected history on
   heavy-tailed path candidates: measured −2.8% darker on cornell indirect @1024f, reproduced

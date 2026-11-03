@@ -152,6 +152,42 @@ the fallback model/raw-query contract; shared/Hyperion visibility wiring remains
 explicitly outstanding. Full H142/Hy69/T38 passes with zero validation messages;
 Theia reference remains 0/76,800 changed pixels. The three const-only keyword
 repairs preserve the exact previously recorded GI shader SHA-256.
+Next wire: compile native `sms_sample`, `sms_prior_build` and one-candidate
+`sms_resolve` entries against the shared compute include and existing set-0
+bindings. `cmake --build build` must compile them warning-clean; keep the existing
+GI shader/image unchanged until receiver production/completion are integrated.
+Compilation alone is not local-candidate, ownership, or HDR runtime verification.
+All three entries compile warning-clean in the H142/Hy71/T38 family checkpoint;
+the existing Theia estimator control remains exactly 0/76,800 changed pixels.
+The local resolve enforces one SMS candidate per pixel (independent of adaptive
+PT sample count), validates dimensions/capacity, and preserves GI's alpha channel.
+Receiver/completion implementation contract for the next slice: extend GiPC by
+one enable scalar (248→252 bytes), bind an immutable producer context at set-0
+binding 25, and keep the work/prior/frozen-receiver storage renderer-owned. Zero
+and populate every pixel's work metadata BEFORE any background early return;
+pixel zero supplies valid dimensions even when it has no receiver. Capture one
+independent PT-sampled specular prefix, then the first eligible opaque receiver,
+with raw frame/UV/material, RGB prefix and remaining receiver-inclusive depth.
+Use the common resumable sampler and waited status; fatal initialization/resize/
+GPU errors must not become successful images. Add the Application completion
+adapter only after GI dependent stages are already behind the ready hook.
+
+PT partition verification must cover local walks and random replay, plus the
+cached-suffix invariants rather than blindly adding another mask: full cached
+records already require a non-delta primary edge and non-delta captured
+continuation (`rec.flags` bits 4 and 3). By the captured vertex, an SMS first-
+receiver tail is either already terminated at its emitter or invalidated by that
+later non-delta event. The cached suffix is then PT-owned; a specular camera
+prefix cannot satisfy the primary-edge guard. Recheck both reconnection modes
+against this invariant and actual rendered controls when wiring ownership.
+Do not disable valid reuse globally or merge temporal SMS reservoirs as a shortcut.
+
+Acceptance for the active slice: `theia_module_tests.exe --gtest_filter=SmsGiFrameFixture.*`
+must exercise actual GiPass RT reconstruction, common sampling, completion and
+HDR output against independent mirror/Snell/Beer/SDS fixture integrals; add
+missing/doubled-energy, relative-depth and forced-GPU-error/no-export controls.
+Test plain local walks first, then path-reservoir/replay/reconnection enabled;
+neither compile-only kernels nor isolated projection tests meet this criterion.
 
 ### Roadmap
 

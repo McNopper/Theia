@@ -254,6 +254,9 @@ set(THEIA_ENTRY_SHADERS
     light_cull.comp.slang
     forward_cull.comp.slang
     gi.comp.slang
+    sms_sample.slang
+    sms_prior_build.slang
+    sms_resolve.slang
     motion_vector.comp.slang
     hiz_build.comp.slang
     taa.comp.slang
