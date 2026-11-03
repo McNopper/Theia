@@ -68,6 +68,13 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
   when they land.
 ## How to continue
 
+**CI/local-first policy:** automatic CI is main pushes and main-target PRs;
+manual dispatch remains available. GI-SMS PR/manual jobs select the corresponding
+Harmonia development/WIP branch; the old default-main checkout missed SmsPass.hpp.
+Local Windows builds/lint and event/ref policy controls pass; hosted CI has not
+been regraded green. Build/check locally before an authorized push. Main and
+dependency pins are unchanged; this development branch excludes WIP spatial reuse.
+
 **Continuation checkpoint (2026-11-03):** `dev/gi-sms-restir` holds the verified
 local-SMS source at `76e2472` plus handoff documentation. The unfinished reuse
 changes are preserved separately on `wip/gi-sms-spatial-reuse` (original exact
