@@ -87,6 +87,15 @@ The central pause verification plan, branch table, exact resume commands and
 remaining #2 scope are in `Harmonia/PLAN.md`, section 3, "GI-SMS #2 continuation
 checkpoint". Stable source excludes the unbuilt reuse/cache changes.
 
+**CI/local-first policy:** automatic checks run on main pushes and main-target
+PRs only; manual dispatch remains available. GI-SMS PR/manual builds check out
+the matching Harmonia development/WIP branch, not pre-SMS Harmonia main (the
+missing SmsPass.hpp caused the reported hosted failure). Release pins and main
+are unchanged. Build locally, warning-clean, and run relevant checks/lint before
+an authorized push. Local Windows builds/lint and the event/ref policy controls
+pass; this is not a claim that hosted Linux/Windows CI has been regraded green.
+Detailed CI failure/repair receipts are in the central Harmonia continuation plan.
+
 The returned source review identified unused-cache overflow, attenuated-prefix
 proxy underflow and materialized-UCW overflow. The numeric-repair WIP now bypasses
 the cache when reuse is disabled, stores log2 positive proxies with explicit zero
