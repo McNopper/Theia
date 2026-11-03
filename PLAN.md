@@ -76,21 +76,26 @@ been regraded green. Build/check locally before an authorized push. Main and
 dependency pins are unchanged. The consolidated `dev/gi-sms-restir` branch now
 includes experimental, default-off spatial reuse; the WIP ref is archival.
 
-**NEXT-MODEL ENTRY — current remaining queue:** read Harmonia/PLAN.md section 3,
-"GI-SMS #2 — bounded finish plan / next-model handoff". It supersedes the older
-task sequences below. Runtime checkpoints: primary branches are paired H/Theia
-`wip/gi-sms-spatial-reuse`, Hyperion `dev/gi-sms-restir`. All main refs remain
-pre-SMS. Latest product evidence with the step-1 mode wiring is Hy71/71 and
-T57/57 (exits 0, zero validation/skips) plus all-mode Application smoke captures.
-Step-1/2 rows are recorded in the central finish plan (runner + C1–C3 scenes
-committed; C1 reference accepted at 4096 spp). Do not redo completed work.
+**CURRENT ENTRY — consolidation review (2026-11-03):** all SMS work now uses
+`dev/gi-sms-restir` in Harmonia, Theia and Hyperion. Merge `4a9bb75` preserves
+both Theia histories; the WIP ref is archival. Main/tags/pins are unchanged.
+Read `Harmonia/PLAN.md` section 3, **SMS consolidation and implementation review**,
+before the older checkpoint narrative below.
 
-**Current focus:** C1 correctness PASSES (pooled ROI RGB .99817/.99368 at 512/2048
-frames vs the 4096-spp PT reference; MSE 3.05× better at 2048) — but reuse is
-bit-identical to local there: zero accepted shifts in the Application context
-(the mirror fixture still accepts shifts; T57 passes). The central plan row 4
-records the census receipts and the exact blocker. Do not proceed to equal-time
-C2/C3 or galleries until Application-context shift acceptance is restored.
+**Current focus:** repair `tools/qualify_sms.py` before using it as acceptance:
+the performance pilot crashes (three-value unpack of a two-value result), NaN
+images pass correctness, timing includes startup/output, first-seed MSE is
+mislabeled pooled, and reference provenance is not checked. The missing shared
+sphere meshes are now actually tracked in Harmonia (`c93260a`), byte-exact to
+the previously graded local files.
+
+Existing C1 energy ratios .99817/.99368 are historical local evidence, but zero
+local/reuse image differences are NOT proof of a sparse-root limitation. The
+census's absent metric is identically zero and its channels conflate states;
+its own output reports root-bearing neighbors. Diagnose forward/inverse/topology/
+visibility outcomes with disjoint counters before an algorithm-scope decision.
+Do not add temporal reuse, relax the goal or call SMS main-merge ready on those
+receipts. Full transport/equal-time/stability/gallery acceptance remains open.
 
 Rendered spatial gate for the current reuse slice: `SmsGiReuseFrameFixture.*`
 compares the same N16/prior/path-mode local candidates with reuse off/on, 512
@@ -100,7 +105,7 @@ Then grade glass/Beer/SDS and curved/visibility/support boundaries; wrong MIS,
 support and inverse checks must be rejected before production enablement.
 Same-budget error reduction is not an equal-time performance claim.
 
-**Continuation checkpoint (2026-11-03):** `dev/gi-sms-restir` holds the verified
+**Historical continuation checkpoint (superseded by consolidation):** `dev/gi-sms-restir` holds the verified
 local-SMS source at `76e2472` plus handoff documentation. The unfinished reuse
 changes are preserved separately on `wip/gi-sms-spatial-reuse` (original exact
 snapshot `da3bebd`); resume it together with Harmonia's same-named WIP branch
