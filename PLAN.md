@@ -2,6 +2,12 @@
 
 **Release:** v0.8.1 - timestamp-query lifecycle fix, shared BSDF/lifetime fixes via Harmonia v0.7.19, and refreshed README gallery. SMS remains on its development branch.
 
+**SMS correctness continuation:** work remains on `dev/gi-sms-restir`.
+`tools/qualify_sms.py` and `tools/test_qualify_sms.py` implement/test finite-image,
+fresh-output, provenance, per-seed metrics and completed-frame equal-time checks.
+Nine CPU tests and real C1 smoke pass; full C1 reference/correctness and shift
+outcome diagnostics follow. No SMS main merge or quality claim is implied.
+
 **Living source of truth for outstanding work.** Shipped items are removed from the work
 lists; the shipped record is the *Baseline* below and `git log`. Only outstanding work is
 tracked here.
