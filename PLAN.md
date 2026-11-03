@@ -136,6 +136,46 @@ The existing mirror reuse gate also needs a no-op/disabled-reuse control that
 fails its MSE improvement assertion. Curved/mixed-depth/visibility acceptance and
 equal-time performance remain separate subsequent slices.
 
+Extended-slice finding: SDS mirror-prefix reuse and the insufficient-depth
+PT-owned direct control pass all four seeds. Closed glass and absorption hit GPU
+numeric error on seed 91 after seed 17 passes. Diagnostic-only disabled spatial
+resolve passes the same four glass seeds; rejection-bit instrumentation locates
+the failure at a positive reservoir with no selected candidate (seed 91/frame
+101), not local sampling or manifold support. The shader/bytes are exactly
+restored after each diagnostic run.
+
+Root cause: `log(u)+total<weight` loses a near-one draw when added to a larger
+log-weight. The new largest-valid-uniform GPU regression fails on the untouched
+selection implementation (both single-candidate and dominant-candidate cases).
+Repair: always choose the first positive candidate and compare `u` to the bounded
+probability `exp2(weight-total)`; keep explicit u=0 support. RNG, weights, frozen
+endpoints, residual/root tolerances and failure handling are unchanged. Re-run
+numeric controls, all four extended cases and the rendered mirror no-op control
+before accepting or pushing this repair. Do not skip the failing seed or count
+failed/pending frames as images.
+
+Completed repair receipt (before the full-regression checkpoint): warning-clean
+build exit 0, six numeric GPU units pass, all seven named controls fail (exit 1)
+and exact restores pass (exit 0). All four extended rendered fixtures pass,
+validation-clean. Glass RGB ratios by seed: 1.000540 / 1.001390 / 1.001980 /
+1.005180; Beer RGB ratios span 1.000690–1.005300; mirror-prefix SDS ratios span
+.998454–1.002240. Insufficient receiver depth has zero SMS continuations and
+caustic-relative residuals -.000944–.002181 (PT-owned direct only).
+Rendered disabled-estimator control fails the MSE assertion at reuse/local=1;
+exact restored resolve passes at .491742. No RNG/proposal/weight or tolerance
+change was used to fix the selection failure. This accepts planar mirror/TT,
+colored absorption and the mirror-prefix SDS fixture, not curved/complex reuse,
+glass camera-prefix combinations, mixed-depth support, equal-time performance
+or final galleries.
+Full current Theia product regression now passes **57/57** (219.12 s, exit 0),
+zero validation diagnostics and no skipped product tests; the three `analysis`
+lanes were excluded. Local Q2-Q6 preflight also passes. Candidate build is
+warning-clean (exit 0). Commands/receipts: `ctest --test-dir Theia/build -LE
+analysis -V` → `sms_reuse_full_theia_ctest.log`, local lint →
+`sms_reuse_full_theia_lint.log`, numeric/extended/no-op receipts in the approved
+scratch directory. The previous failure and all diagnosis/control/restoration
+attempts are preserved, not reported as a clean first attempt.
+
 **GI-SMS #2 staged verification plan (Theia `257c8b4`, Harmonia `042fc74`):**
 keep monolithic GI; wavefront stage-1 stays parked. Development/WIP pushes only;
 no main merge/push, tags, release or pins.

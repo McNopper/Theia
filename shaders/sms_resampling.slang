@@ -132,9 +132,10 @@ bool smsLogResamplingAdd(inout SmsLogResamplingState state,uint candidate,
     if (target==kSmsLogZero || ucw==kSmsLogZero || mis==kSmsLogZero) return true;
     float weight=target+ucw+mis,total=smsLogAdd(state.weightSum,weight);
     if (!isfinite(weight) || !isfinite(total)) return false;
-    float draw;
-    if (!smsLogNonnegative(u,draw)) return false;
-    if (draw==kSmsLogZero || draw+total<weight) {
+    // Select the first positive candidate unconditionally. Compare a bounded
+    // probability, not log(u)+total: that sum loses a near-one draw at large
+    // log magnitudes and can leave a positive reservoir without any selection.
+    if (state.weightSum==kSmsLogZero || u==0.0 || u<exp2(weight-total)) {
         state.selected=candidate; state.selectedTarget=target;
     }
     state.weightSum=total;

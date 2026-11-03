@@ -19,6 +19,17 @@ float proposal(uint domain,uint local) {
 void main(uint3 id : SV_DispatchThreadID) {
     if (id.x>=pc.count) return;
     uint4 input=pc.inputs[id.x];
+    if (input.x==7u) {
+        SmsLogResamplingState state=emptySmsLogResampling();
+        bool ok=true;
+        if (input.y==1u) ok=smsLogResamplingAdd(state,0u,-120.0,0.0,0.0,0.0);
+        ok=ok && smsLogResamplingAdd(state,input.y,-20.0,0.0,0.0,asfloat(0x3F7FFFFFu));
+        float3 color=kSmsLogZero.xxx,estimate=0.0.xxx;
+        if (state.selected==0u) color.x=input.y==0u?-20.0:-120.0;
+        if (state.selected==1u) color.y=-20.0;
+        ok=ok && smsLogResamplingEstimate(state,color,estimate);
+        pc.outputs[id.x]=float4(float(state.selected),state.weightSum,estimate.xy*1048576.0); return;
+    }
     if (input.x==4u) {
         float cached=7.0;
         if (input.y==3u) {

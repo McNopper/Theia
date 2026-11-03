@@ -516,7 +516,73 @@ class SmsGiConfiguredFrameFixture : public SmsGiFrameFixture {
     std::uint32_t partitionResolution() const noexcept override { return 16; }
     bool pilotPrior() const noexcept override { return true; }
     std::uint32_t trialBudget() const noexcept override { return 32; }
+
+    void verifySpatialRadiometry(std::uint32_t frames = 512, double expectedRatio = 1.0) {
+        ASSERT_TRUE(spatialReuse());
+        for (auto seed : {17U, 91U, 1234U, 2026U}) {
+            if (seed != 17U) {
+                gi.shutdown();
+                ASSERT_NO_FATAL_FAILURE(createGi());
+            }
+            std::uint64_t continuations = 0;
+            for (std::uint32_t index = 0; index < frames; ++index) {
+                SCOPED_TRACE(::testing::Message() << "seed=" << seed << " frame=" << index);
+                ASSERT_NO_FATAL_FAILURE(frame(index, seed, continuations));
+            }
+            std::vector<sm::float4> pixels;
+            ASSERT_NO_FATAL_FAILURE(readPixels(pixels));
+            const auto measured = energy(pixels);
+            std::cout << "Theia spatial transport glass=" << glassSlab() << " absorption=" << absorbing()
+                      << " prefix=" << specularPrefix() << " budget=" << surfaceBudget() << " seed=" << seed
+                      << " RGB ratios=";
+            for (std::size_t channel = 0; channel < 3; ++channel) {
+                const double caustic = measured.expectedRgb[channel] - measured.direct;
+                ASSERT_GT(caustic, 0.0) << "Independent caustic oracle must have nonzero support";
+                const double ratio = (measured.observedRgb[channel] - measured.direct) / caustic;
+                std::cout << ratio << ' ';
+                EXPECT_NEAR(ratio, expectedRatio, .02) << "seed=" << seed << " channel=" << channel;
+            }
+            std::cout << " continuations=" << continuations << '\n';
+            if (expectedRatio == 0.0) {
+                EXPECT_EQ(continuations, 0U);
+            } else {
+                EXPECT_GE(continuations, frames);
+            }
+        }
+    }
 };
+
+class SmsGiReuseGlassFrameFixture : public SmsGiConfiguredFrameFixture {
+  protected:
+    bool glassSlab() const noexcept override { return true; }
+    bool spatialReuse() const noexcept override { return true; }
+};
+class SmsGiReuseAbsorptionFrameFixture : public SmsGiReuseGlassFrameFixture {
+  protected:
+    bool absorbing() const noexcept override { return true; }
+};
+class SmsGiReuseSdsFrameFixture : public SmsGiConfiguredFrameFixture {
+  protected:
+    bool specularPrefix() const noexcept override { return true; }
+    bool spatialReuse() const noexcept override { return true; }
+};
+class SmsGiReuseSdsDepthFrameFixture : public SmsGiReuseSdsFrameFixture {
+  protected:
+    std::uint32_t surfaceBudget() const noexcept override { return 3; }
+};
+
+TEST_F(SmsGiReuseGlassFrameFixture, SpatialClosedGlassMatchesIndependentSnellRgbIntegral) {
+    ASSERT_NO_FATAL_FAILURE(verifySpatialRadiometry());
+}
+TEST_F(SmsGiReuseAbsorptionFrameFixture, SpatialPureAbsorberMatchesIndependentSnellBeerRgbIntegral) {
+    ASSERT_NO_FATAL_FAILURE(verifySpatialRadiometry());
+}
+TEST_F(SmsGiReuseSdsFrameFixture, SpatialSpecularPrefixMatchesIndependentVirtualEmitterRgbEnergy) {
+    ASSERT_NO_FATAL_FAILURE(verifySpatialRadiometry());
+}
+TEST_F(SmsGiReuseSdsDepthFrameFixture, SpatialReuseRetainsOnlyDirectPrefixLightingAtInsufficientDepth) {
+    ASSERT_NO_FATAL_FAILURE(verifySpatialRadiometry(64, 0.0));
+}
 
 TEST_F(SmsGiConfiguredFrameFixture, ProductionConfigurationPreservesLocalMirrorRadiometry) {
     for (auto seed : {17U, 91U, 1234U, 2026U}) {

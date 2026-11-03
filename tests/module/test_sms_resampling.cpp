@@ -157,3 +157,18 @@ TEST_F(SmsResamplingFixture, LogRisPreservesExactPowerOfTwoSelectionBoundary) {
         EXPECT_EQ(outputs[i].w, neighbor ? 2.0F : 0.0F);
     }
 }
+
+TEST_F(SmsResamplingFixture, LogRisAlwaysSelectsPositiveCandidatesAtLargestUniform) {
+    const std::array inputs{Words{7, 0, 0, 0}, Words{7, 1, 0, 0}};
+    std::vector<sm::float4> outputs;
+    ASSERT_NO_FATAL_FAILURE(probe(inputs, outputs));
+    ASSERT_EQ(outputs.size(), inputs.size());
+    EXPECT_EQ(outputs[0].x, 0.0F) << "A single positive candidate must always be selected";
+    EXPECT_EQ(outputs[0].y, -20.0F);
+    EXPECT_EQ(outputs[0].z, 1.0F);
+    EXPECT_EQ(outputs[0].w, 0.0F);
+    EXPECT_EQ(outputs[1].x, 1.0F) << "Largest uniform must select the overwhelmingly dominant candidate";
+    EXPECT_EQ(outputs[1].y, -20.0F);
+    EXPECT_EQ(outputs[1].z, 0.0F);
+    EXPECT_EQ(outputs[1].w, 1.0F);
+}
