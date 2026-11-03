@@ -1,11 +1,6 @@
 // Included after GiHit / tracer / medium / surface helpers. One independent
 // frozen receiver per pixel; ordinary PT candidates never write this storage.
-struct GiSmsContext {
-    SmsWorkRecord* work;
-    float4* prefixes;
-    uint resolution,pad;
-};
-[[vk::binding(25,0)]] StructuredBuffer<GiSmsContext> t_smsProducer;
+import sms_context;
 
 void initializeSmsPixel(uint2 pixel) {
     if (smsEnabled==0u) return;
@@ -54,7 +49,7 @@ void produceSmsReceiver(uint2 pixel,GiHit initialHit,SurfaceHit initialSurface) 
             work.words[4]=uint4(asuint(surface.wo),slot);
             work.words[9].xyz=asuint(state.throughput);
             work.words[13].w=remaining;
-            context.prefixes[slot]=float4(state.throughput,1);
+            context.prefixes[slot]=float4(state.throughput,0);
             context.work[slot]=work;
             return;
         }

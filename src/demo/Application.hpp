@@ -49,6 +49,13 @@ class Application final : public harmonia::app::App,
     /// GI2 full PT: toggle the multi-bounce path reservoir for the indirect term
     /// (default on, only effective with PT). Off → per-sample multi-bounce walk.
     void setRestirPtPathEnabled(bool enabled) noexcept { m_useRestirPtPath = enabled; }
+    /// GI-SMS #2: explicit specular-manifold sampling mode (--sms-mode).
+    /// Off disables SMS estimation AND its PT partition entirely — the ordinary
+    /// path-traced reference. Local is the shipped behavior (one independent
+    /// frozen receiver per pixel). Reuse additionally enables the experimental
+    /// spatial estimator (default off until curved/equal-time qualification).
+    enum class SmsMode : std::uint8_t { Off, Local, Reuse };
+    void setSmsMode(SmsMode mode) noexcept { m_smsMode = mode; }
     void setTaaEnabled(bool enabled) noexcept { m_useTaa = enabled; }
     // harmonia::app::IRenderer
     void record(VkCommandBuffer cmd, const harmonia::app::RenderTarget& target) noexcept override;
@@ -151,6 +158,8 @@ class Application final : public harmonia::app::App,
     /// Gated by m_useRestirPt at the GiPass wiring (legacy DI mode has no path reservoir).
     bool m_useRestirPtPath = true;
     bool m_useTaa = true;
+    /// GI-SMS #2 application mode; Local preserves the shipped behavior.
+    SmsMode m_smsMode = SmsMode::Local;
     /// Two-tier output contract (extended): true when running an offscreen capture
     /// (--output). Presentation-stability aids are then disabled so the capture is the
     /// scene-referred estimator result: firefly clamps off, A3(a) secondary-bounce

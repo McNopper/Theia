@@ -290,3 +290,59 @@ TEST_F(SmsSceneFixture, NativeVisibilityDoesNotDependOnShadingNormals) {
     EXPECT_EQ(outputs[1].position.w, 0.0F);
     EXPECT_EQ(outputs[2].position.w, 0.0F);
 }
+
+TEST_F(SmsSceneFixture, NativeManifoldShiftPreservesEmitterAndChecksInverseSupport) {
+    for (bool glass : {false, true}) {
+        theia::Scene scene;
+        const auto material =
+            scene.addMaterial(glass ? harmonia::scene::Material::glass(1.5F, 0) : harmonia::scene::Material::mirror());
+        const auto mesh = scene.addMesh(deviceCtx(),
+                                        commandPool(),
+                                        harmonia::scene::ProceduralGeometry::makeBox({100, 100, glass ? .25F : .01F}),
+                                        {},
+                                        "test.sms.shift.caster");
+        ASSERT_NE(mesh, std::numeric_limits<std::uint32_t>::max());
+        ASSERT_NE(
+            scene.addInstance(mesh, harmonia::scene::Transform{.translation = {0, 0, glass ? .25F : .01F}}, material),
+            std::numeric_limits<std::uint32_t>::max());
+        ASSERT_EQ(scene.build(deviceCtx(), commandPool()), VK_SUCCESS);
+        Input input{{-1, 0, -1, 0}, {1.1F, 0, 1, 0}, {1, 0, -1, .2F}};
+        if (glass) {
+            const double t = std::tan(25 * std::numbers::pi / 180), D = std::sqrt(2.25 + 1.25 * t * t);
+            input = {{0, 0, -1, 0},
+                     {static_cast<float>(t + .1), 0, 1, 0},
+                     {static_cast<float>(2.5 * t + .5 * t / D), 0, 2, .2F}};
+        }
+        std::vector<Output> outputs;
+        ASSERT_NO_FATAL_FAILURE(probe(scene, std::span(&input, 1), outputs, glass ? 5U : 4U));
+        ASSERT_EQ(outputs.size(), 1U);
+        ASSERT_EQ(outputs[0].position.w, 1.0F);
+        if (!glass)
+            expectVector(xyz(outputs[0].position), {.1F, 0, 0});
+        else {
+            const double rho = double(input.light.x) - .2;
+            double lo = 0, hi = rho / 2.5;
+            for (int iteration = 0; iteration < 64; ++iteration) {
+                const double t = (lo + hi) * .5, D = std::sqrt(2.25 + 1.25 * t * t);
+                if (2.5 * t + .5 * t / D < rho)
+                    lo = t;
+                else
+                    hi = t;
+            }
+            const double t = (lo + hi) * .5, D = std::sqrt(2.25 + 1.25 * t * t);
+            expectVector(xyz(outputs[0].position), {static_cast<float>(.2 + t), 0, 0});
+            expectVector(xyz(outputs[0].geometric), {static_cast<float>(.2 + t + .5 * t / D), 0, .5F});
+            ASSERT_NO_FATAL_FAILURE(probe(scene, std::span(&input, 1), outputs, 6U));
+            EXPECT_EQ(outputs[0].position.w, 0.0F) << "TT shift must respect target receiver depth";
+        }
+        if (!glass) {
+            for (auto mode : {7U, 8U, 9U}) {
+                ASSERT_NO_FATAL_FAILURE(probe(scene, std::span(&input, 1), outputs, mode));
+                EXPECT_EQ(outputs[0].position.w, mode == 8U ? 1.0F : 0.0F) << "Inverse root identity mode=" << mode;
+            }
+            input.light.w = 1000;
+            ASSERT_NO_FATAL_FAILURE(probe(scene, std::span(&input, 1), outputs, 4U));
+            EXPECT_EQ(outputs[0].position.w, 0.0F) << "Shift may not invent a root outside the finite caster";
+        }
+    }
+}

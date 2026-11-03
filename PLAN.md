@@ -73,7 +73,32 @@ manual dispatch remains available. GI-SMS PR/manual jobs select the correspondin
 Harmonia development/WIP branch; the old default-main checkout missed SmsPass.hpp.
 Local Windows builds/lint and event/ref policy controls pass; hosted CI has not
 been regraded green. Build/check locally before an authorized push. Main and
-dependency pins are unchanged; this development branch excludes WIP spatial reuse.
+dependency pins are unchanged. The consolidated `dev/gi-sms-restir` branch now
+includes experimental, default-off spatial reuse; the WIP ref is archival.
+
+**NEXT-MODEL ENTRY — current remaining queue:** read Harmonia/PLAN.md section 3,
+"GI-SMS #2 — bounded finish plan / next-model handoff". It supersedes the older
+task sequences below. Runtime checkpoints: primary branches are paired H/Theia
+`wip/gi-sms-spatial-reuse`, Hyperion `dev/gi-sms-restir`. All main refs remain
+pre-SMS. Latest product evidence with the step-1 mode wiring is Hy71/71 and
+T57/57 (exits 0, zero validation/skips) plus all-mode Application smoke captures.
+Step-1/2 rows are recorded in the central finish plan (runner + C1–C3 scenes
+committed; C1 reference accepted at 4096 spp). Do not redo completed work.
+
+**Current focus:** C1 correctness PASSES (pooled ROI RGB .99817/.99368 at 512/2048
+frames vs the 4096-spp PT reference; MSE 3.05× better at 2048) — but reuse is
+bit-identical to local there: zero accepted shifts in the Application context
+(the mirror fixture still accepts shifts; T57 passes). The central plan row 4
+records the census receipts and the exact blocker. Do not proceed to equal-time
+C2/C3 or galleries until Application-context shift acceptance is restored.
+
+Rendered spatial gate for the current reuse slice: `SmsGiReuseFrameFixture.*`
+compares the same N16/prior/path-mode local candidates with reuse off/on, 512
+frames × four fixed seeds, 2% reflected RGB per seed and lower aggregate
+128-frame MSE with reuse. Reset GiPass histories and accumulation between modes.
+Then grade glass/Beer/SDS and curved/visibility/support boundaries; wrong MIS,
+support and inverse checks must be rejected before production enablement.
+Same-budget error reduction is not an equal-time performance claim.
 
 **Continuation checkpoint (2026-11-03):** `dev/gi-sms-restir` holds the verified
 local-SMS source at `76e2472` plus handoff documentation. The unfinished reuse
@@ -86,15 +111,94 @@ The central pause verification plan, branch table, exact resume commands and
 remaining #2 scope are in `Harmonia/PLAN.md`, section 3, "GI-SMS #2 continuation
 checkpoint". Stable source excludes the unbuilt reuse/cache changes.
 
-Before continuing the WIP, fix the returned source-review findings: the target
-cache currently runs even with reuse disabled and can overflow `value*pLight`;
-attenuated prefixes can underflow a valid candidate's physical-F proxy to zero;
-and materialized UCWs can overflow despite finite final radiometry. Keep proxy
-and weighting operations consistently range-safe/factored, add sensitive controls
-and a reuse-off bypass, and do not clamp/drop valid candidates or use reciprocal
-counts as exact PDFs. No fix is claimed by this archival checkpoint. The final
-reuse wiring and `SmsGiReuseFrameFixture.*` are not built or rendered. Unit
-shift-control logs now show all three expected failures and restored passes.
+**CI/local-first policy:** automatic checks run on main pushes and main-target
+PRs only; manual dispatch remains available. GI-SMS PR/manual builds check out
+the matching Harmonia development/WIP branch, not pre-SMS Harmonia main (the
+missing SmsPass.hpp caused the reported hosted failure). Release pins and main
+are unchanged. Build locally, warning-clean, and run relevant checks/lint before
+an authorized push. Local Windows builds/lint and the event/ref policy controls
+pass; this is not a claim that hosted Linux/Windows CI has been regraded green.
+Detailed CI failure/repair receipts are in the central Harmonia continuation plan.
+
+The returned source review identified unused-cache overflow, attenuated-prefix
+proxy underflow and materialized-UCW overflow. The numeric-repair WIP now bypasses
+the cache when reuse is disabled, stores log2 positive proxies with explicit zero
+support, preserves reciprocal/conditional/light factors, and evaluates shifted
+physical F without materializing its final RGB product. No clamp/drop or
+reciprocal-as-PDF substitution is used. The 24-byte producer / 16-byte prefix
+ABI, actual-event ownership and sampler trial law are unchanged.
+
+Numeric receipt: warning-clean build exit 0; five `SmsResamplingFixture.*` GPU
+tests pass with zero validation messages. Range assertions compare raw HDR/tiny
+outputs to independent host-double products, preserving finite estimates near
+1e38, 4e-20 and 4e8; finite-domain RGB=(10,10,10) also holds under extreme proxy
+scalings. Six controls fail (exit 1) for original float materialization, unused
+cache validation, wrong light-PDF factor, missing-support handling, wrong RIS
+normalization and wrong selection; all six exact restores pass (exit 0).
+`verify_sms_log_controls.py` and receipts are in the approved scratch directory.
+The first build exposed uninitialized-output warnings and the first HDR check
+normalized on-GPU, which can underflow its own reciprocal; explicit initialization
+and raw-output/host-double comparison repair those issues without relaxing the
+relative tolerance. These attempts remain in the saved logs. Native wiring now
+compiles. Hyperion sampler/prior bytes remain exact (recorded hashes); eight
+selected Theia local/reuse frame tests pass (exit 0, zero validation diagnostics).
+Reuse-on mirror ratios are .998317 / 1.000240 / .997181 / .999980 and the aggregate
+128-frame MSE reuse/local ratio is .491742. Local configured mirror, glass,
+absorption, SDS and depth-cutoff receipts retain their earlier values.
+This numeric unit receipt does not accept general rendered reuse or complete #2.
+
+**Next rendered slice:** add reuse-enabled closed-glass, pure-absorption and SDS
+mirror-prefix fixtures using the existing independent Snell/Beer/virtual-emitter
+oracles (not a second implementation of the renderer). Four fixed seeds × 512
+frames each; subtract independent direct lighting and require 2% caustic RGB per
+seed. Reuse-enabled insufficient receiver depth must retain only PT-owned direct
+prefix lighting. A shared fixture driver is justified by these three simultaneous
+consumers and their identical reset/completion/RGB grading invariants; geometry
+and prediction builders remain unchanged. Verify with
+`Theia/build/tests/theia_module_tests.exe --gtest_filter="SmsGiReuseGlassFrameFixture.*:SmsGiReuseAbsorptionFrameFixture.*:SmsGiReuseSdsFrameFixture.*:SmsGiReuseSdsDepthFrameFixture.*"`.
+The existing mirror reuse gate also needs a no-op/disabled-reuse control that
+fails its MSE improvement assertion. Curved/mixed-depth/visibility acceptance and
+equal-time performance remain separate subsequent slices.
+
+Extended-slice finding: SDS mirror-prefix reuse and the insufficient-depth
+PT-owned direct control pass all four seeds. Closed glass and absorption hit GPU
+numeric error on seed 91 after seed 17 passes. Diagnostic-only disabled spatial
+resolve passes the same four glass seeds; rejection-bit instrumentation locates
+the failure at a positive reservoir with no selected candidate (seed 91/frame
+101), not local sampling or manifold support. The shader/bytes are exactly
+restored after each diagnostic run.
+
+Root cause: `log(u)+total<weight` loses a near-one draw when added to a larger
+log-weight. The new largest-valid-uniform GPU regression fails on the untouched
+selection implementation (both single-candidate and dominant-candidate cases).
+Repair: always choose the first positive candidate and compare `u` to the bounded
+probability `exp2(weight-total)`; keep explicit u=0 support. RNG, weights, frozen
+endpoints, residual/root tolerances and failure handling are unchanged. Re-run
+numeric controls, all four extended cases and the rendered mirror no-op control
+before accepting or pushing this repair. Do not skip the failing seed or count
+failed/pending frames as images.
+
+Completed repair receipt (before the full-regression checkpoint): warning-clean
+build exit 0, six numeric GPU units pass, all seven named controls fail (exit 1)
+and exact restores pass (exit 0). All four extended rendered fixtures pass,
+validation-clean. Glass RGB ratios by seed: 1.000540 / 1.001390 / 1.001980 /
+1.005180; Beer RGB ratios span 1.000690–1.005300; mirror-prefix SDS ratios span
+.998454–1.002240. Insufficient receiver depth has zero SMS continuations and
+caustic-relative residuals -.000944–.002181 (PT-owned direct only).
+Rendered disabled-estimator control fails the MSE assertion at reuse/local=1;
+exact restored resolve passes at .491742. No RNG/proposal/weight or tolerance
+change was used to fix the selection failure. This accepts planar mirror/TT,
+colored absorption and the mirror-prefix SDS fixture, not curved/complex reuse,
+glass camera-prefix combinations, mixed-depth support, equal-time performance
+or final galleries.
+Full current Theia product regression now passes **57/57** (219.12 s, exit 0),
+zero validation diagnostics and no skipped product tests; the three `analysis`
+lanes were excluded. Local Q2-Q6 preflight also passes. Candidate build is
+warning-clean (exit 0). Commands/receipts: `ctest --test-dir Theia/build -LE
+analysis -V` → `sms_reuse_full_theia_ctest.log`, local lint →
+`sms_reuse_full_theia_lint.log`, numeric/extended/no-op receipts in the approved
+scratch directory. The previous failure and all diagnosis/control/restoration
+attempts are preserved, not reported as a clean first attempt.
 
 **GI-SMS #2 staged verification plan (Theia `257c8b4`, Harmonia `042fc74`):**
 keep monolithic GI; wavefront stage-1 stays parked. Development/WIP pushes only;
@@ -149,10 +253,13 @@ iterations per walk, unchanged 1e-5 residual / 1e-4 inverse-root matching. J=1 i
 the delta root × static emitter-area domain. Remaining-depth and raw visibility
 support are checked in both directions. No recursively merged or temporal input.
 
-Cache the source proxy `luminance(F)` BEFORE reciprocal weighting in the otherwise
+Cache the source proxy `log2(luminance(F))` BEFORE reciprocal weighting in the otherwise
 unused frozen-prefix `.w` component; receiver-domain presence comes from the work
 phase, not that scalar. This keeps MIS proxies independent of random reciprocal
-counts. Root/light UCW is count/P(C)/p_light, never an exact PDF. Cross-domain
+counts. The numeric-repair WIP uses an explicit zero-support sentinel and log
+proxies/factors so positive support and finite final estimates survive physical-F
+or UCW range overflow/underflow. Reuse-off bypasses cache validation/writes.
+Root/light UCW is count/P(C)/p_light, never an exact PDF. Cross-domain
 physical F evaluation reuses the common contribution helper with unit light PDF,
 the preserved emitter fields and destination prefix RGB. The shared compute
 include may expose helpers-only and an optional target-cache hook without adding
@@ -160,6 +267,18 @@ another renderer-specific copy of its radiometry. Keep work/local cache unchange
 after resampling; only shade HDR. Validate pure MIS against exact finite-domain
 enumeration (including partial support and alternative proxy scalings), then real
 planar/curved radiometry with wrong support/inverse/MIS controls before enabling.
+First reuse unit: `SmsResamplingFixture.*` exercises exact finite-domain RGB
+expectation (10,10,10), partial support and alternative positive proxy scalings
+(1.5,1/7,9), tolerance 1e-4; also RIS selection thresholds, nonfinite rejection
+and 1e38-scale pairwise weights. Constant-MIS / wrong reservoir normalization /
+wrong selection controls must fail, exact restores pass. This unit is not a
+manifold-shift or rendered-reuse acceptance claim.
+Next shift unit: `SmsSceneFixture.NativeManifoldShift*` checks real mirror and
+closed-TT forward/inverse mappings at fixed emitter points, independent reflected
+midpoint / scalar Snell target positions (3e-4), rejection for insufficient target
+depth and a caster outside its finite extent, and inverse-root identity around
+the unchanged 1e-4 matching tolerance. Wrong light endpoint, ignored target
+budget and disabled inverse identity controls must fail; restored shaders pass.
 The one-root Bernoulli counterexample gives .801396145800 instead of 1 when
 inverse counts are misused as exact PDFs in balance MIS (sampler successes .5/.25).
 Producer wiring proposal: one independently PT-sampled specular prefix / SMS slot
