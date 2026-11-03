@@ -11,7 +11,7 @@ namespace theia {
 namespace {
 struct SmsProducerContext {
     VkDeviceAddress work, prefixes;
-    std::uint32_t resolution, pad;
+    std::uint32_t resolution, flags;
 };
 static_assert(sizeof(SmsProducerContext) == 24);
 } // namespace
@@ -65,7 +65,10 @@ bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
         if (!sms)
             return false;
         m_sms = std::move(*sms);
-        context = {m_sms.workBuffer().deviceAddress(), m_smsPrefixes.deviceAddress(), m_cfg.smsPartitionResolution, 0};
+        context = {m_sms.workBuffer().deviceAddress(),
+                   m_smsPrefixes.deviceAddress(),
+                   m_cfg.smsPartitionResolution,
+                   m_cfg.smsSpatialReuse ? 1U : 0U};
     }
     // Immutable configuration, uploaded only at initialization/resize. A disabled
     // context is real configuration, never a host-written hot-path work counter.

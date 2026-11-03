@@ -68,6 +68,14 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
   when they land.
 ## How to continue
 
+Rendered spatial gate for the current reuse slice: `SmsGiReuseFrameFixture.*`
+compares the same N16/prior/path-mode local candidates with reuse off/on, 512
+frames × four fixed seeds, 2% reflected RGB per seed and lower aggregate
+128-frame MSE with reuse. Reset GiPass histories and accumulation between modes.
+Then grade glass/Beer/SDS and curved/visibility/support boundaries; wrong MIS,
+support and inverse checks must be rejected before production enablement.
+Same-budget error reduction is not an equal-time performance claim.
+
 **GI-SMS #2 staged verification plan (Theia `257c8b4`, Harmonia `042fc74`):**
 keep monolithic GI; wavefront stage-1 stays parked. No push, tags, release or pins.
 
@@ -131,6 +139,18 @@ another renderer-specific copy of its radiometry. Keep work/local cache unchange
 after resampling; only shade HDR. Validate pure MIS against exact finite-domain
 enumeration (including partial support and alternative proxy scalings), then real
 planar/curved radiometry with wrong support/inverse/MIS controls before enabling.
+First reuse unit: `SmsResamplingFixture.*` exercises exact finite-domain RGB
+expectation (10,10,10), partial support and alternative positive proxy scalings
+(1.5,1/7,9), tolerance 1e-4; also RIS selection thresholds, nonfinite rejection
+and 1e38-scale pairwise weights. Constant-MIS / wrong reservoir normalization /
+wrong selection controls must fail, exact restores pass. This unit is not a
+manifold-shift or rendered-reuse acceptance claim.
+Next shift unit: `SmsSceneFixture.NativeManifoldShift*` checks real mirror and
+closed-TT forward/inverse mappings at fixed emitter points, independent reflected
+midpoint / scalar Snell target positions (3e-4), rejection for insufficient target
+depth and a caster outside its finite extent, and inverse-root identity around
+the unchanged 1e-4 matching tolerance. Wrong light endpoint, ignored target
+budget and disabled inverse identity controls must fail; restored shaders pass.
 The one-root Bernoulli counterexample gives .801396145800 instead of 1 when
 inverse counts are misused as exact PDFs in balance MIS (sampler successes .5/.25).
 Producer wiring proposal: one independently PT-sampled specular prefix / SMS slot
