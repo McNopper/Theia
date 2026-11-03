@@ -68,8 +68,30 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
   when they land.
 ## How to continue
 
+**Continuation checkpoint (2026-11-03):** `dev/gi-sms-restir` holds the verified
+local-SMS source at `76e2472` plus handoff documentation. The unfinished reuse
+changes are preserved separately on `wip/gi-sms-spatial-reuse` (original exact
+snapshot `da3bebd`); resume it together with Harmonia's same-named WIP branch
+(snapshot `4545db1`). All earlier unpublished work is off `main`. Commits and
+pushes are authorized on these development/WIP branches only, not `main`, tags,
+releases or dependency pins; this supersedes older task-local no-push notes.
+The central pause verification plan, branch table, exact resume commands and
+remaining #2 scope are in `Harmonia/PLAN.md`, section 3, "GI-SMS #2 continuation
+checkpoint". Stable source excludes the unbuilt reuse/cache changes.
+
+Before continuing the WIP, fix the returned source-review findings: the target
+cache currently runs even with reuse disabled and can overflow `value*pLight`;
+attenuated prefixes can underflow a valid candidate's physical-F proxy to zero;
+and materialized UCWs can overflow despite finite final radiometry. Keep proxy
+and weighting operations consistently range-safe/factored, add sensitive controls
+and a reuse-off bypass, and do not clamp/drop valid candidates or use reciprocal
+counts as exact PDFs. No fix is claimed by this archival checkpoint. The final
+reuse wiring and `SmsGiReuseFrameFixture.*` are not built or rendered. Unit
+shift-control logs now show all three expected failures and restored passes.
+
 **GI-SMS #2 staged verification plan (Theia `257c8b4`, Harmonia `042fc74`):**
-keep monolithic GI; wavefront stage-1 stays parked. No push, tags, release or pins.
+keep monolithic GI; wavefront stage-1 stays parked. Development/WIP pushes only;
+no main merge/push, tags, release or pins.
 
 | Slice | Acceptance / independent oracle | Verification |
 | --- | --- | --- |
