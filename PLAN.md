@@ -29,20 +29,38 @@ counter records completed work up to 175 trials, with no truncation. C2/C3 and a
 main merge must not be represented as accepted until the owner decides the
 proposal/variance-reduction scope. No temporal merge or tolerance relaxation.
 
-**Root-cause update:** outlier factor diagnostics show a huge physical base
-(max per-channel base `7455.4`, final estimate `22366.2` on one frame), while
-conditional mass remains ~0.807 and completed reciprocal trials only reach 175.
-An independent double-precision curved-chain oracle then found the production
-two-interface geometric term is about `2.441x` too large at a non-caustic test
-root (`0.010009538` versus `0.004099860`). This is a concrete Jacobian defect,
-not merely heavy-tail variance. Optional max-factor diagnostics are implemented;
-the estimator is still restored to production settings and remains experimental.
+**Root-cause update (corrected):** outlier factor diagnostics show a huge
+physical base (max per-channel base `7455.4`, final estimate `22366.2` on one
+frame), while conditional mass remains ~0.807 and completed reciprocal trials
+only reach 175. The earlier "2.441x Jacobian defect" and "half-vector
+constraint" claims are withdrawn: a double-precision replica proved the
+untouched production geometric term exact (oracle agreement `2.6e-9`; GPU
+`3.3e-7` with the fixture's inconsistent data). The real fixture defect was
+`dndv = dpdv` instead of the true `dn/dv` in the Harmonia test input; it is
+fixed and the new curved-oracle regression passes with the untouched shader.
+The C1 pooled excess (`local@512f` per-seed ratios
+`1.163/1.500/1.128/0.788`) is heavy-tail dominated, not a uniform scale bias;
+reference-convergence and plain-PT parity checks decide the remaining blocker.
+Optional max-factor diagnostics are implemented; the estimator stays at
+production settings and remains experimental.
 
-**Concrete defect isolated:** independent oracle shows production transmission
-constraint uses `wi + eta*wo`, which is normal—rather than tangent—at a curved
-glass root. Correcting this changes shared solver roots and the geometric
-Jacobian together and requires coordinated fixture updates. Do not tune sampling
-or merge until that correction and fresh C1 acceptance exist.
+**C1 reference and plain-PT baselines verified, bias excluded
+(2026-11-03).** The accepted 4096-spp Hyperion reference is converged:
+16384-spp pooled halves read `+0.21%` and 65536-spp `+0.10%` against it on
+the C1 ROI. Plain-PT Theia (`--sms-mode off`, 5827 frames) reads
+`0.996/0.997` per seed. The scene, the shared PT estimator and the reference
+are therefore unbiased on this ROI. The SMS-local convergence ladder on the
+same reference reads pooled `1.1446` @512f (seed-std `0.291`) -> `1.0722`
+@2048f (`0.151`) -> `1.0165` @8192f (`0.047`); `reuse@2048` `1.0718`. No
+rung shows statistically significant bias: the pooled excess dilutes as
+rare-firefly dilution predicts and three of four seeds already land at
+`0.99`-`1.01` by 2048f. The blocker is extreme contribution-tail variance,
+which the harness `+-2%` energy gate at 512/2048 frames structurally cannot
+absorb; remediation requires principled tail-variance reduction under an
+unbiasedness review - a research scope decision, not an estimator repair
+(caps/clamps/tolerance changes stay rejected per the decision boundary).
+Optional max-factor diagnostics are implemented; the estimator stays at
+production settings and remains experimental.
 
 **Living source of truth for outstanding work.** Shipped items are removed from the work
 lists; the shipped record is the *Baseline* below and `git log`. Only outstanding work is
