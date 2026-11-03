@@ -77,11 +77,12 @@ T57/57 (exits 0, zero validation/skips) plus all-mode Application smoke captures
 Step-1/2 rows are recorded in the central finish plan (runner + C1–C3 scenes
 committed; C1 reference accepted at 4096 spp). Do not redo completed work.
 
-**Current focus:** C1 correctness (Theia local/reuse vs the converged PT
-reference). The first attempt failed at 1.104 pooled because the sphere primitive
-is analytic (Hyperion) vs tessellated (Theia); qualification now uses shared
-triangulated OBJ casters. Equal-time performance, C2/C3, stability, final code
-checkpoint and galleries follow the central rows.
+**Current focus:** C1 correctness PASSES (pooled ROI RGB .99817/.99368 at 512/2048
+frames vs the 4096-spp PT reference; MSE 3.05× better at 2048) — but reuse is
+bit-identical to local there: zero accepted shifts in the Application context
+(the mirror fixture still accepts shifts; T57 passes). The central plan row 4
+records the census receipts and the exact blocker. Do not proceed to equal-time
+C2/C3 or galleries until Application-context shift acceptance is restored.
 
 Rendered spatial gate for the current reuse slice: `SmsGiReuseFrameFixture.*`
 compares the same N16/prior/path-mode local candidates with reuse off/on, 512
