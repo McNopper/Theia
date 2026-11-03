@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstdint>
+#include <expected>
 #include <slang-math/slang-math.hpp>
 
 #include "harmonia/DeviceContext.hpp"
@@ -13,6 +14,7 @@
 #include "harmonia/core/DescriptorBufferWriter.hpp"
 #include "harmonia/core/Image.hpp"
 #include "harmonia/core/VulkanHandle.hpp"
+#include "harmonia/pipeline/SmsPass.hpp"
 #include "theia/renderer/RendererConstants.hpp"
 
 namespace theia {
@@ -43,6 +45,10 @@ class GiPass {
         VkImageView giBufferView = VK_NULL_HANDLE;
         VkImage gbufferImage = VK_NULL_HANDLE; ///< forward thin G-buffer: view-space normal + roughness
         VkImageView gbufferView = VK_NULL_HANDLE;
+        bool smsEnabled = true;
+        std::uint32_t smsPartitionResolution = 16;
+        bool smsPriorEnabled = true;
+        std::uint32_t smsTrialBudget = 32; ///< Per-dispatch budget, never a total reciprocal-trial cap.
     };
 
     /// Per-frame scene + camera state consumed by record(). Most resources are
@@ -139,7 +145,17 @@ class GiPass {
     ///        command buffer). The dispatch still runs; only the pre-barriers are skipped.
     void record(VkCommandBuffer cmd, const FrameParams& params, bool skipPreBarriers = false);
 
-    [[nodiscard]] bool isInitialized() const noexcept { return m_pipeline != VK_NULL_HANDLE; }
+    [[nodiscard]] bool isInitialized() const noexcept {
+        return m_pipeline != VK_NULL_HANDLE && m_frameError == VK_SUCCESS;
+    }
+    [[nodiscard]] bool usesSms(std::uint32_t emitterCount, std::uint32_t depth) const noexcept {
+        return m_cfg.smsEnabled && emitterCount != 0 && depth >= 3;
+    }
+    [[nodiscard]] bool completionRequired() const noexcept {
+        return m_frameError != VK_SUCCESS || (m_frameRecorded && m_smsFrameActive);
+    }
+    [[nodiscard]] std::expected<bool, VkResult> frameReady() const noexcept;
+    [[nodiscard]] VkResult recordContinuation(VkCommandBuffer cmd) noexcept;
 
   private:
     struct GiPushConstants {
@@ -175,13 +191,15 @@ class GiPass {
         std::uint32_t pairingEnabled = 0;        ///< 1 = Gaussian paired neighbours in path-reservoir spatial reuse
         std::uint32_t reconnectShiftEnabled = 1; ///< GI-ENH (a): reconnection shift feature mask
                                                  ///< bit0 = k=2, bit1 = k>=3. 0 = replay-only.
+        std::uint32_t smsEnabled = 0;
     };
     // Layout guard: must equal the Slang `GiParams` struct exactly (2×float4x4 + float4
-    // + 26 scalars = 144 + 104 = 248). Fails loudly on any accidental padding mismatch.
-    static_assert(sizeof(GiPushConstants) == 248);
+    // + 27 scalars = 144 + 108 = 252). Stays within the existing 256-byte device budget.
+    static_assert(sizeof(GiPushConstants) == 252);
 
     [[nodiscard]] bool createDescriptors();
     [[nodiscard]] bool createPipeline(const char* giSpv);
+    [[nodiscard]] bool createSmsResources(const harmonia::core::CommandPool& uploadPool);
     void updateDescriptors(const FrameParams& params);
     void
     updateRestirDescriptors(const FrameParams& params,
@@ -204,6 +222,10 @@ class GiPass {
 
     harmonia::core::UniquePipelineLayout m_pipelineLayout;
     harmonia::core::UniquePipeline m_pipeline;
+    harmonia::pipeline::SmsPass m_sms;
+    harmonia::core::Buffer m_smsContext, m_smsPrefixes, m_smsPrior;
+    mutable VkResult m_frameError = VK_SUCCESS;
+    bool m_frameRecorded = false, m_smsFrameActive = false;
 
     bool m_hdrFirstUse = true;
     const Scene* m_boundScene = nullptr;

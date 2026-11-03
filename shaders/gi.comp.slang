@@ -23,6 +23,8 @@ import env_sample;      // evalEnvImportancePdfDir
 import path_integrator; // ITracer, SurfaceHit, PathState, EnvNeeSample, evalEnvNEESample, integrateSurface, sampleEnvMapLatLong
 import medium_walk;     // shared volumetric random-walk math (runMediumWalk)
 import surface;         // shared OpenPBR surface-frame (texture-map) populator
+import sms_path;
+import sms_work;
 
 [[vk::push_constant]]
 cbuffer GiPC {
@@ -59,7 +61,8 @@ cbuffer GiPC {
                                            //   bit0 (1) = k=2 reconnection shift
                                            //   bit1 (2) = k>=3 hybrid reconnection shift
                                            // Step-through debug: THEIA_SHIFT_MASK.
-                                           // (0 = replay-only; A/B via THEIA_NO_RECONNECTION)
+                                            // (0 = replay-only; A/B via THEIA_NO_RECONNECTION)
+    uint     smsEnabled;
 };
 
 // ── A4: ReSTIR DI reservoir type ──────────────────────────────────────────────
@@ -337,6 +340,8 @@ static const float kAdaptiveVarianceScale = 20.0;
 struct GiHit {
     bool   hit;
     uint   materialIdx;
+    uint   instanceIndex;
+    uint   primitiveIndex;
     float3 worldPos;
     float3 shadingNormal;
     float3 geoNormal; // RAW outward-winding geometric normal (NOT ray-facing): consumers flip by
@@ -405,6 +410,8 @@ GiHit reconstructGiHitFromQuery(float2 committedBary, float committedRayT, uint 
     hit.shadingNormal = g.shadingNormal;
     hit.geoNormal = g.geoNormal;
     hit.materialIdx = inst.materialIndex;
+    hit.instanceIndex = instIdx;
+    hit.primitiveIndex = tri;
     hit.dist = committedRayT;
     hit.hit = true;
     return hit;
@@ -451,9 +458,10 @@ GiHit traceClosestHit(float3 origin, float3 dir, float maxDist, float tMin) {
 /// drift. Consumes its own bounded budget (does NOT count against the surface bounce budget). On
 /// exit, updates origin/dir to the refracted ray leaving the medium and clears insideMedium; on
 /// absorption terminates the path.
-void runMediumWalk(inout PathState state, inout float3 origin, inout float3 dir) {
+void runMediumWalk(inout PathState state, inout float3 origin, inout float3 dir,inout SmsPathState smsPath) {
     const uint kMaxMediumWalk = 256u;
     const bool pureAbsorption = mediumIsPureAbsorber(state.mediumAlbedo);
+    if (!pureAbsorption) { smsPath.kind=0u; smsPath.prefixSpecular=false; }
     for (uint i = 0u; i < kMaxMediumWalk && state.insideMedium && !state.terminated; ++i) {
         float freeDist = mediumSampleFreeFlight(state.mediumSigmaT, state.mediumAlbedo, state.seed);
 
@@ -478,7 +486,8 @@ void runMediumWalk(inout PathState state, inout float3 origin, inout float3 dir)
         mediumBoundaryTransmittance(state.throughput, state.mediumSigmaT, pureAbsorption, h.dist);
         float3 outOrigin, outDir;
         bool exited = mediumResolveExit(state.seed, state.mediumEta, dir, h.geoNormal, h.worldPos,
-                                        outOrigin, outDir);
+                                         outOrigin, outDir);
+        smsAdvancePathMediumBoundary(smsPath,exited,uint2(h.instanceIndex,h.materialIdx),pureAbsorption,dir,h.geoNormal);
         dir = outDir;
         origin = outOrigin;
         if (exited) {
@@ -487,6 +496,11 @@ void runMediumWalk(inout PathState state, inout float3 origin, inout float3 dir)
         }
     }
     if (state.insideMedium) { state.terminated = true; }
+}
+
+void runMediumWalk(inout PathState state,inout float3 origin,inout float3 dir) {
+    SmsPathState unowned=makeSmsPathState(0u,uint2(0,0),false);
+    runMediumWalk(state,origin,dir,unowned);
 }
 
 /// Hard cap on OpenPBR opacity pass-throughs (null interactions) a single path may
@@ -1024,6 +1038,8 @@ float4 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
 /// several of these). Returns false when the sample produced no usable contribution (degenerate
 /// BSDF direction or a non-finite result); callers treat that as a zero contribution. `outEnvNee`
 /// is kept separate from `outIndirect` so the firefly clamp never biases the sun term.
+#include "gi_sms.slang"
+
 bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp, bool includePrimaryEnvNee,
                           out float3 outIndirect, out float3 outEnvNee,
                           bool captureRe, bool disableRR, out ReconnectionCapture outRec) {
@@ -1074,6 +1090,8 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
     TheiaTracer tracer;
     float3 origin = 0.0.xxx;
     float3 dir = 0.0.xxx;
+    SmsPathState smsPath=beginSmsPath();
+    bool primarySmsReceiver=false;
 
     // Primary-vertex opacity gate — this pass's half of mix(ambient-medium, surface, α).
     // The two passes gate DIFFERENT terms, so they compose rather than double-count: the
@@ -1095,6 +1113,7 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
     NeeEventCapture capEnvUnused;
     float3 primaryEnvNee = 0.0.xxx;
     if (!primaryPassThrough) {
+        if (smsEnabled!=0u) primarySmsReceiver=smsCapturePathReceiver(smsPath,primary.mat,maxDepth);
         if (includePrimaryEnvNee && envImportance && emissiveTriangleCount > 0u) {
             float3 sum = 0.0.xxx;
             const uint count = 4u;
@@ -1111,12 +1130,6 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
                 primaryEnvNee = 0.0.xxx;
             }
         }
-
-        // GI-SMS (MNEE / specular manifold sampling) is NOT wired in here — see PLAN.md.
-        // A faithful implementation needs Zeltner et al. 2020 Alg. 1's full contribution
-        // form: specular_reflectance (Fresnel at the specular vertex) × geometric_term
-        // (the manifold-Jacobian ratio dw0_dx1·dx1_dx2, not a plain cos·cos/dist·dist) ×
-        // Le / p_offset. Sampling-only; the shared OpenPBR BSDF is untouched.
 
         // --- Primary BSDF continuation (env/emissive direct handled per scene type above) ---
         BSDFSample bs = sampleBSDF(primary.mat, primary.wo,
@@ -1165,9 +1178,15 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
         state.passedThrough = true;
     }
 
+    if (smsEnabled!=0u) {
+        state.nextDirection=dir;
+        float3 rawGeoNormal=primary.backface ? -primary.geoNormal : primary.geoNormal;
+        smsAdvancePathSurface(smsPath,primary,state,rawGeoNormal,uint2(0,0),maxDepth,primarySmsReceiver);
+    }
+
     // G9/G10: if the primary continuation entered a medium, walk it before the surface loop.
     if (state.insideMedium) {
-        runMediumWalk(state, origin, dir);
+        runMediumWalk(state, origin, dir,smsPath);
     }
 
     // An OpenPBR opacity pass-through selects the ambient-medium side of
@@ -1222,6 +1241,13 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
         if (!all(isfinite(surf.mat.baseColorWeight.xyz)) || !all(isfinite(surf.mat.emissionColorLum.xyz))) {
             break;
         }
+        uint currentDepth=bounce+primaryCharge;
+        uint remainingDepth=maxDepth>currentDepth ? maxDepth-currentDepth : 0u;
+        bool currentSmsReceiver=false;
+        if (smsEnabled!=0u) {
+            if (smsPathEmissionTail(smsPath) && smsGiCollectableEmitter(h,surf)) break;
+            currentSmsReceiver=smsCapturePathReceiver(smsPath,surf.mat,remainingDepth);
+        }
         // Prevent primary direct-light double count: camera->primary->emissive (bounce 0)
         // is forward-owned direct (RectLight/emissive proxy), so GI must not add it.
         const float3 surfEmission = max(surf.mat.emissionColorLum.xyz, 0.0.xxx)
@@ -1242,7 +1268,11 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
         const bool smoothDielectricTransmission =
             saturate(surf.mat.transmissionColorWeight.w) > 0.1 &&
             surf.mat.specularRoughAnisoIor.x < 0.05;
-        if (a3RegularizationEnabled != 0u && bounce > 0u && !smoothDielectricTransmission) {
+        // The independent SMS prefix/receiver and supported caster laws use the
+        // physical material, so do not regularize those same ordinary-PT events.
+        bool smsPhysicalEvent=smsEnabled!=0u &&
+            (smsPath.prefixSpecular || currentSmsReceiver || smsReflectionCaster(surf.mat));
+        if (a3RegularizationEnabled != 0u && bounce > 0u && !smoothDielectricTransmission && !smsPhysicalEvent) {
             const float regStrength = 0.3; // roughness floor the lobe is widened toward
             const float curRough = surf.mat.specularRoughAnisoIor.x;
             // Smooth ramp: full effect at roughness 0, fades to nothing by regStrength.
@@ -1296,6 +1326,9 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
             envMarginalCdf, envConditionalCdf,
             envImportanceWidth, envImportanceHeight, envEnabled, envLuminanceScale,
             t_envMap, s_env, state);
+        if (smsEnabled!=0u)
+            smsAdvancePathSurface(smsPath,surf,state,h.geoNormal,uint2(h.instanceIndex,h.materialIdx),
+                remainingDepth,currentSmsReceiver);
         // GI-ENH k≥3: capture the hop (x_1 → x_2) at bounce 0 — direction, geometry, and
         // the reconnection-edge direction/pdf from x_2's BSDF sample.
         if (captureRe && bounce == 0u && !hopCaptured) {
@@ -1361,7 +1394,7 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
         // run the shared volumetric random walk here (its own bounded budget) before resuming
         // the surface bounce loop from the refracted exit ray.
         if (state.insideMedium) {
-            runMediumWalk(state, origin, dir);
+            runMediumWalk(state, origin, dir,smsPath);
             if (state.terminated) {
                 break;
             }
@@ -2086,6 +2119,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
         return;
     }
     const uint2 px = tid.xy;
+    initializeSmsPixel(px); // all slots, including pixel zero/background, get valid frozen metadata
     const int3 loadCoord = int3(int(px.x), int(px.y), 0);
 
     // --- Primary surface from the forward G-buffer ---
@@ -2114,6 +2148,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // "Hybrid Rendering for Real-Time Ray Tracing" RTG ch.25). The matIdxPlus1==0 sentinel
     // check above already handles background pixels; for non-background, the re-trace wins.
     const bool primaryHitValid = primaryHit.hit;
+    if (smsEnabled!=0u && !primaryHitValid) return; // no synthetic SMS/ownership domain on a visibility miss
     const float3 primaryWorldPos = primaryHitValid ? primaryHit.worldPos : worldPos;
 
     const float3 wo = normalize(cameraPos.xyz - primaryWorldPos);
@@ -2164,6 +2199,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
         primary.mat = mat;
         primary.wo = wo;
     }
+
+    if (primaryHitValid) produceSmsReceiver(px,primaryHit,primary);
 
     // Skip self-emissive primary surfaces: their radiance is the emitter itself, shown
     // directly by the forward pass; bounced light off an emitter is negligible.

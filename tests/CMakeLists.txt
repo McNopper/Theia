@@ -14,6 +14,7 @@ set(THEIA_MODULE_TEST_SOURCES
     module/test_cli_flags.cpp
     module/test_pass_timer.cpp
     module/test_sms_scene.cpp
+    module/test_sms_gi_frame.cpp
 )
 
 add_executable(theia_module_tests ${THEIA_MODULE_TEST_SOURCES})

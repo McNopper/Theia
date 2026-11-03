@@ -131,15 +131,22 @@ the 320×240 parity resolution.
 - **Completion staging for local GI-SMS work:** MotionVector/TAA record only in
   `Application::onSceneFrameReady`, after all scene continuations finish. Both queue
   paths freeze motion parameters before advancing previous VP. The shared host's
-  order is GI → MotionVector → TAA → Accumulation → Denoiser → ToneMap. Moving these
-  passes does not itself enable SMS; candidate integration is tracked in PLAN.md.
+  order is GI → MotionVector → TAA → Accumulation → Denoiser → ToneMap. GiPass now
+  exposes completion for active SMS/error frames; direct API callers must submit/
+  wait and drain `frameReady` / `recordContinuation` before reading/accumulating HDR.
 - **Local SMS scene adapter:** `shaders/sms_scene.slang` reads Theia's native set-0
   triangle resources and implements the shared projector contract. Native RT
   triangle/normal, planar R/TT, production-fallback and raw-occlusion fixtures are
-  tested. This is not yet active SMS/GI candidate or ReSTIR integration. Do not
+  tested. Local SMS candidates are integrated; SMS ReSTIR reuse is ongoing. Do not
   use a shading-reconstruction failure as proof that a shadow ray is clear.
   Native `sms_sample`, `sms_prior_build` and one-candidate `sms_resolve` entries
-  compile against this adapter/shared sampler, but are not yet wired into GiPass.
+  use the shared sampler and actual-event ownership classifier. Each pixel freezes
+  one independent first receiver after a specular/pure-absorption prefix, plus RGB
+  prefix and remaining depth. Active SMS uses graphics for initial/continued work;
+  ordinary no-SMS frames retain the async path. GPU counts stay GPU-generated.
+  Local mirror/Snell/Beer/SDS and production-configuration gates pass; successful
+  reconnection counts, SMS manifold reuse, equal-time quality and galleries are
+  not established by those local gates. See PLAN.md.
 - **The path reservoir has NO temporal merge — do not add one back.** A streamed temporal
   merge (yesterday's merged reservoir as today's input) double-counts re-selected history on
   heavy-tailed path candidates: measured −2.8% darker on cornell indirect @1024f, reproduced

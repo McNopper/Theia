@@ -110,6 +110,27 @@ preserves RGB=(10,10,10), including alternative target scalings. Constant MIS
 fails at RGB=(22/3,7,23/3). This verifies the planned oracle only; no Theia SMS
 reuse implementation is claimed. Proxy targets are not PDFs; reciprocal counts
 must never be substituted as exact densities in ordinary balance MIS.
+Spatial implementation contract: consume only this frame's completed, UNMERGED
+local work. Three domain-separated neighbor draws use Philox block FFFFFFFC
+(initial/light/pilot blocks remain distinct); missing/out-of-bounds domains have
+zero proxy support and canonical pairwise compensation. Each neighbor requires
+forward+inverse checks for its sample and for the canonical sample: fixed
+object/material/event/eta/count, preserved emitter point, at most 5 Newton
+iterations per walk, unchanged 1e-5 residual / 1e-4 inverse-root matching. J=1 in
+the delta root × static emitter-area domain. Remaining-depth and raw visibility
+support are checked in both directions. No recursively merged or temporal input.
+
+Cache the source proxy `luminance(F)` BEFORE reciprocal weighting in the otherwise
+unused frozen-prefix `.w` component; receiver-domain presence comes from the work
+phase, not that scalar. This keeps MIS proxies independent of random reciprocal
+counts. Root/light UCW is count/P(C)/p_light, never an exact PDF. Cross-domain
+physical F evaluation reuses the common contribution helper with unit light PDF,
+the preserved emitter fields and destination prefix RGB. The shared compute
+include may expose helpers-only and an optional target-cache hook without adding
+another renderer-specific copy of its radiometry. Keep work/local cache unchanged
+after resampling; only shade HDR. Validate pure MIS against exact finite-domain
+enumeration (including partial support and alternative proxy scalings), then real
+planar/curved radiometry with wrong support/inverse/MIS controls before enabling.
 The one-root Bernoulli counterexample gives .801396145800 instead of 1 when
 inverse counts are misused as exact PDFs in balance MIS (sampler successes .5/.25).
 Producer wiring proposal: one independently PT-sampled specular prefix / SMS slot
@@ -188,6 +209,62 @@ HDR output against independent mirror/Snell/Beer/SDS fixture integrals; add
 missing/doubled-energy, relative-depth and forced-GPU-error/no-export controls.
 Test plain local walks first, then path-reservoir/replay/reconnection enabled;
 neither compile-only kernels nor isolated projection tests meet this criterion.
+Frozen receiver storage need not duplicate work words 0–4 / 13.w: those remain
+live after sampling. Keep only the otherwise-overwritten prefix RGB in a separate
+16-byte-per-pixel buffer, and bind `{workAddress,prefixAddress,resolution,pad}` as
+the immutable 24-byte producer context. Use shared path-ownership state/event
+helpers for Hyperion and Theia rather than evolving a second classifier. Preserve
+actual-event ownership and the same relative-depth / pure-absorber exit rules.
+First active fixture: actual GiPass with real native scene/TLAS and deterministic
+camera-ray G-buffer inputs (no mocked transport/roots). Mirror integral: 128×96,
+four fixed seeds, 512 frames/seed, 2% reflected energy after independent direct
+subtraction; 128/32 frame aggregate MSE ratio below .65. Begin with ordinary PT
+path resampling disabled to isolate local SMS; confirm pending/continuation and
+ready-only accumulation. Then enable path reuse and add glass/Beer/SDS cases.
+The synthetic raster inputs do not grade background/emitter presentation; actual
+Application captures cover that separate surface.
+Closed-glass/absorption extension: .5-thick eta-1.5 slab, camera (2,.5,3), 10°
+FOV, receiver y=0, interfaces y=1/1.5 and emitter y=3. Independent Snell bisection
+and radial area Jacobian, Gaussian area quadrature, Fresnel and Beer (including
+the bounded even-reflection bulk tail). Run `SmsGiGlassFrameFixture.*` and
+`SmsGiAbsorptionFrameFixture.*`: 512 frames × four seeds, 2% channel energy.
+Oracle review correction: assert clear-glass and mirror reflected energy for
+every seed AND RGB channel, not only their mean. A resolve tint (.94,1.03,1.03)
+must fail the clear-glass channel assertions despite preserving mean white energy.
+Specular-prefix extension: primary .4 mirror at z=4, floor/tail/emitter translated
+to z≈6. Generate the actual mirror-plane raster point, independently reflect the
+camera ray for the floor oracle, and integrate direct plus both virtual tail
+emitters (white x=0 mirror and the .4 prefix mirror reused as a tail). Run
+`SmsGiSdsFrameFixture.*` at 512 frames × four seeds with 2% channel caustic energy;
+`SmsGiSdsDepthFrameFixture.*` at surface budget 3 retains only direct prefix
+lighting. Omitted prefix RGB must fail, exact restore pass. This does not claim
+prefix manifold reuse or animation.
+Local production-configuration check before SMS spatial reuse: enable the
+existing ordinary path reservoir, N=16 frozen pilot priors and 32 trials per
+dispatch. Four seeds × 512 frames must preserve mirror reflected RGB within 2%.
+The initial batch must still be pending; at least one continuation per frame is
+required, but batched trials need not force an extra pause on every reciprocal.
+This verifies the configured path, not a counted reconnection success rate.
+**Executed local-integration checkpoint:** actual GiPass mirror ratios
+.999976 / 1.001400 / 1.003280 / 1.002230, MSE128/32=.255093; clear glass
+.998198 / .999943 / .997684 / .999022, absorption RGB .998186–1.000490;
+SDS ratios 1.001600 / 1.003340 / 1.002110 / 1.001310 and insufficient receiver
+budget retain only direct prefix lighting. Per-seed/channel 2% assertions pass.
+Production settings (PT path mode, N16 priors, 32-trial chunks) pass at
+1.000690 / .999966 / .998475 / 1.003260, 518–531 continuations per 512 frames.
+Missing/doubled energy, duplicated PT/SMS ownership, mean-preserving RGB tint and
+omitted prefix controls fail; exact restores pass. Actual Application GPU error
+aborts with no EXR/PNG; failed initialization cannot advertise initialized/ready.
+Full T45/45 validation-clean, canonical architecture (34 files), tidy/dead pass;
+actual interactive moving-camera TAA 8 frames validation-clean. Source reviews
+find no introduced production/fixture blocker; synthetic raster inputs grade only
+the non-emissive transport ROI, not complete presentation. Source normalize(0)
+behavior remains tied to the actual-RT reference. H143/Hy71 remain the preceding
+verified classifier/reference checkpoints. SMS spatial reuse and final complex-
+scene quality/performance/stability and both review galleries are still open.
+Also verify failed SMS initialization cannot report GiPass initialized/ready;
+latched failure must request completion/error handling even without a usable
+pipeline. These strengthen the stated acceptance, not relax a numerical gate.
 
 ### Roadmap
 

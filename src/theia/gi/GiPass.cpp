@@ -51,6 +51,8 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx,
                         const char* giSpv) {
     m_ctx = &ctx;
     m_cfg = cfg;
+    m_frameError = VK_ERROR_INITIALIZATION_FAILED;
+    m_frameRecorded = m_smsFrameActive = false;
     m_hdrFirstUse = true;
     m_boundScene = nullptr;
     m_texturesBoundFor = nullptr;
@@ -134,10 +136,19 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx,
     if (!createPipeline(giSpv)) {
         return false;
     }
+    if (!createSmsResources(uploadPool))
+        return false;
+    m_frameError = VK_SUCCESS;
     return true;
 }
 
 void GiPass::shutdown() {
+    m_sms = harmonia::pipeline::SmsPass{};
+    m_smsContext = {};
+    m_smsPrefixes = {};
+    m_smsPrior = {};
+    m_frameRecorded = m_smsFrameActive = false;
+    m_frameError = VK_SUCCESS;
     m_reservoirBuf[0] = {};
     m_reservoirBuf[1] = {};
     m_reservoirsCleared = false;
@@ -164,7 +175,7 @@ void GiPass::shutdown() {
 }
 
 bool GiPass::createDescriptors() {
-    const std::array<VkDescriptorSetLayoutBinding, 25> bindings{{
+    const std::array<VkDescriptorSetLayoutBinding, 26> bindings{{
         {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // TLAS
         {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // hdr (RW)
         {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // giBuffer
@@ -198,12 +209,14 @@ bool GiPass::createDescriptors() {
                                                                                           // RW)
         {24, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI-ENH shift share (prev,
                                                                                           // RO)
+        {25, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // immutable SMS producer
+                                                                                          // context
     }};
 
     // MOD1: no UPDATE_AFTER_BIND — incompatible with DESCRIPTOR_BUFFER layouts.
     constexpr VkDescriptorBindingFlags kTextureFlags = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
-    const std::array<VkDescriptorBindingFlags, 25> bindingFlags{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, kTextureFlags,
-                                                                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    const std::array<VkDescriptorBindingFlags, 26> bindingFlags{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, kTextureFlags,
+                                                                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = static_cast<std::uint32_t>(bindingFlags.size()),
@@ -226,7 +239,7 @@ bool GiPass::createDescriptors() {
 
     // MOD1: descriptor buffers (replaces the pool + allocated sets).
     for (std::uint32_t si = 0; si < kDescriptorSlots; ++si) {
-        if (!m_descWriters[si].init(*m_ctx, setLayout, 25, si == 0 ? "theia.gi.descBuf0" : "theia.gi.descBuf1")) {
+        if (!m_descWriters[si].init(*m_ctx, setLayout, 26, si == 0 ? "theia.gi.descBuf0" : "theia.gi.descBuf1")) {
             harmonia::core::Logger::error("GiPass: failed to create descriptor buffer slot {}", si);
             for (std::uint32_t j = 0; j <= si; ++j)
                 m_descWriters[j].shutdown();
@@ -373,7 +386,16 @@ bool GiPass::descriptorsDirty(const FrameParams& params) const {
 }
 
 void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPreBarriers) {
+    if (m_frameError != VK_SUCCESS)
+        return;
+    m_frameRecorded = m_smsFrameActive = false;
     if (m_pipeline == VK_NULL_HANDLE || params.scene == nullptr || m_cfg.hdrImage == VK_NULL_HANDLE) {
+        m_frameError = VK_ERROR_INITIALIZATION_FAILED;
+        return;
+    }
+    m_smsFrameActive = usesSms(params.scene->emissiveTriangleCount(), params.maxDepth);
+    if (cmd == VK_NULL_HANDLE || (m_smsFrameActive && skipPreBarriers)) {
+        m_frameError = VK_ERROR_INITIALIZATION_FAILED;
         return;
     }
 
@@ -554,6 +576,7 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         .pairingPerm2 = pairingPermFor(params.frameSampleIndex, 2u),
         .pairingEnabled = m_pairingOffsetBuf.isValid() ? 1u : 0u,
         .reconnectShiftEnabled = params.reconnectShiftEnabled,
+        .smsEnabled = m_smsFrameActive ? 1U : 0U,
     };
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
@@ -564,6 +587,14 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
     const std::uint32_t gx = (m_cfg.width + 7u) / 8u;
     const std::uint32_t gy = (m_cfg.height + 7u) / 8u;
     vkCmdDispatch(cmd, gx, gy, 1);
+    if (m_smsFrameActive) {
+        if (m_smsPrior.isValid())
+            vkCmdFillBuffer(cmd, m_smsPrior.handle(), 0, VK_WHOLE_SIZE, 0);
+        m_frameError = m_sms.recordBegin(cmd);
+        if (m_frameError == VK_SUCCESS)
+            m_frameError = m_sms.recordBatch(cmd);
+    }
+    m_frameRecorded = m_frameError == VK_SUCCESS;
 
     // A4: flip the reservoir ping-pong so this frame's "current" becomes next frame's "prev".
     m_reservoirPingPong = 1u - m_reservoirPingPong;

@@ -11,6 +11,7 @@
 #include "EnvImportanceResources.hpp"
 #include "ViewAccumulation.hpp"
 #include "harmonia/app/App.hpp"
+#include "harmonia/app/IFrameCompletion.hpp"
 #include "harmonia/app/IRenderer.hpp"
 #include "theia/camera/CameraController.hpp"
 #include "theia/cull/LightCuller.hpp"
@@ -32,7 +33,9 @@ namespace theia {
 /// controller.  Per the host contract, record() produces a linear image in
 /// the scene-referred working color space and leaves it in
 /// VK_IMAGE_LAYOUT_GENERAL.
-class Application final : public harmonia::app::App, public harmonia::app::IRenderer {
+class Application final : public harmonia::app::App,
+                          public harmonia::app::IRenderer,
+                          public harmonia::app::IFrameCompletion {
   public:
     ~Application() override;
     void setCameraJitterEnabled(bool enabled) noexcept { m_cameraJitterEnabled = enabled; }
@@ -68,6 +71,13 @@ class Application final : public harmonia::app::App, public harmonia::app::IRend
         return m_motionVectorPass.isInitialized() ? m_motionVectorPass.motionVectorImageView() : VK_NULL_HANDLE;
     }
     [[nodiscard]] const char* name() const noexcept override { return "Theia ForwardRenderer"; }
+    [[nodiscard]] harmonia::app::IFrameCompletion* frameCompletion() noexcept override {
+        return m_giPass.completionRequired() ? this : nullptr;
+    }
+    [[nodiscard]] std::expected<bool, VkResult> ready() noexcept override { return m_giPass.frameReady(); }
+    [[nodiscard]] VkResult recordContinuation(VkCommandBuffer cmd) noexcept override {
+        return m_giPass.recordContinuation(cmd);
+    }
 
   protected:
     // harmonia::app::App hooks
@@ -189,6 +199,7 @@ class Application final : public harmonia::app::App, public harmonia::app::IRend
     std::array<VkSemaphore, 2> m_gfxDoneSemaphores = {VK_NULL_HANDLE, VK_NULL_HANDLE};
     std::array<VkSemaphore, 2> m_asyncSemaphores = {VK_NULL_HANDLE, VK_NULL_HANDLE};
     bool m_asyncComputeEnabled = false;
+    bool m_asyncFrameActive = false;
     /// Frozen before previous VP advances; consumed only after GI completion.
     MotionVectorPass::FrameParams m_pendingMvp{};
 };

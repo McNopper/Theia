@@ -163,7 +163,8 @@ bool Application::onInitialize() {
             .gbufferView = m_renderer->gbufferView(),
         };
         if (!m_giPass.initialize(deviceContext(), giCfg, commandPool())) {
-            harmonia::core::Logger::warn("GiPass failed to initialize — ray-query GI disabled");
+            harmonia::core::Logger::error("GiPass failed to initialize");
+            return false;
         }
         // The forward pass emits direct + emission only; GiPass supplies the indirect term.
         // When ReSTIR DI OR ReSTIR PT is active, GiPass owns emissive-triangle direct
@@ -359,6 +360,7 @@ bool Application::onSceneLoaded(const harmonia::scene::SceneLoader::SceneConfig&
 }
 
 void Application::record(VkCommandBuffer cmd, const harmonia::app::RenderTarget& target) noexcept {
+    m_asyncFrameActive = false;
     // PERF5 10a: log the previous batch's per-pass GPU times for this slot, then
     // arm the slot this frame's timestamp hooks write into (PassTimer::beginFrame).
     m_passTimer.beginFrame(frameIndex() % 2U);
@@ -396,7 +398,9 @@ void Application::record(VkCommandBuffer cmd, const harmonia::app::RenderTarget&
 
     const bool giEnabled = giActive();
 
-    if (m_asyncComputeEnabled && giEnabled) {
+    const bool smsFrame = giEnabled && m_giPass.usesSms(m_scene->emissiveTriangleCount(), m_sceneMaxDepth);
+    if (m_asyncComputeEnabled && giEnabled && !smsFrame) {
+        m_asyncFrameActive = true;
         submitAsyncCompute(cmd, target, view, curViewProj);
         return;
     }
@@ -508,7 +512,8 @@ void Application::onResize(VkExtent2D extent) noexcept {
             .gbufferView = m_renderer->gbufferView(),
         };
         if (!m_giPass.initialize(deviceContext(), giCfg, commandPool())) {
-            harmonia::core::Logger::warn("GiPass resize failed — ray-query GI disabled");
+            harmonia::core::Logger::error("GiPass resize failed");
+            return; // GiPass's latched completion error aborts the next logical frame.
         }
         m_renderer->setRestirDiActive(giActive() && (m_useRestirDi || m_useRestirPt));
 
@@ -546,7 +551,7 @@ void Application::onResize(VkExtent2D extent) noexcept {
 }
 
 std::pair<VkCommandBuffer, VkSemaphore> Application::onBeforeSceneStages(VkCommandBuffer renderCmd) noexcept {
-    if (!m_asyncComputeEnabled || !giActive()) {
+    if (!m_asyncFrameActive || !giActive()) {
         return {renderCmd, VK_NULL_HANDLE};
     }
 

@@ -299,6 +299,7 @@ set(THEIA_renderer_SOURCES
 )
 set(THEIA_gi_SOURCES
     src/theia/gi/GiPass.cpp
+    src/theia/gi/GiPassSms.cpp
     src/theia/gi/GiPass.hpp
     src/theia/gi/PairingTextures.cpp
     src/theia/gi/PairingTextures.hpp
@@ -394,7 +395,9 @@ find_package(meshoptimizer CONFIG REQUIRED)
 # Harmonia's shared Slang modules (env_sample, math, bsdf, …) are the source
 # of truth; add their directory so slangc resolves imports from there.
 set(COMPILE_SLANG_EXTRA_INCLUDE_DIRS "${HARMONIA_SHADER_SOURCE_DIR}")
+set(COMPILE_SLANG_EXTRA_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/gi_sms.slang")
 compile_slang_shaders(theia_shaders "${THEIA_SHADER_OUTPUT_DIR}" ${THEIA_ENTRY_SHADERS})
+unset(COMPILE_SLANG_EXTRA_DEPENDS)
 unset(COMPILE_SLANG_EXTRA_INCLUDE_DIRS)
 
 # ── Layered targets (AR2, Harmonia pattern) ──────────────────────────────────
