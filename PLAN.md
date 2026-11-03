@@ -1,14 +1,6 @@
 # PLAN — Theia
 
-**General rendering hotfix (2026-11-03):** isolated from SMS on
-`fix/general-rendering-correctness`. Each timestamp query pair resets on its
-owning command buffer before first/reused/skipped-pass writes; no host reset
-feature is assumed. The actual Vulkan timing test passes; an omitted-reset
-control fails and exact restoration passes. Full local product suite 34/34,
-warning-clean build, zero logged VUIDs/skips; no hosted CI claim. Central
-verification and integration policy: `Harmonia/PLAN.md` section 3, General
-rendering hotfixes. SMS remains parked on `dev/gi-sms-restir`; this hotfix does
-not include GI/SMS integration, release tags or dependency-pin changes.
+**Release:** v0.8.1 - timestamp-query lifecycle fix, shared BSDF/lifetime fixes via Harmonia v0.7.19, and refreshed README gallery. SMS remains on its development branch.
 
 **Living source of truth for outstanding work.** Shipped items are removed from the work
 lists; the shipped record is the *Baseline* below and `git log`. Only outstanding work is
@@ -55,18 +47,8 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
 
 ## At a glance
 
-- **Release:** v0.8.0 - the PERF5 wavefront arc: stage-1 designed, built, measured,
-  and **parked** (bit-identical renders at 320p and 1080p, at ~2x the monolithic GI
-  cost - record-traffic dominated; the full stage-1 pipeline is preserved on
-  `perf5/wavefront-stage1` with the calibrated + medium-scene verification gates
-  adjudicated against an RNG re-seed experiment) + `PassTimer` per-pass GPU
-  instrumentation (`THEIA_PASS_TIMING=1`), the move-reset `ViewAccumulationGate`
-  contract (8 tests), the `reconstructGiHitFromQuery` salvage extraction, and the
-  check-dead family gate. Renders are bit-identical to the pre-split baselines at
-  both resolutions. Pins: slang-math v0.8.0 (transitive via Harmonia), Aether
-  v0.8.0, Harmonia v0.7.18. 33 CPU module tests + the family analysis lanes.
-- **Prior:** v0.7.17 - I6 verified (frames-per-flip shipped Harmonia-side v0.7.15,
-  consumed by Theia; 5 CPU contract tests added).
+- **Release:** v0.8.1 - timestamp lifecycle fix and general shared fixes; Harmonia v0.7.19, Aether v0.8.1. README gallery refreshed at 1280x720 / 256 frames. No SMS integration.
+- **Prior:** v0.8.0 - PERF5 wavefront arc adjudicated and parked; PassTimer instrumentation.
 - **Quality gates (family-uniform):** blocking lint (Q2-Q6) on every push -
   clang-format pinned 22.1.3, ruff contract in `ruff.toml` (identical x5), cppcheck,
   bandit, actionlint 1.7.12, yamllint. Coverage stays a local activity (the test
@@ -77,59 +59,6 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
   LS2, C11, C12) are tracked in `Harmonia/PLAN.md` and wire into `gi.comp.slang`
   when they land.
 ## How to continue
-
-**GI-SMS #2 staged verification plan (Theia `257c8b4`, Harmonia `042fc74`):**
-keep monolithic GI; wavefront stage-1 stays parked. No push, tags, release or pins.
-
-| Slice | Acceptance / independent oracle | Verification |
-| --- | --- | --- |
-| Ready-stage ordering | Both queue paths record MotionVector/TAA only in `onSceneFrameReady`; preserve GI → MotionVector → TAA → Accumulation → Denoiser → ToneMap. Freeze motion params before updating previous VP. | Baseline/candidate deterministic offscreen EXR comparison via `check_theia_reference_noop.py`, full `ctest --test-dir build -LE analysis -V`; presentation path validation capture separately. |
-| Common sampler mathematics | Move common light proposal, supported-tail sampling, contribution and resumable initial/repeat/prior logic down to Harmonia; renderer scene/texture adapters stay independent. No change to frozen endpoints or trial law. | Hyperion mirror/slab/Beer/SDS receipts and negative controls; family `verify_reference_sampling.ps1`, byte-exact existing controls. |
-| Theia local candidates | Actual renderer geometry and emitter identities; exact supported PT/SMS partition in local/replay/reconnection evaluations; pending/error work never accumulates or exports. | Independent planar mirror/Snell/Beer fixtures and Hyperion comparison, missing/doubled-energy and forced-GPU-error controls, full-slot/continuation checks. |
-| Manifold spatial reuse | Read only unmerged local candidates; preserve emitter point, inverse-check shifts, J=1 for delta/static-light-area domain, generalized pairwise MIS with support failures. No recursive temporal merge. | Finite-domain support/MIS controls plus actual planar/curved rendered energy, wrong inverse/support/MIS controls rejected. |
-| Final acceptance | Curved/complex scene convergence, equal-time quality, reciprocal tails/runtime and stability established; both review galleries regenerated for user approval before any publication. | Fixed-seed linear EXR receipts, timing/counter logs, repeated-run stability and review images, per central Harmonia PLAN. |
-
-These are staged deliverables, not completed capabilities. GPU suites/renders
-remain strictly serial across repositories. Each slice records its evidence and
-small local checkpoint before the next behavioral change.
-Readiness validation finding: the actual interactive moving-camera run exercised
-TAA but failed on pre-existing PassTimer query resets (VUID 03864 first use,
-02665 hostQueryReset not enabled). This blocks trustworthy performance evidence.
-Narrow fix plan: reset each pass's query pair on its own command buffer before
-the begin timestamp; remove host reset, leaving device features unchanged. Verify
-real moving-camera timing/TAA and a GPU component test spanning first use, slot
-reuse and a previously skipped TAA pair. A no-reset mutant must fail validation.
-Then re-run the original readiness capture/no-op and family regression. This is
-not permission for unrelated timing or device-layer redesign.
-Executed timer checks: the actual GPU first/reused/skipped-pair test passes;
-the test-process-only no-reset control fails the expected VUID 03864 / callback
-count assertion (exit 1), exact restored call path passes (exit 0). The actual
-interactive run exercises 8 moving-camera TAA frames with zero validation
-messages. Theia module tests now enable validation, matching Hyperion's lane.
-Joint family gate passes H142/Hy69/T34 validation-clean; canonical architecture
-and H/Hy tidy/dead pass. Theia's 320×240, 32-frame reference capture has exactly
-0/76,800 changed pixels. Source-only review finds no introduced ready-order,
-deferred-parameter, image-ownership or query-reset blocker. This does not claim
-active SMS, async SMS buffer ownership or final quality/performance acceptance.
-Spatial-MIS oracle preparation: GRIS 2022 Eq.37 with one canonical domain and
-N neighbor domains gives `m0(y)=sum_j[p0(y)/(p0(y)+N*pj<-j(y))]/N` and
-`mi(y)=pi<-i(y)/(p0(y)+N*pi<-i(y))`. A failed/inverse-invalid shift means the
-corresponding `pi<-i=0`, not a constant 1/(N+1) weight. Exact rational-domain
-enumeration (`verify_sms_pairwise_model.py` in the approved scratch directory)
-preserves RGB=(10,10,10), including alternative target scalings. Constant MIS
-fails at RGB=(22/3,7,23/3). This verifies the planned oracle only; no Theia SMS
-reuse implementation is claimed. Proxy targets are not PDFs; reciprocal counts
-must never be substituted as exact densities in ordinary balance MIS.
-The one-root Bernoulli counterexample gives .801396145800 instead of 1 when
-inverse counts are misused as exact PDFs in balance MIS (sampler successes .5/.25).
-Producer wiring proposal: one independently PT-sampled specular prefix / SMS slot
-per pixel, separate from the adaptive/replayed PT candidate pool. Preserve its
-raw receiver and prefix RGB in renderer-owned auxiliary storage for later shifts.
-Use a small immutable descriptor-backed producer context rather than exceeding
-the 256-byte GI push budget. Keep initial SMS work and all continuations on the
-graphics queue; the ordinary no-SMS async path remains unchanged. Async SMS needs
-explicit work-buffer ownership support before it can be enabled; do not silently
-run exclusive SMS buffers across queue families.
 
 ### Roadmap
 
@@ -589,6 +518,7 @@ low-spp reference).
 
 ## Baseline
 
+- **v0.8.1** (consumes Harmonia v0.7.19, Aether v0.8.1): **timestamp lifecycle and shared rendering correctness.** Query pairs reset on their owning command buffers for first/reused/skipped use; shared BSDF/lifetime fixes consumed via Harmonia. All 30 README scenes regenerated at 1280x720 / 256 frames with validation (8 changed, 22 pixel-identical). Full local 34/34; all lint lanes. No SMS integration.
 - **v0.8.0** (consumes Harmonia v0.7.18, Aether v0.8.0, slang-math v0.8.0 transitive):
   **PERF5 wavefront arc + engine hardening.** Stage-1 wavefront (generate/trace/shade
   over persistent records) built to bit-identity at 320p and 1080p, measured at ~2x

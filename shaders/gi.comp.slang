@@ -1064,7 +1064,7 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
     // captured and the path falls back to replay.
     // NB the paper specifies alpha "from the path's sampled lobes"; this uses the material
     // roughness as a proxy (the sampled-lobe alpha is not tracked per vertex here).
-    constexpr uint kCaptureNone = 0xFFFFFFFEu;
+    const uint kCaptureNone = 0xFFFFFFFEu;
     state.captureTarget = kCaptureNone;
     state.disableRR = disableRR ? 1u : 0u; // GI-ENH §6.2.4: skip RR during replay
     state.rec = makeEmptyReconnectionCapture();
@@ -1280,8 +1280,8 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
             } else if (state.captureTarget == kCaptureNone && state.surfaceCount < 2u) {
                 // Hybrid mode: first qualifying pair (adaptive k, capped at k = 3).
                 const float curRough = saturate(surf.mat.specularRoughAnisoIor.x);
-                constexpr float kAlphaMin = 0.2F;
-                constexpr float kDMin = 0.1F;
+                const float kAlphaMin = 0.2F;
+                const float kDMin = 0.1F;
                 const bool pairRough = (curRough >= kAlphaMin) && (prevRough >= kAlphaMin);
                 const bool farField = h.dist >= kDMin;
                 if (pairRough && farField) {
