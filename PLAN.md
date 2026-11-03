@@ -68,6 +68,21 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
   when they land.
 ## How to continue
 
+**NEXT-MODEL ENTRY — current remaining queue:** read Harmonia/PLAN.md section 3,
+"GI-SMS #2 — bounded finish plan / next-model handoff". It supersedes the older
+task sequences below. Runtime checkpoints: primary branches are paired H/Theia
+`wip/gi-sms-spatial-reuse`, Hyperion `dev/gi-sms-restir`. All main refs remain
+pre-SMS. Latest product evidence with the step-1 mode wiring is Hy71/71 and
+T57/57 (exits 0, zero validation/skips) plus all-mode Application smoke captures.
+Step-1/2 rows are recorded in the central finish plan (runner + C1–C3 scenes
+committed; C1 reference accepted at 4096 spp). Do not redo completed work.
+
+**Current focus:** C1 correctness (Theia local/reuse vs the converged PT
+reference). The first attempt failed at 1.104 pooled because the sphere primitive
+is analytic (Hyperion) vs tessellated (Theia); qualification now uses shared
+triangulated OBJ casters. Equal-time performance, C2/C3, stability, final code
+checkpoint and galleries follow the central rows.
+
 Rendered spatial gate for the current reuse slice: `SmsGiReuseFrameFixture.*`
 compares the same N16/prior/path-mode local candidates with reuse off/on, 512
 frames × four fixed seeds, 2% reflected RGB per seed and lower aggregate

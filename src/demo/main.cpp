@@ -36,8 +36,27 @@ int main(int argc, char* const argv[]) {
     // force-enables it; `--no-taa` disables it.
     bool taaEnabled = true;
     bool taaForcedOn = false;
+    theia::Application::SmsMode smsMode = theia::Application::SmsMode::Local;
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
+        if (arg == "--sms-mode") {
+            if (i + 1 >= argc) {
+                harmonia::core::Logger::error("--sms-mode requires a value: off, local or reuse");
+                return 2;
+            }
+            const std::string_view mode = argv[++i];
+            if (mode == "off") {
+                smsMode = theia::Application::SmsMode::Off;
+            } else if (mode == "local") {
+                smsMode = theia::Application::SmsMode::Local;
+            } else if (mode == "reuse") {
+                smsMode = theia::Application::SmsMode::Reuse;
+            } else {
+                harmonia::core::Logger::error("Unknown --sms-mode value: '{}' (expected off, local or reuse)", mode);
+                return 2;
+            }
+            continue;
+        }
         if (arg == "--no-camera-jitter") {
             cameraJitterEnabled = false;
             continue;
@@ -94,6 +113,7 @@ int main(int argc, char* const argv[]) {
     app.setRestirDiEnabled(restirDiEnabled);
     app.setRestirPtEnabled(restirPtEnabled);
     app.setRestirPtPathEnabled(restirPtPathEnabled);
+    app.setSmsMode(smsMode);
     // GI2 Phase 4: A-SVGF correlation awareness. ReSTIR PT's spatial reuse introduces
     // inter-pixel sample correlation (neighbours share reservoir samples). The à-trous
     // filter's per-pixel variance estimate (from the gradient/variance guide) under-counts

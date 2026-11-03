@@ -161,7 +161,20 @@ bool Application::onInitialize() {
             .giBufferView = m_renderer->giBufferView(),
             .gbufferImage = m_renderer->gbufferImage(),
             .gbufferView = m_renderer->gbufferView(),
+            .smsEnabled = m_smsMode != SmsMode::Off,
+            .smsSpatialReuse = m_smsMode == SmsMode::Reuse,
         };
+        switch (m_smsMode) {
+        case SmsMode::Off:
+            harmonia::core::Logger::info("SMS mode off — ordinary path-traced reference (no SMS work or partition)");
+            break;
+        case SmsMode::Reuse:
+            harmonia::core::Logger::info("SMS mode reuse — local SMS plus experimental spatial reuse");
+            break;
+        case SmsMode::Local:
+            harmonia::core::Logger::info("SMS mode local — one independent frozen receiver per pixel");
+            break;
+        }
         if (!m_giPass.initialize(deviceContext(), giCfg, commandPool())) {
             harmonia::core::Logger::error("GiPass failed to initialize");
             return false;
@@ -510,6 +523,8 @@ void Application::onResize(VkExtent2D extent) noexcept {
             .giBufferView = m_renderer->giBufferView(),
             .gbufferImage = m_renderer->gbufferImage(),
             .gbufferView = m_renderer->gbufferView(),
+            .smsEnabled = m_smsMode != SmsMode::Off,
+            .smsSpatialReuse = m_smsMode == SmsMode::Reuse,
         };
         if (!m_giPass.initialize(deviceContext(), giCfg, commandPool())) {
             harmonia::core::Logger::error("GiPass resize failed");
