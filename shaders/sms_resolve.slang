@@ -52,5 +52,9 @@ void main(uint3 group : SV_GroupID,uint lane : SV_GroupIndex) {
     }
     float3 value=previous.xyz+estimate*asfloat(work.words[14].x);
     if (!all(isfinite(value))) { smsQueueCompletionError(pc,kSmsQueueNumericError); return; }
+    smsDiagnosticMaxFloat(16u,estimate.x);
+    smsDiagnosticMaxFloat(17u,estimate.y);
+    smsDiagnosticMaxFloat(18u,estimate.z);
+    smsDiagnosticMaxFloat(19u,asfloat(work.words[11].xyz).x+asfloat(work.words[11].xyz).y+asfloat(work.words[11].xyz).z);
     t_smsHdr[pixel]=float4(value,previous.w);
 }

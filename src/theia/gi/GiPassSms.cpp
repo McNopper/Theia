@@ -1,4 +1,5 @@
 #include <array>
+#include <bit>
 #include <cstdint>
 #include <filesystem>
 #include <span>
@@ -23,14 +24,14 @@ bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
     m_smsDiagEnabled = harmonia::core::getEnvString("THEIA_SMS_DIAGNOSTICS") == std::optional<std::string>{"1"};
     auto diagnostics =
         harmonia::core::Buffer::create(*m_ctx,
-                                       16 * sizeof(std::uint32_t),
+                                       32 * sizeof(std::uint32_t),
                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                        VMA_MEMORY_USAGE_GPU_TO_CPU,
                                        "theia.sms.diagnostics");
     if (!diagnostics)
         return false;
     m_smsDiagnostics = std::move(*diagnostics);
-    const std::array<std::uint32_t, 16> zeros{};
+    const std::array<std::uint32_t, 32> zeros{};
     m_smsDiagnostics.uploadData(zeros.data(), sizeof(zeros));
     if (m_cfg.smsEnabled) {
         const auto pixels = std::uint64_t{m_cfg.width} * m_cfg.height;
@@ -106,7 +107,7 @@ void GiPass::reportSmsDiagnostics() const noexcept {
     if (!m_smsDiagEnabled || m_smsDiagnosticsReported)
         return;
     m_smsDiagnosticsReported = true;
-    std::array<std::uint32_t, 16> counters{};
+    std::array<std::uint32_t, 32> counters{};
     if (m_smsDiagnostics.readData(counters.data(), sizeof(counters)) != VK_SUCCESS) {
         harmonia::core::Logger::error("Theia SMS diagnostics readback failed (observation only)");
         return;
@@ -114,7 +115,8 @@ void GiPass::reportSmsDiagnostics() const noexcept {
     harmonia::core::Logger::info(
         "sms_diag eligible={} roots={} canonical={} domains={} candidates={} canonicalInv={}/{} neighborInv={}/{} "
         "selected={} topologyFail={} solverFail={} visibilityFail={} supportFail={} completedReciprocals={} "
-        "maxTrials={}",
+        "maxTrials={} maxBase=({:.6g},{:.6g},{:.6g}) maxFinal={:.6g} maxConditionalMass={:.6g} "
+        "maxReciprocalWeight={:.6g}",
         counters[0],
         counters[1],
         counters[2],
@@ -130,7 +132,13 @@ void GiPass::reportSmsDiagnostics() const noexcept {
         counters[12],
         counters[13],
         counters[15],
-        counters[14]);
+        counters[14],
+        std::bit_cast<float>(counters[16]),
+        std::bit_cast<float>(counters[17]),
+        std::bit_cast<float>(counters[18]),
+        std::bit_cast<float>(counters[19]),
+        std::bit_cast<float>(counters[20]),
+        std::bit_cast<float>(counters[21]));
 }
 
 std::expected<bool, VkResult> GiPass::frameReady() const noexcept {

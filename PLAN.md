@@ -29,6 +29,15 @@ counter records completed work up to 175 trials, with no truncation. C2/C3 and a
 main merge must not be represented as accepted until the owner decides the
 proposal/variance-reduction scope. No temporal merge or tolerance relaxation.
 
+**Root-cause update:** outlier factor diagnostics show a huge physical base
+(max per-channel base `7455.4`, final estimate `22366.2` on one frame), while
+conditional mass remains ~0.807 and completed reciprocal trials only reach 175.
+An independent double-precision curved-chain oracle then found the production
+two-interface geometric term is about `2.441x` too large at a non-caustic test
+root (`0.010009538` versus `0.004099860`). This is a concrete Jacobian defect,
+not merely heavy-tail variance. Optional max-factor diagnostics are implemented;
+the estimator is still restored to production settings and remains experimental.
+
 **Living source of truth for outstanding work.** Shipped items are removed from the work
 lists; the shipped record is the *Baseline* below and `git log`. Only outstanding work is
 tracked here.

@@ -18,16 +18,25 @@ static const uint kSmsDiagCanonicalAttempts=5u,kSmsDiagCanonicalAccepts=6u;
 static const uint kSmsDiagNeighborAttempts=7u,kSmsDiagNeighborAccepts=8u;
 static const uint kSmsDiagSelectedNeighbors=9u,kSmsDiagTopologyFailures=10u;
 static const uint kSmsDiagSolverFailures=11u,kSmsDiagVisibilityFailures=12u;
-static const uint kSmsDiagSupportFailures=13u,kSmsDiagCount=16u;
+static const uint kSmsDiagSupportFailures=13u,kSmsDiagMaxBaseRed=16u;
+static const uint kSmsDiagMaxBaseGreen=17u,kSmsDiagMaxBaseBlue=18u;
+static const uint kSmsDiagMaxFinalEstimate=19u,kSmsDiagMaxConditionalMass=20u;
+static const uint kSmsDiagMaxReciprocalWeight=21u,kSmsDiagCount=32u;
 bool smsDiagnosticsEnabled() { return (t_smsProducer[0].flags&2u)!=0u; }
 void smsDiagnostic(uint index) {
     if (!smsDiagnosticsEnabled()) return;
     uint ignored;
     InterlockedAdd(t_smsDiagnostics[index],1u,ignored);
 }
-
 void smsDiagnosticMax(uint index,uint value) {
     if (!smsDiagnosticsEnabled()) return;
     uint ignored;
     InterlockedMax(t_smsDiagnostics[index],value,ignored);
+}
+// Positive finite floats compare monotonically by ordered uint bits.
+void smsDiagnosticMaxFloat(uint index,float value) {
+    if (!smsDiagnosticsEnabled() || !(value>0.0) || !isfinite(value)) return;
+    uint bits=asuint(value);
+    if ((bits&0x80000000u)!=0u) return;
+    smsDiagnosticMax(index,bits);
 }
