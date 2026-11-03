@@ -25,3 +25,9 @@ void smsDiagnostic(uint index) {
     uint ignored;
     InterlockedAdd(t_smsDiagnostics[index],1u,ignored);
 }
+
+void smsDiagnosticMax(uint index,uint value) {
+    if (!smsDiagnosticsEnabled()) return;
+    uint ignored;
+    InterlockedMax(t_smsDiagnostics[index],value,ignored);
+}

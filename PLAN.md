@@ -18,6 +18,17 @@ The outward fixture test, diagnostic mirror test and full 58/58 suite pass with
 zero validation diagnostics/skips. Fresh C1 reference/correctness/performance
 runs are still required; no main merge or finished-feature claim is implied.
 
+**C1 qualification blocker (measured):** after correcting sphere winding, roots
+and accepted shifts occur, but the bounded energy gate fails. Pooled ratio is
+1.144638 at 512 frames and 1.072171 at 2048 (reuse 1.071827); 2% is required.
+Mean MSE at 2048 is 57.9716 local / 57.4312 reuse. One outlier seed improves from
+1.298398 to 1.049630 at 8192, showing long-tail convergence rather than acceptance.
+Fifteen neighbors, no prior and 256 pilot walks do not fix it; all production
+settings are restored to three neighbors, prior on and 128 pilots. The reciprocal
+counter records completed work up to 175 trials, with no truncation. C2/C3 and a
+main merge must not be represented as accepted until the owner decides the
+proposal/variance-reduction scope. No temporal merge or tolerance relaxation.
+
 **Living source of truth for outstanding work.** Shipped items are removed from the work
 lists; the shipped record is the *Baseline* below and `git log`. Only outstanding work is
 tracked here.

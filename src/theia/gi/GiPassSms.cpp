@@ -113,7 +113,8 @@ void GiPass::reportSmsDiagnostics() const noexcept {
     }
     harmonia::core::Logger::info(
         "sms_diag eligible={} roots={} canonical={} domains={} candidates={} canonicalInv={}/{} neighborInv={}/{} "
-        "selected={} topologyFail={} solverFail={} visibilityFail={} supportFail={}",
+        "selected={} topologyFail={} solverFail={} visibilityFail={} supportFail={} completedReciprocals={} "
+        "maxTrials={}",
         counters[0],
         counters[1],
         counters[2],
@@ -127,7 +128,9 @@ void GiPass::reportSmsDiagnostics() const noexcept {
         counters[10],
         counters[11],
         counters[12],
-        counters[13]);
+        counters[13],
+        counters[15],
+        counters[14]);
 }
 
 std::expected<bool, VkResult> GiPass::frameReady() const noexcept {

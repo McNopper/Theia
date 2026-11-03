@@ -27,4 +27,5 @@ import sms_resampling;
       if (!smsCacheLocalTarget(smsReuse,(value),asfloat((work).words[5].w),smsPhi)) \
           { smsQueueError(pc,kSmsQueueNumericError); return; } \
       if (smsReuse) t_smsProducer[0].prefixes[slot].w=smsPhi; }
+#define SMS_DIAG_COMPLETE(reciprocal) { smsDiagnosticMax(14u,(reciprocal).trials.x); smsDiagnostic(15u); }
 #include "sms_compute.slang"
