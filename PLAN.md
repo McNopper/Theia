@@ -87,15 +87,28 @@ The central pause verification plan, branch table, exact resume commands and
 remaining #2 scope are in `Harmonia/PLAN.md`, section 3, "GI-SMS #2 continuation
 checkpoint". Stable source excludes the unbuilt reuse/cache changes.
 
-Before continuing the WIP, fix the returned source-review findings: the target
-cache currently runs even with reuse disabled and can overflow `value*pLight`;
-attenuated prefixes can underflow a valid candidate's physical-F proxy to zero;
-and materialized UCWs can overflow despite finite final radiometry. Keep proxy
-and weighting operations consistently range-safe/factored, add sensitive controls
-and a reuse-off bypass, and do not clamp/drop valid candidates or use reciprocal
-counts as exact PDFs. No fix is claimed by this archival checkpoint. The final
-reuse wiring and `SmsGiReuseFrameFixture.*` are not built or rendered. Unit
-shift-control logs now show all three expected failures and restored passes.
+The returned source review identified unused-cache overflow, attenuated-prefix
+proxy underflow and materialized-UCW overflow. The numeric-repair WIP now bypasses
+the cache when reuse is disabled, stores log2 positive proxies with explicit zero
+support, preserves reciprocal/conditional/light factors, and evaluates shifted
+physical F without materializing its final RGB product. No clamp/drop or
+reciprocal-as-PDF substitution is used. The 24-byte producer / 16-byte prefix
+ABI, actual-event ownership and sampler trial law are unchanged.
+
+Numeric receipt: warning-clean build exit 0; five `SmsResamplingFixture.*` GPU
+tests pass with zero validation messages. Range assertions compare raw HDR/tiny
+outputs to independent host-double products, preserving finite estimates near
+1e38, 4e-20 and 4e8; finite-domain RGB=(10,10,10) also holds under extreme proxy
+scalings. Six controls fail (exit 1) for original float materialization, unused
+cache validation, wrong light-PDF factor, missing-support handling, wrong RIS
+normalization and wrong selection; all six exact restores pass (exit 0).
+`verify_sms_log_controls.py` and receipts are in the approved scratch directory.
+The first build exposed uninitialized-output warnings and the first HDR check
+normalized on-GPU, which can underflow its own reciprocal; explicit initialization
+and raw-output/host-double comparison repair those issues without relaxing the
+relative tolerance. These attempts remain in the saved logs. Native wiring now
+compiles; Hyperion byte-exact and actual local/reuse rendered gates are pending.
+This numeric unit receipt does not accept general rendered reuse or complete #2.
 
 **GI-SMS #2 staged verification plan (Theia `257c8b4`, Harmonia `042fc74`):**
 keep monolithic GI; wavefront stage-1 stays parked. Development/WIP pushes only;
@@ -150,10 +163,13 @@ iterations per walk, unchanged 1e-5 residual / 1e-4 inverse-root matching. J=1 i
 the delta root × static emitter-area domain. Remaining-depth and raw visibility
 support are checked in both directions. No recursively merged or temporal input.
 
-Cache the source proxy `luminance(F)` BEFORE reciprocal weighting in the otherwise
+Cache the source proxy `log2(luminance(F))` BEFORE reciprocal weighting in the otherwise
 unused frozen-prefix `.w` component; receiver-domain presence comes from the work
 phase, not that scalar. This keeps MIS proxies independent of random reciprocal
-counts. Root/light UCW is count/P(C)/p_light, never an exact PDF. Cross-domain
+counts. The numeric-repair WIP uses an explicit zero-support sentinel and log
+proxies/factors so positive support and finite final estimates survive physical-F
+or UCW range overflow/underflow. Reuse-off bypasses cache validation/writes.
+Root/light UCW is count/P(C)/p_light, never an exact PDF. Cross-domain
 physical F evaluation reuses the common contribution helper with unit light PDF,
 the preserved emitter fields and destination prefix RGB. The shared compute
 include may expose helpers-only and an optional target-cache hook without adding

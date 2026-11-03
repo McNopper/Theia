@@ -111,3 +111,49 @@ TEST_F(SmsResamplingFixture, StableHdrPairwiseAndExactRisSelectionBoundaries) {
         EXPECT_EQ(outputs[i].w, neighbor ? 4.0F : 0.0F);
     }
 }
+
+TEST_F(SmsResamplingFixture, LogarithmicFactorsPreserveHdrAndTinyPrefixRadiometry) {
+    const std::array inputs{Words{4, 0, 0, 0}, Words{4, 1, 0, 0}, Words{4, 2, 0, 0}, Words{4, 3, 0, 0}};
+    std::vector<sm::float4> outputs;
+    ASSERT_NO_FATAL_FAILURE(probe(inputs, outputs));
+    ASSERT_EQ(outputs.size(), inputs.size());
+    constexpr std::array expected{1e38, 4e-20, 4e8};
+    for (std::size_t i = 0; i < 3; ++i) {
+        SCOPED_TRACE(i);
+        EXPECT_NEAR(static_cast<double>(outputs[i].x) / expected[i], 1.0, 5e-5)
+            << "Finite weighted radiometry must survive unrepresentable intermediates";
+        EXPECT_EQ(outputs[i].y, 1.0F);
+        EXPECT_EQ(outputs[i].z, 1.0F) << "Counterexample must trigger the legacy range failure";
+        EXPECT_EQ(outputs[i].w, 1.0F);
+    }
+    EXPECT_EQ(outputs[3].x, 1.0F) << "Reuse-off must bypass invalid unused proxy inputs";
+    EXPECT_EQ(outputs[3].y, 7.0F) << "Reuse-off cache must remain unchanged";
+}
+
+TEST_F(SmsResamplingFixture, LogPairwiseMatchesFiniteDomainsAndExtremeProxyScalings) {
+    const std::array inputs{Words{5, 0, 0, 0}, Words{5, 1, 0, 0}, Words{5, 2, 0, 0}, Words{5, 3, 0, 0}};
+    std::vector<sm::float4> outputs;
+    ASSERT_NO_FATAL_FAILURE(probe(inputs, outputs));
+    ASSERT_EQ(outputs.size(), inputs.size());
+    for (std::size_t i = 0; i < outputs.size(); ++i) {
+        SCOPED_TRACE(i);
+        EXPECT_NEAR(outputs[i].x, 10.0F, 5e-4F);
+        EXPECT_NEAR(outputs[i].y, 10.0F, 5e-4F);
+        EXPECT_NEAR(outputs[i].z, 10.0F, 5e-4F);
+        EXPECT_EQ(outputs[i].w, 0.0F);
+    }
+}
+
+TEST_F(SmsResamplingFixture, LogRisPreservesExactPowerOfTwoSelectionBoundary) {
+    const std::array inputs{Words{6, 0, 0, 0}, Words{6, 1, 0, 0}, Words{6, 2, 0, 0}, Words{6, 3, 0, 0}};
+    std::vector<sm::float4> outputs;
+    ASSERT_NO_FATAL_FAILURE(probe(inputs, outputs));
+    ASSERT_EQ(outputs.size(), inputs.size());
+    for (std::size_t i = 0; i < outputs.size(); ++i) {
+        const bool neighbor = i < 2;
+        EXPECT_EQ(outputs[i].x, neighbor ? 1.0F : 0.0F);
+        EXPECT_EQ(outputs[i].y, 2.0F);
+        EXPECT_EQ(outputs[i].z, neighbor ? 0.0F : 2.0F);
+        EXPECT_EQ(outputs[i].w, neighbor ? 2.0F : 0.0F);
+    }
+}

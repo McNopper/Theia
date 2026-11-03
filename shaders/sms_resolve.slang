@@ -22,6 +22,9 @@ import sms_resampling;
 #define SMS_MATERIALS t_smsMaterials
 #define SMS_EMITTERS t_smsEmitters
 #define SMS_EMITTER_CDF t_smsEmitterCdf
+#define SMS_CONTRIBUTION_ZERO kSmsLogZero.xxx
+#define SMS_FINISH_CONTRIBUTION(base,response,geometric,Le,pdf,prefix,value) \
+    return smsLogContribution(base,response,geometric,Le,pdf,prefix,value);
 #include "sms_compute.slang"
 #include "sms_reuse.slang"
 

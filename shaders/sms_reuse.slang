@@ -1,24 +1,23 @@
 // Included by the native resolve after the common radiometric helpers. Inputs
 // remain immutable/unmerged; only the final HDR pixel receives resampled energy.
 static const uint kSmsSpatialNeighbors=3u;
-float smsReuseTarget(float3 value) { return dot(value,float3(.2126,.7152,.0722)); }
+float smsReuseTarget(float3 value) { return smsLogTarget(value); }
 
 bool smsLocalCandidate(SmsWorkRecord work,float proxy,out bool candidate,out float ucw) {
-    candidate=false; ucw=0.0;
+    candidate=false; ucw=kSmsLogZero;
     uint phase=smsPhase(work);
     if (phase==kSmsAbsent) return true;
-    if (phase!=kSmsDone || work.words[14].y!=1u || !isfinite(proxy) || proxy<0.0) return false;
+    if (phase!=kSmsDone || work.words[14].y!=1u || !isfinite(proxy)) return false;
     uint status=work.words[12].z,count=work.words[10].z;
     if (status==0u) return count==0u;
-    if (status!=1u || count<1u || count>2u || !(proxy>0.0)) return false;
+    if (status!=1u || count<1u || count>2u || proxy==kSmsLogZero) return false;
     SmsReciprocal reciprocal;
     reciprocal.trials=work.words[12].xy; reciprocal.status=status;
     float rootWeight;
     if (!completedSmsReciprocal(reciprocal,rootWeight)) return false;
     float mass=asfloat(work.words[11].w),lightPdf=asfloat(work.words[5].w);
-    if (!(mass>0.0) || !isfinite(mass) || !(lightPdf>0.0) || !isfinite(lightPdf)) return false;
-    ucw=smsConditionalWeight(rootWeight,mass)/lightPdf;
-    if (!(ucw>0.0) || !isfinite(ucw)) return false;
+    // count / P(C) / p_light, kept factored; never an exact PDF
+    if (!smsLogUnbiasedWeight(rootWeight,mass,lightPdf,ucw)) return false;
     candidate=true;
     return true;
 }
@@ -40,15 +39,17 @@ bool smsSpatialEstimate(uint slot,uint width,uint height,SmsWorkRecord canonical
     bool localCandidate; float localUcw;
     if (!smsLocalCandidate(canonical,prefix.w,localCandidate,localUcw)) return false;
     SmsManifoldVertex original[2]; uint originalCount=0u;
+    original[0]=original[1]=(SmsManifoldVertex)0;
     if (localCandidate) smsLoadRoot(canonical,original,originalCount);
     float3 values[4]; float targets[4],ucws[4],weights[4];
-    for (uint i=0u;i<4u;++i) { values[i]=0.0.xxx; targets[i]=ucws[i]=weights[i]=0.0; }
+    for (uint i=0u;i<4u;++i) { values[i]=kSmsLogZero.xxx; targets[i]=ucws[i]=weights[i]=kSmsLogZero; }
     if (localCandidate) {
-        values[0]=asfloat(canonical.words[11].xyz)/localUcw;
+        if (!smsLogRgb(asfloat(canonical.words[11].xyz),values[0])) return false;
+        values[0]=smsLogScaleRgb(values[0],-localUcw);
         targets[0]=prefix.w; ucws[0]=localUcw;
     }
     uint2 pixel=uint2(slot%width,slot/width);
-    uint selectedSlots[3];
+    uint selectedSlots[3]={0xFFFFFFFFu,0xFFFFFFFFu,0xFFFFFFFFu};
     TheiaSmsScene scene;
     for (uint i=0u;i<kSmsSpatialNeighbors;++i) {
         float4 draw=smsTrialSample(canonical.words[7].zw,uint2(i,0),uint2(0xFFFFFFFCu,0));
@@ -69,7 +70,7 @@ bool smsSpatialEstimate(uint slot,uint width,uint height,SmsWorkRecord canonical
                 !smsLocalCandidate(source,sourcePrefix.w,sourceCandidate,sourceUcw)) return false;
             domain=smsPhase(source)!=kSmsAbsent;
         }
-        float proxyAtCanonical=0.0;
+        float proxyAtCanonical=kSmsLogZero;
         bool canonicalSupport=false;
         if (localCandidate && domain) {
             SmsManifoldVertex shifted[2];
@@ -83,8 +84,8 @@ bool smsSpatialEstimate(uint slot,uint width,uint height,SmsWorkRecord canonical
         }
         if (localCandidate) {
             float part,unused;
-            if (!smsPairwiseMis(prefix.w,proxyAtCanonical,kSmsSpatialNeighbors,canonicalSupport,part,unused)) return false;
-            weights[0]+=part;
+            if (!smsLogPairwiseMis(prefix.w,proxyAtCanonical,kSmsSpatialNeighbors,canonicalSupport,part,unused)) return false;
+            weights[0]=smsLogAdd(weights[0],part);
         }
         if (!domain || !sourceCandidate) continue;
         SmsManifoldVertex sourceRoot[2],shifted[2]; uint count;
@@ -94,14 +95,14 @@ bool smsSpatialEstimate(uint slot,uint width,uint height,SmsWorkRecord canonical
         float3 targetValue;
         if (!smsShiftIntegrand(scene,canonical,prefix.xyz,source,shifted,count,targetValue)) return false;
         float target=smsReuseTarget(targetValue),unused,mis;
-        if (!smsPairwiseMis(target,sourcePrefix.w,kSmsSpatialNeighbors,true,unused,mis)) return false;
+        if (!smsLogPairwiseMis(target,sourcePrefix.w,kSmsSpatialNeighbors,true,unused,mis)) return false;
         values[i+1u]=targetValue; targets[i+1u]=target; ucws[i+1u]=sourceUcw; weights[i+1u]=mis;
     }
-    SmsResamplingState reservoir=emptySmsResampling();
+    SmsLogResamplingState reservoir=emptySmsLogResampling();
     float4 selection=smsTrialSample(canonical.words[7].zw,uint2(0,0),uint2(0xFFFFFFFBu,0));
     for (uint i=0u;i<4u;++i)
-        if (!smsResamplingAdd(reservoir,i,targets[i],ucws[i],weights[i],selection[i])) return false;
-    if (reservoir.weightSum==0.0) return true;
+        if (!smsLogResamplingAdd(reservoir,i,targets[i],ucws[i],weights[i],selection[i])) return false;
+    if (reservoir.weightSum==kSmsLogZero) return true;
     if (reservoir.selected>=4u) return false;
-    return smsResamplingEstimate(reservoir,values[reservoir.selected],estimate);
+    return smsLogResamplingEstimate(reservoir,values[reservoir.selected],estimate);
 }
