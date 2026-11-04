@@ -68,8 +68,10 @@ void main(uint3 group:SV_GroupID,uint lane:SV_GroupIndex) {
     smsLoadRoot(work,centralRoot,centralCount);
     float centralMass=1.0;
     float centralUcw=exp2(centralUcwLog);
+    smsDiagnosticMaxFloat(33u,centralUcw);
     float3 centralEstimate=asfloat(work.words[11].xyz);
     float centralLuminance=smsLuminance(centralEstimate);
+    smsDiagnosticMaxFloat(34u,centralLuminance);
     if (!(centralLuminance>0.0) || !isfinite(centralLuminance)) return;
     // Temporal domain: reprojected previous-frame reservoir. Clamp the fetch to
     // the bound image extent (the 1x1 dummy must never be read out of bounds).
@@ -144,10 +146,13 @@ void main(uint3 group:SV_GroupID,uint lane:SV_GroupIndex) {
     float temporalUcw=asfloat(previous.weight);
     float temporalWeight=temporalMis*temporalLuminance*temporalUcw;
     float centralWeight=centralMis*centralLuminance*centralUcw;
+    smsDiagnosticMaxFloat(35u,temporalWeight);
+    smsDiagnosticMaxFloat(36u,centralWeight);
     float weightSum=centralWeight+temporalWeight;
     if (!(weightSum>0.0) || !isfinite(weightSum)) return;
     float4 draw=smsTrialSample(work.words[7].zw,uint2(slot,1u),uint2(0xFFFFFFF9u,0));
     bool selectTemporal=draw.x*weightSum<temporalWeight;
+    if (selectTemporal) smsDiagnostic(37u);
     // Reference finalizeGRIS: the reservoir carries the GRIS estimate weight
     // (raw sum over the selected candidate's target luminance). Without this
     // division the scale compounds across frames and the estimate explodes.

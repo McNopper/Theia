@@ -235,7 +235,15 @@ bool smsSpatialEstimateReservoirs(uint slot,uint width,uint height,SmsWorkRecord
     if (reservoir.selected>=4u) { smsDiagnostic(31u); return true; }
     if (reservoir.selected>0u) smsDiagnostic(kSmsDiagSelectedNeighbors);
     smsDiagnosticMaxFloat(27u,asfloat(central.weight));
-    if (!smsLogResamplingEstimate(reservoir,values[reservoir.selected],estimate)) return false;
+    if (!smsLogResamplingEstimate(reservoir,values[reservoir.selected],estimate)) {
+        // Representability routing: a candidate whose combined GRIS estimate
+        // exceeds the float range is dominated by a near-caustic firefly the
+        // local estimator also samples. Render the pixel with its local
+        // estimate instead of failing the logical frame.
+        smsDiagnostic(32u);
+        estimate=asfloat(canonical.words[11].xyz);
+        return true;
+    }
     // Final reservoir: the selected candidate, spliced into this pixel's
     // receiver context, carries the finalized GRIS weight (raw sum over the
     // selected target luminance) and the confidence mass.

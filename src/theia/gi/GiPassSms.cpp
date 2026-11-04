@@ -25,14 +25,14 @@ bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
     m_smsDiagEnabled = harmonia::core::getEnvString("THEIA_SMS_DIAGNOSTICS") == std::optional<std::string>{"1"};
     auto diagnostics =
         harmonia::core::Buffer::create(*m_ctx,
-                                       32 * sizeof(std::uint32_t),
+                                       40 * sizeof(std::uint32_t),
                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                        VMA_MEMORY_USAGE_GPU_TO_CPU,
                                        "theia.sms.diagnostics");
     if (!diagnostics)
         return false;
     m_smsDiagnostics = std::move(*diagnostics);
-    const std::array<std::uint32_t, 32> zeros{};
+    const std::array<std::uint32_t, 40> zeros{};
     m_smsDiagnostics.uploadData(zeros.data(), sizeof(zeros));
     if (m_cfg.smsEnabled) {
         const auto pixels = std::uint64_t{m_cfg.width} * m_cfg.height;
@@ -146,7 +146,7 @@ void GiPass::reportSmsDiagnostics() const noexcept {
     if (!m_smsDiagEnabled)
         return;
     m_smsDiagnosticsReported = true; // TEMP: per-frame reporting
-    std::array<std::uint32_t, 32> counters{};
+    std::array<std::uint32_t, 40> counters{};
     if (m_smsDiagnostics.readData(counters.data(), sizeof(counters)) != VK_SUCCESS) {
         harmonia::core::Logger::error("Theia SMS diagnostics readback failed (observation only)");
         return;
@@ -157,7 +157,8 @@ void GiPass::reportSmsDiagnostics() const noexcept {
         "maxTrials={} maxBase=({:.6g},{:.6g},{:.6g}) maxFinal={:.6g} maxConditionalMass={:.6g} "
         "maxReciprocalWeight={:.6g} temporal={} temporalCentral={} temporalCandidateErr={} spatialRgbErr={} "
         "spatialResampleErr={} spatialSelectErr={} maxReservoirWeight={:.6g} maxPrevMass={:.6g} "
-        "maxCentralReservoirWeight={:.6g} maxSourceReservoirWeight={:.6g}",
+        "maxCentralReservoirWeight={:.6g} maxSourceReservoirWeight={:.6g} maxCentralUcw={:.6g} "
+        "maxCentralLum={:.6g} maxTemporalWeight={:.6g} maxCentralWeight={:.6g} overflowRoutes={}",
         counters[0],
         counters[1],
         counters[2],
@@ -189,7 +190,12 @@ void GiPass::reportSmsDiagnostics() const noexcept {
         std::bit_cast<float>(counters[25]),
         std::bit_cast<float>(counters[26]),
         std::bit_cast<float>(counters[27]),
-        std::bit_cast<float>(counters[28]));
+        std::bit_cast<float>(counters[28]),
+        std::bit_cast<float>(counters[33]),
+        std::bit_cast<float>(counters[34]),
+        std::bit_cast<float>(counters[35]),
+        std::bit_cast<float>(counters[36]),
+        counters[32]);
 }
 
 std::expected<bool, VkResult> GiPass::frameReady() const noexcept {
