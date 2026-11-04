@@ -63,22 +63,54 @@ Optional max-factor diagnostics are implemented; the estimator stays at
 production settings and remains experimental.
 
 **SMS direction resolved as a published-method port (2026-11-04).** The C1
-tail-variance blocker and its remedy are established literature, not new
-research: Hong, Duan, Wang, Yuksel, Zeltner, Lin, "Sample Space Partitioning
-and Spatiotemporal Resampling for Specular Manifold Sampling", SIGGRAPH Asia
-2025 (DOI `10.1145/3757377.3763927`), reference implementation
+tail-variance remedy is established literature, not new research: Hong, Duan,
+Wang, Yuksel, Zeltner, Lin, "Sample Space Partitioning and Spatiotemporal
+Resampling for Specular Manifold Sampling", SIGGRAPH Asia 2025
+(DOI `10.1145/3757377.3763927`), reference implementation
 `github.com/Utah-Graphics-Lab/PSMS-ReSTIR` (Falcor 8.0, Slang). Our C1
-measurements independently reproduce the paper's problem statement (plain SMS
-unbiased but slow and firefly-dominated at interactive budgets), and the
+measurements independently reproduce the paper's problem statement, and the
 verified constraint-Jacobian/oracle core is exactly the foundation the port
-reuses. Port plan: (1) tile-based trust regions plus conditional-sample-space
-Bernoulli trials, (2) per-16x16-pixel-block prior with alpha mixing replacing
-per-pixel pilots, (3) manifold-shift GRIS spatiotemporal reuse for SMS
-reservoirs. C1 acceptance re-runs after each phase lands; the existing
-fixtures, oracle and diagnostics remain the verification baseline. The path
-reservoir's no-temporal-merge rule is unaffected (SMS reservoir temporal
-reuse here is the published method with light-space coordinates and
-confidence caps).
+reuses. The path reservoir's no-temporal-merge rule is unaffected (SMS
+reservoir temporal reuse here is the published method with light-space
+coordinates and confidence caps).
+
+**PSMS-ReSTIR audit complete: sections 3, 4 and 5.2 are already ported and
+faithful; the remaining gap is section 5 temporal reuse (2026-11-04).**
+Reference: `github.com/Utah-Graphics-Lab/PSMS-ReSTIR` (sparse clone at
+`external/PSMS-ReSTIR`), defaults `numTilesX=16`, `uniformThreshold=4`,
+`priorThreshold=1`, `alpha=0.8`, `maxBernoulliTrials=128`, temporal cap 20,
+shift-mapping Newton cap 5, one spatial neighbor in a 30 px radius. Our
+existing code already implements: periodic 3x3 tile trust regions with
+per-proposal/per-reprojection termination (`sms_partition.slang`,
+`sms_solver.slang`); conditional sample spaces with closed-form prior-mixed
+marginals (Eqs. 7-9 verbatim: `smsPriorRegionProbabilities`, alpha 0.8) and
+conditional reciprocal trials weighted `trials/P(C)` (`sms_compute.slang`);
+inverse-checked J=1 delta shifts with the 5-iteration cap and failure
+taxonomy (`Theia/shaders/sms_shift.slang`); log-domain GRIS pairwise MIS with
+UCW factoring (`sms_resampling.slang`). Our conditional region is a
+generalized adaptive-margin superset of the paper's fixed 3x3, explicitly
+permitted by the paper's footnote 3. This explains the C1 measurement:
+`reuse` currently performs within-frame spatial reuse only, so it cannot beat
+`local` variance.
+
+**Phase 3 port spec (temporal resampling, Hong et al. section 5).** Add a
+persistent per-pixel SMS reservoir next to the work queue: selected root
+record subset (light words 5/6/7, root vertices, receiver depth, base
+`words[11]`), UCW, and confidence `M`. Temporal pass after the
+repeat/repeat-batch phases complete and before resolve: reproject via Theia
+motion vectors (note: they are the previous frame's vectors under the GI ->
+MotionVector frame order), jittered target pixel, screen-domain guard; read
+the previous reservoir, cap `M` at 20; both directional shifts via
+`smsShiftOnce`-style 5-iteration bounded walks with inverse matching; two-
+domain MIS `m = M_pHat / (M_pHat + M_central*pHat(Tp2))`; merged
+`M = centralM + temporalM`; GRIS finalize `weight /= pHat(selected)`. Spatial
+reuse then consumes `M`-weighted defensive pairwise MIS instead of the
+implicit all-ones confidence, and moves to the paper-default single dithered
+neighbor drawn from an offset table with a resolution-scaled radius.
+Invalidation: reservoirs reset on scene/resolution change; unvalidated
+reservoir state never reaches accumulation; work-queue validation contract
+unchanged. C1 re-runs reference/correctness/performance after the temporal
+pass lands; reuse-vs-local equal-time MSE is the acceptance metric.
 
 **Living source of truth for outstanding work.** Shipped items are removed from the work
 lists; the shipped record is the *Baseline* below and `git log`. Only outstanding work is
