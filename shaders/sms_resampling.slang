@@ -1,5 +1,8 @@
 // GRIS 2022 Eq.37 / Hong 2025 Eq.10-11, one canonical and N neighboring
 // UNMERGED domains. Proxy targets are not PDFs or reciprocal-count estimates.
+import sms_types;
+import sms;
+import sms_work;
 bool smsPairwiseMis(float target,float source,uint neighbors,bool supported,
     out float canonicalPart,out float neighborWeight) {
     canonicalPart=neighborWeight=0.0;
@@ -49,6 +52,19 @@ bool smsResamplingEstimate(SmsResamplingState state,float3 integrand,out float3 
 // A finite sentinel denotes exact zero support. All positive quantities are
 // log2 values; even physical F / UCW outside the float range remain supported.
 static const float kSmsLogZero=-3.402823466e38;
+// Contribution helpers are macro-specialized: the resolve family emits log
+// values while reservoir estimates stay linear. Convert with the zero sentinel.
+float3 smsReservoirLinearFromLog(float3 logRgb) {
+    float3 result=float3(0.0,0.0,0.0);
+    for (uint i=0u;i<3u;++i) if (logRgb[i]!=kSmsLogZero) result[i]=exp2(logRgb[i]);
+    return result;
+}
+// Theia/shaders/sms_context.slang defines smsLuminance for consumers; this
+// module must stay self-contained, so derive luminance from its own helpers.
+float smsLogLuminanceToLinear(float3 logRgb) {
+    float3 linear=smsReservoirLinearFromLog(logRgb);
+    return dot(linear,float3(.2126,.7152,.0722));
+}
 bool smsLogNonnegative(float value,out float logarithm) {
     uint bits=asuint(value),magnitude=bits&0x7FFFFFFFu;
     logarithm=kSmsLogZero;
@@ -92,6 +108,26 @@ bool smsLogUnbiasedWeight(float reciprocal,float conditionalMass,float lightPdf,
         !smsLogNonnegative(lightPdf,pdf) || count==kSmsLogZero || mass==kSmsLogZero || pdf==kSmsLogZero) return false;
     logWeight=count-mass-pdf;
     return isfinite(logWeight);
+}
+// A finished work record as a resampling candidate: reciprocal status, root
+// count and the factored count/P(C)/p_light unbiased weight.
+bool smsLocalCandidate(SmsWorkRecord work,float proxy,out bool candidate,out float ucw) {
+    candidate=false; ucw=kSmsLogZero;
+    uint phase=smsPhase(work);
+    if (phase==kSmsAbsent) return true;
+    if (phase!=kSmsDone || work.words[14].y!=1u || !isfinite(proxy)) return false;
+    uint status=work.words[12].z,count=work.words[10].z;
+    if (status==0u) return count==0u;
+    if (status!=1u || count<1u || count>2u || proxy==kSmsLogZero) return false;
+    SmsReciprocal reciprocal;
+    reciprocal.trials=work.words[12].xy; reciprocal.status=status;
+    float rootWeight;
+    if (!completedSmsReciprocal(reciprocal,rootWeight)) return false;
+    float mass=asfloat(work.words[11].w),lightPdf=asfloat(work.words[5].w);
+    // count / P(C) / p_light, kept factored; never an exact PDF
+    if (!smsLogUnbiasedWeight(rootWeight,mass,lightPdf,ucw)) return false;
+    candidate=true;
+    return true;
 }
 bool smsLogContribution(float3 base,float3 response,float geometric,float3 emission,
     float pdf,float3 prefix,out float3 value) {

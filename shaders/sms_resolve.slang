@@ -47,8 +47,13 @@ void main(uint3 group : SV_GroupID,uint lane : SV_GroupIndex) {
     uint2 pixel=uint2(slot%width,slot/width);
     float4 previous=t_smsHdr[pixel];
     float3 estimate=asfloat(work.words[11].xyz);
-    if ((t_smsProducer[0].flags&1u)!=0u && !smsSpatialEstimate(slot,width,height,work,estimate)) {
-        smsQueueCompletionError(pc,kSmsQueueNumericError); return;
+    bool reuse=(t_smsProducer[0].flags&1u)!=0u;
+    SmsReservoir final;
+    if (reuse) {
+        if (!smsSpatialEstimate(slot,width,height,work,estimate,final)) {
+            smsQueueCompletionError(pc,kSmsQueueNumericError); return;
+        }
+        t_smsProducer[0].finalReservoir[slot]=final;
     }
     float3 value=previous.xyz+estimate*asfloat(work.words[14].x);
     if (!all(isfinite(value))) { smsQueueCompletionError(pc,kSmsQueueNumericError); return; }

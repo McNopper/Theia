@@ -226,6 +226,8 @@ class GiPass {
     harmonia::core::UniquePipeline m_pipeline;
     harmonia::pipeline::SmsPass m_sms;
     harmonia::core::Buffer m_smsContext, m_smsPrefixes, m_smsPrior, m_smsDiagnostics;
+    harmonia::core::Buffer m_smsTemporalReservoir, m_smsFinalReservoir;
+    bool m_smsReservoirsCleared = false;
     bool m_smsDiagEnabled = false;
     mutable bool m_smsDiagnosticsReported = false;
     mutable VkResult m_frameError = VK_SUCCESS;

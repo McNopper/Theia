@@ -15,8 +15,9 @@ namespace {
 struct SmsProducerContext {
     VkDeviceAddress work, prefixes;
     std::uint32_t resolution, flags;
+    VkDeviceAddress temporalReservoir, finalReservoir;
 };
-static_assert(sizeof(SmsProducerContext) == 24);
+static_assert(sizeof(SmsProducerContext) == 40);
 } // namespace
 
 bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
@@ -65,6 +66,38 @@ bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
                 return false;
             m_smsPrior = std::move(*buffer);
         }
+        // Hong et al. 2025, section 5: persistent spatiotemporal reservoirs.
+        // Final reservoirs survive across frames; temporal reservoirs are the
+        // per-frame merge output consumed by resolve. The 320B SmsReservoir
+        // stride is fixed by the shader ABI. The temporal dispatch is held
+        // out until the residual dark/bright boundary weight amplification is
+        // fixed (see PLAN); the reuse path then runs spatially only.
+        if (m_cfg.smsSpatialReuse) {
+            // SmsReservoir: 256B record + 16-byte-aligned tail = 320B stride,
+            // mirrored from the shader ABI in Harmonia/shaders/sms_types.slang.
+            constexpr VkDeviceSize kSmsReservoirStride = 320;
+            if (pixels > (harmonia::pipeline::SmsPass::kMaxCapacity))
+                return false;
+            constexpr auto reservoirUsage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                            VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                            VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            auto temporal = harmonia::core::Buffer::create(*m_ctx,
+                                                           pixels * kSmsReservoirStride,
+                                                           reservoirUsage,
+                                                           VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                                           "theia.sms.reservoir.temporal");
+            if (!temporal)
+                return false;
+            m_smsTemporalReservoir = std::move(*temporal);
+            auto finalReservoir = harmonia::core::Buffer::create(*m_ctx,
+                                                                 pixels * kSmsReservoirStride,
+                                                                 reservoirUsage,
+                                                                 VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                                                 "theia.sms.reservoir.final");
+            if (!finalReservoir)
+                return false;
+            m_smsFinalReservoir = std::move(*finalReservoir);
+        }
         const std::filesystem::path shared{HARMONIA_SHADER_DIR};
         auto sms =
             harmonia::pipeline::SmsPass::create(*m_ctx,
@@ -76,14 +109,19 @@ bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
                                                 m_cfg.smsTrialBudget,
                                                 VK_SHADER_STAGE_COMPUTE_BIT,
                                                 prior ? shaderPath("sms_prior_build.spv") : std::filesystem::path{},
-                                                prior ? m_smsPrior.deviceAddress() : 0);
+                                                prior ? m_smsPrior.deviceAddress() : 0,
+                                                // Dispatch held out until the reservoir weight-amplification
+                                                // instability at dark/bright boundaries is fixed (see PLAN).
+                                                std::filesystem::path{});
         if (!sms)
             return false;
         m_sms = std::move(*sms);
         context = {m_sms.workBuffer().deviceAddress(),
                    m_smsPrefixes.deviceAddress(),
                    m_cfg.smsPartitionResolution,
-                   (m_cfg.smsSpatialReuse ? 1U : 0U) | (m_smsDiagEnabled ? 2U : 0U)};
+                   (m_cfg.smsSpatialReuse ? 1U : 0U) | (m_smsDiagEnabled ? 2U : 0U),
+                   m_smsTemporalReservoir.isValid() ? m_smsTemporalReservoir.deviceAddress() : 0,
+                   m_smsFinalReservoir.isValid() ? m_smsFinalReservoir.deviceAddress() : 0};
     }
     // Immutable configuration, uploaded only at initialization/resize. A disabled
     // context is real configuration, never a host-written hot-path work counter.
@@ -100,13 +138,14 @@ bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
         writer.writeStorageBufferHandle(*m_ctx, 25, m_smsContext);
         writer.writeStorageBufferHandle(*m_ctx, 26, m_smsDiagnostics);
     }
+    m_smsReservoirsCleared = false;
     return true;
 }
 
 void GiPass::reportSmsDiagnostics() const noexcept {
-    if (!m_smsDiagEnabled || m_smsDiagnosticsReported)
+    if (!m_smsDiagEnabled)
         return;
-    m_smsDiagnosticsReported = true;
+    m_smsDiagnosticsReported = true; // TEMP: per-frame reporting
     std::array<std::uint32_t, 32> counters{};
     if (m_smsDiagnostics.readData(counters.data(), sizeof(counters)) != VK_SUCCESS) {
         harmonia::core::Logger::error("Theia SMS diagnostics readback failed (observation only)");
@@ -116,7 +155,9 @@ void GiPass::reportSmsDiagnostics() const noexcept {
         "sms_diag eligible={} roots={} canonical={} domains={} candidates={} canonicalInv={}/{} neighborInv={}/{} "
         "selected={} topologyFail={} solverFail={} visibilityFail={} supportFail={} completedReciprocals={} "
         "maxTrials={} maxBase=({:.6g},{:.6g},{:.6g}) maxFinal={:.6g} maxConditionalMass={:.6g} "
-        "maxReciprocalWeight={:.6g}",
+        "maxReciprocalWeight={:.6g} temporal={} temporalCentral={} temporalCandidateErr={} spatialRgbErr={} "
+        "spatialResampleErr={} spatialSelectErr={} maxReservoirWeight={:.6g} maxPrevMass={:.6g} "
+        "maxCentralReservoirWeight={:.6g} maxSourceReservoirWeight={:.6g}",
         counters[0],
         counters[1],
         counters[2],
@@ -138,7 +179,17 @@ void GiPass::reportSmsDiagnostics() const noexcept {
         std::bit_cast<float>(counters[18]),
         std::bit_cast<float>(counters[19]),
         std::bit_cast<float>(counters[20]),
-        std::bit_cast<float>(counters[21]));
+        std::bit_cast<float>(counters[21]),
+        counters[22],
+        counters[23],
+        counters[24],
+        counters[29],
+        counters[30],
+        counters[31],
+        std::bit_cast<float>(counters[25]),
+        std::bit_cast<float>(counters[26]),
+        std::bit_cast<float>(counters[27]),
+        std::bit_cast<float>(counters[28]));
 }
 
 std::expected<bool, VkResult> GiPass::frameReady() const noexcept {
@@ -156,6 +207,10 @@ std::expected<bool, VkResult> GiPass::frameReady() const noexcept {
         return std::unexpected(m_frameError);
     }
     if (completion->status == harmonia::pipeline::SmsQueueCompletion::Failed) {
+        // Observation-only counters persist across submissions; report them
+        // before failing so the error site is identifiable.
+        if (m_smsDiagEnabled)
+            reportSmsDiagnostics();
         harmonia::core::Logger::error("Theia SMS logical frame failed: GPU error bits {}", completion->error);
         m_frameError = VK_ERROR_UNKNOWN;
         return std::unexpected(m_frameError);
