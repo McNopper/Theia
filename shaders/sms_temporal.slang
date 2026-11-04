@@ -85,6 +85,7 @@ void main(uint3 group:SV_GroupID,uint lane:SV_GroupIndex) {
         previousPixel.x<int(width) && previousPixel.y<int(height);
     SmsReservoir previous=context.finalReservoir[temporalDomain?uint(previousPixel.y*width+previousPixel.x):slot];
     float previousMass=smsReservoirValid(previous)?min(asfloat(previous.mass),kSmsTemporalMassCap):0.0;
+    smsDiagnosticMaxFloat(26u,previousMass);
     TheiaSmsScene scene;
     bool temporalSupported=false;
     float3 temporalEstimateLinear=0.0.xxx;
@@ -158,6 +159,7 @@ void main(uint3 group:SV_GroupID,uint lane:SV_GroupIndex) {
     // division the scale compounds across frames and the estimate explodes.
     float selectedLuminance=selectTemporal?temporalLuminance:centralLuminance;
     if (!(selectedLuminance>0.0) || !isfinite(selectedLuminance)) return;
+    smsDiagnosticMaxFloat(38u,selectedLuminance);
     merged.record=work;
     merged.prefix=prefix;
     if (selectTemporal) {

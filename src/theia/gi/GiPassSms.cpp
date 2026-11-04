@@ -110,8 +110,8 @@ bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
                                                 VK_SHADER_STAGE_COMPUTE_BIT,
                                                 prior ? shaderPath("sms_prior_build.spv") : std::filesystem::path{},
                                                 prior ? m_smsPrior.deviceAddress() : 0,
-                                                // Dispatch held out until the reservoir weight-amplification
-                                                // instability at dark/bright boundaries is fixed (see PLAN).
+                                                // Dispatch held out: the temporal merge stores reservoir weights
+                                                // contradicting its bounded inputs on frame one; root-cause first.
                                                 std::filesystem::path{});
         if (!sms)
             return false;
@@ -158,7 +158,8 @@ void GiPass::reportSmsDiagnostics() const noexcept {
         "maxReciprocalWeight={:.6g} temporal={} temporalCentral={} temporalCandidateErr={} spatialRgbErr={} "
         "spatialResampleErr={} spatialSelectErr={} maxReservoirWeight={:.6g} maxPrevMass={:.6g} "
         "maxCentralReservoirWeight={:.6g} maxSourceReservoirWeight={:.6g} maxCentralUcw={:.6g} "
-        "maxCentralLum={:.6g} maxTemporalWeight={:.6g} maxCentralWeight={:.6g} overflowRoutes={}",
+        "maxCentralLum={:.6g} maxTemporalWeight={:.6g} maxCentralWeight={:.6g} overflowRoutes={} temporalSelects={} "
+        "maxSelectedLum={:.6g} maxPrevMassEarly={}",
         counters[0],
         counters[1],
         counters[2],
@@ -195,7 +196,10 @@ void GiPass::reportSmsDiagnostics() const noexcept {
         std::bit_cast<float>(counters[34]),
         std::bit_cast<float>(counters[35]),
         std::bit_cast<float>(counters[36]),
-        counters[32]);
+        counters[32],
+        counters[37],
+        std::bit_cast<float>(counters[38]),
+        counters[39]);
 }
 
 std::expected<bool, VkResult> GiPass::frameReady() const noexcept {
