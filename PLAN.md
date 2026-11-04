@@ -112,6 +112,27 @@ reservoir state never reaches accumulation; work-queue validation contract
 unchanged. C1 re-runs reference/correctness/performance after the temporal
 pass lands; reuse-vs-local equal-time MSE is the acceptance metric.
 
+**Temporal pass implemented; dispatch held out pending one stability fix
+(2026-11-04).** `shaders/sms_temporal.slang` (two-domain merge, M cap 20,
+5-iteration bounded shifts with inverse-root checks, GRIS finalize), the
+320B `SmsReservoir` ABI (Harmonia `sms_types.slang`), the persistent
+temporal/final reservoir buffers, the `SmsPass` optional-temporal dispatch
+slot, M-aware defensive pairwise MIS, and failure-tolerant shift
+contributions (failed shifts are zero support, never frame faults) are all
+landed. Runtime bring-up exposed a residual **weight-amplification
+instability**: on extreme-contrast ROIs the finalized reservoir weight
+(`rawSum / lum(selected)`) amplifies across dark/bright boundaries
+(measured reservoir weight 1.16e9 on frame one; estimate 1.27e11 per channel
+and a nonfinite accumulation fault), consistent with the reference's
+finalizeGRIS recursion under p-hat scale mismatch. The dispatch is therefore
+held out (host passes an empty temporal path) and resolve falls back to the
+proven work-record spatial reuse when no valid central reservoir exists, so
+the shipped reuse behavior is exactly the pre-temporal one and all reuse
+fixtures stay green. Next step: bound the per-generation weight scale
+(reference-aligned options: M-cap aware defensive canonical weight, or
+normalizing reservoir weights by the domain target luminance), then re-enable
+the dispatch and re-run the reuse fixtures plus C1 stages.
+
 **Living source of truth for outstanding work.** Shipped items are removed from the work
 lists; the shipped record is the *Baseline* below and `git log`. Only outstanding work is
 tracked here.
