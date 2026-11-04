@@ -160,6 +160,20 @@ void main(uint3 group:SV_GroupID,uint lane:SV_GroupIndex) {
     float selectedLuminance=selectTemporal?temporalLuminance:centralLuminance;
     if (!(selectedLuminance>0.0) || !isfinite(selectedLuminance)) return;
     smsDiagnosticMaxFloat(38u,selectedLuminance);
+    // Single-slot probe: dump the full merge state of one fixed slot so the
+    // temporal-written reservoir can be compared with the resolve-side read.
+    if (asfloat(merged.weight)>1.0e6) {
+        t_smsDiagnostics[40u]=slot;
+        t_smsDiagnostics[41u]=asuint(weightSum);
+        t_smsDiagnostics[42u]=asuint(selectedLuminance);
+        t_smsDiagnostics[43u]=merged.weight;
+        t_smsDiagnostics[44u]=asuint(centralMis);
+        t_smsDiagnostics[45u]=asuint(centralUcw);
+        t_smsDiagnostics[46u]=asuint(centralLuminance);
+        t_smsDiagnostics[47u]=asuint(temporalMis);
+        t_smsDiagnostics[48u]=asuint(previousMass);
+        t_smsDiagnostics[49u]=asuint(temporalUcw);
+    }
     merged.record=work;
     merged.prefix=prefix;
     if (selectTemporal) {

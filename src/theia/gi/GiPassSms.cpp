@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <span>
 #include <utility>
+#include <vector>
 
 #include "harmonia/core/Env.hpp"
 #include "harmonia/core/Logger.hpp"
@@ -25,14 +26,14 @@ bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
     m_smsDiagEnabled = harmonia::core::getEnvString("THEIA_SMS_DIAGNOSTICS") == std::optional<std::string>{"1"};
     auto diagnostics =
         harmonia::core::Buffer::create(*m_ctx,
-                                       40 * sizeof(std::uint32_t),
+                                       64 * sizeof(std::uint32_t),
                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                        VMA_MEMORY_USAGE_GPU_TO_CPU,
                                        "theia.sms.diagnostics");
     if (!diagnostics)
         return false;
     m_smsDiagnostics = std::move(*diagnostics);
-    const std::array<std::uint32_t, 40> zeros{};
+    const std::array<std::uint32_t, 64> zeros{};
     m_smsDiagnostics.uploadData(zeros.data(), sizeof(zeros));
     if (m_cfg.smsEnabled) {
         const auto pixels = std::uint64_t{m_cfg.width} * m_cfg.height;
@@ -73,8 +74,9 @@ bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
         // out until the residual dark/bright boundary weight amplification is
         // fixed (see PLAN); the reuse path then runs spatially only.
         if (m_cfg.smsSpatialReuse) {
-            // SmsReservoir: 256B record + 16-byte-aligned tail = 320B stride,
-            // mirrored from the shader ABI in Harmonia/shaders/sms_types.slang.
+            // SmsReservoir: sizeof as computed by Slang = 320B (the struct tail
+            // rounds up to 16-byte alignment). Must match the shader's pointer
+            // stride exactly; a smaller allocation is OOB device-lost.
             constexpr VkDeviceSize kSmsReservoirStride = 320;
             if (pixels > (harmonia::pipeline::SmsPass::kMaxCapacity))
                 return false;
@@ -84,7 +86,7 @@ bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
             auto temporal = harmonia::core::Buffer::create(*m_ctx,
                                                            pixels * kSmsReservoirStride,
                                                            reservoirUsage,
-                                                           VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                                           VMA_MEMORY_USAGE_GPU_TO_CPU,
                                                            "theia.sms.reservoir.temporal");
             if (!temporal)
                 return false;
@@ -92,7 +94,7 @@ bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
             auto finalReservoir = harmonia::core::Buffer::create(*m_ctx,
                                                                  pixels * kSmsReservoirStride,
                                                                  reservoirUsage,
-                                                                 VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                                                 VMA_MEMORY_USAGE_GPU_TO_CPU,
                                                                  "theia.sms.reservoir.final");
             if (!finalReservoir)
                 return false;
@@ -111,7 +113,8 @@ bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
                                                 prior ? shaderPath("sms_prior_build.spv") : std::filesystem::path{},
                                                 prior ? m_smsPrior.deviceAddress() : 0,
                                                 // Dispatch held out: the temporal merge stores reservoir weights
-                                                // contradicting its bounded inputs on frame one; root-cause first.
+                                                // contradicting its instrumented inputs on frame one; root-cause
+                                                // first (see PLAN) before enabling.
                                                 std::filesystem::path{});
         if (!sms)
             return false;
@@ -146,7 +149,7 @@ void GiPass::reportSmsDiagnostics() const noexcept {
     if (!m_smsDiagEnabled)
         return;
     m_smsDiagnosticsReported = true; // TEMP: per-frame reporting
-    std::array<std::uint32_t, 40> counters{};
+    std::array<std::uint32_t, 64> counters{};
     if (m_smsDiagnostics.readData(counters.data(), sizeof(counters)) != VK_SUCCESS) {
         harmonia::core::Logger::error("Theia SMS diagnostics readback failed (observation only)");
         return;
@@ -159,7 +162,11 @@ void GiPass::reportSmsDiagnostics() const noexcept {
         "spatialResampleErr={} spatialSelectErr={} maxReservoirWeight={:.6g} maxPrevMass={:.6g} "
         "maxCentralReservoirWeight={:.6g} maxSourceReservoirWeight={:.6g} maxCentralUcw={:.6g} "
         "maxCentralLum={:.6g} maxTemporalWeight={:.6g} maxCentralWeight={:.6g} overflowRoutes={} temporalSelects={} "
-        "maxSelectedLum={:.6g} maxPrevMassEarly={}",
+        "maxSelectedLum={:.6g} maxPrevMassEarly={} probe_weightSum={:.6g} probe_selLum={:.6g} probe_weight={:.6g} "
+        "probe_mass={:.6g} probe_trials={} probe_PC={:.6g} rsl_weight={:.6g} rsl_mass={:.6g} rsl_estX={:.6g} "
+        "rsl_trials={} "
+        "hot_slot={} hot_weightSum={:.6g} hot_selLum={:.6g} hot_weight={:.6g} hot_mis={:.6g} hot_ucw={:.6g} "
+        "hot_lum={:.6g} hot_tMis={:.6g} hot_pMass={:.6g} hot_tUcw={:.6g}",
         counters[0],
         counters[1],
         counters[2],
@@ -199,7 +206,68 @@ void GiPass::reportSmsDiagnostics() const noexcept {
         counters[32],
         counters[37],
         std::bit_cast<float>(counters[38]),
-        counters[39]);
+        counters[39],
+        std::bit_cast<float>(counters[40]),
+        std::bit_cast<float>(counters[41]),
+        std::bit_cast<float>(counters[42]),
+        std::bit_cast<float>(counters[43]),
+        counters[44],
+        std::bit_cast<float>(counters[45]),
+        std::bit_cast<float>(counters[46]),
+        std::bit_cast<float>(counters[47]),
+        std::bit_cast<float>(counters[48]),
+        counters[49],
+        counters[40],
+        std::bit_cast<float>(counters[41]),
+        std::bit_cast<float>(counters[42]),
+        std::bit_cast<float>(counters[43]),
+        std::bit_cast<float>(counters[44]),
+        std::bit_cast<float>(counters[45]),
+        std::bit_cast<float>(counters[46]),
+        std::bit_cast<float>(counters[47]),
+        std::bit_cast<float>(counters[48]),
+        std::bit_cast<float>(counters[49]));
+    // Ground truth: direct host readback of the stored reservoirs. The
+    // SmsReservoir stride is 320B = 80 uint32 words; weight word 71, mass 72,
+    // count 73; record trials at word 48, base sum at 44, P(C') at 47.
+    if (m_smsTemporalReservoir.isValid() && m_smsFinalReservoir.isValid()) {
+        const std::uint64_t slots = std::uint64_t{m_cfg.width} * m_cfg.height;
+        const std::uint64_t words = slots * 80; // SmsReservoir = 320B = 80 uint32
+        std::vector<std::uint32_t> temporal(words);
+        std::vector<std::uint32_t> final(words);
+        if (m_smsTemporalReservoir.readData(temporal.data(), temporal.size() * sizeof(std::uint32_t)) == VK_SUCCESS &&
+            m_smsFinalReservoir.readData(final.data(), final.size() * sizeof(std::uint32_t)) == VK_SUCCESS) {
+            for (auto* table : {&temporal, &final}) {
+                float bestWeight = 0.0f;
+                std::uint64_t bestSlot = 0;
+                std::uint64_t heavy = 0;
+                for (std::uint64_t slot = 0; slot < slots; ++slot) {
+                    const std::uint64_t base = slot * 80;
+                    const float weight = std::bit_cast<float>(table->at(base + 71));
+                    if (std::isfinite(weight) && weight > bestWeight) {
+                        bestWeight = weight;
+                        bestSlot = slot;
+                    }
+                    if (weight > 1.0e6f)
+                        ++heavy;
+                }
+                const std::uint64_t base = bestSlot * 80;
+                harmonia::core::Logger::info(
+                    "sms_reservoir_dump buffer={} bestSlot={} weight={:.6g} mass={:.6g} count={} trials={} "
+                    "baseSum={:.6g} probC={:.6g} heavy={} estX={:.6g}",
+                    table == &temporal ? "temporal" : "final",
+                    bestSlot,
+                    std::bit_cast<float>(table->at(base + 71)),
+                    std::bit_cast<float>(table->at(base + 72)),
+                    table->at(base + 73),
+                    table->at(base + 48),
+                    std::bit_cast<float>(table->at(base + 44)),
+                    std::bit_cast<float>(table->at(base + 47)),
+                    heavy,
+                    std::bit_cast<float>(table->at(base + 68)));
+            }
+        }
+    }
 }
 
 std::expected<bool, VkResult> GiPass::frameReady() const noexcept {

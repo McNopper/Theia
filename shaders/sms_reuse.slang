@@ -235,6 +235,13 @@ bool smsSpatialEstimateReservoirs(uint slot,uint width,uint height,SmsWorkRecord
     if (reservoir.selected>=4u) { smsDiagnostic(31u); return true; }
     if (reservoir.selected>0u) smsDiagnostic(kSmsDiagSelectedNeighbors);
     smsDiagnosticMaxFloat(27u,asfloat(central.weight));
+    // Single-slot probe: the central reservoir as read by the resolve side.
+    if (slot==20319u) {
+        t_smsDiagnostics[46u]=central.weight;
+        t_smsDiagnostics[47u]=central.mass;
+        t_smsDiagnostics[48u]=central.estimate.x;
+        t_smsDiagnostics[49u]=central.record.words[12].x;
+    }
     if (!smsLogResamplingEstimate(reservoir,values[reservoir.selected],estimate)) {
         // Representability routing: a candidate whose combined GRIS estimate
         // exceeds the float range is dominated by a near-caustic firefly the
