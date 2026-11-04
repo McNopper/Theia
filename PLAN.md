@@ -62,6 +62,24 @@ unbiasedness review - a research scope decision, not an estimator repair
 Optional max-factor diagnostics are implemented; the estimator stays at
 production settings and remains experimental.
 
+**SMS direction resolved as a published-method port (2026-11-04).** The C1
+tail-variance blocker and its remedy are established literature, not new
+research: Hong, Duan, Wang, Yuksel, Zeltner, Lin, "Sample Space Partitioning
+and Spatiotemporal Resampling for Specular Manifold Sampling", SIGGRAPH Asia
+2025 (DOI `10.1145/3757377.3763927`), reference implementation
+`github.com/Utah-Graphics-Lab/PSMS-ReSTIR` (Falcor 8.0, Slang). Our C1
+measurements independently reproduce the paper's problem statement (plain SMS
+unbiased but slow and firefly-dominated at interactive budgets), and the
+verified constraint-Jacobian/oracle core is exactly the foundation the port
+reuses. Port plan: (1) tile-based trust regions plus conditional-sample-space
+Bernoulli trials, (2) per-16x16-pixel-block prior with alpha mixing replacing
+per-pixel pilots, (3) manifold-shift GRIS spatiotemporal reuse for SMS
+reservoirs. C1 acceptance re-runs after each phase lands; the existing
+fixtures, oracle and diagnostics remain the verification baseline. The path
+reservoir's no-temporal-merge rule is unaffected (SMS reservoir temporal
+reuse here is the published method with light-space coordinates and
+confidence caps).
+
 **Living source of truth for outstanding work.** Shipped items are removed from the work
 lists; the shipped record is the *Baseline* below and `git log`. Only outstanding work is
 tracked here.
