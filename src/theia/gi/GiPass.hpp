@@ -227,6 +227,7 @@ class GiPass {
     harmonia::pipeline::SmsPass m_sms;
     harmonia::core::Buffer m_smsContext, m_smsPrefixes, m_smsPrior, m_smsDiagnostics;
     harmonia::core::Buffer m_smsTemporalReservoir, m_smsHistoryReservoir;
+    harmonia::core::Buffer m_smsTemporalStaging, m_smsHistoryStaging;
     bool m_smsReservoirsCleared = false;
     bool m_smsDiagEnabled = false;
     mutable bool m_smsDiagnosticsReported = false;

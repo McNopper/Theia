@@ -610,6 +610,14 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         m_frameError = m_sms.recordBegin(cmd);
         if (m_frameError == VK_SUCCESS)
             m_frameError = m_sms.recordBatch(cmd);
+        if (m_frameError == VK_SUCCESS && m_smsTemporalStaging.isValid() && m_smsHistoryStaging.isValid()) {
+            // Diagnostics ground truth: mirror the device-local reservoirs into
+            // the host-visible staging pair after the passes (observation only).
+            VkBufferCopy temporalCopy{0, 0, m_smsTemporalReservoir.size()};
+            vkCmdCopyBuffer(cmd, m_smsTemporalReservoir.handle(), m_smsTemporalStaging.handle(), 1, &temporalCopy);
+            VkBufferCopy historyCopy{0, 0, m_smsHistoryReservoir.size()};
+            vkCmdCopyBuffer(cmd, m_smsHistoryReservoir.handle(), m_smsHistoryStaging.handle(), 1, &historyCopy);
+        }
     }
     m_frameRecorded = m_frameError == VK_SUCCESS;
 

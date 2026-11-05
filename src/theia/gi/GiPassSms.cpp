@@ -81,7 +81,12 @@ bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
         if (m_cfg.smsSpatialReuse) {
             // SmsReservoir: sizeof as computed by Slang = 320B (the struct tail
             // rounds up to 16-byte alignment). Must match the shader's pointer
-            // stride exactly; a smaller allocation is OOB device-lost.
+            // stride exactly; a smaller allocation is OOB device-lost. The
+            // reservoirs are DEVICE-LOCAL: every frame touches them per slot
+            // (merge stores for all slots, spatial reads, the history copy) -
+            // host-visible placement put ~100MB/frame over PCIe and cost 4x
+            // the frame time. The diagnostics ground-truth dump reads through
+            // dedicated host-visible staging copies recorded at frame end.
             constexpr VkDeviceSize kSmsReservoirStride = 320;
             if (pixels > (harmonia::pipeline::SmsPass::kMaxCapacity))
                 return false;
@@ -91,7 +96,7 @@ bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
             auto temporal = harmonia::core::Buffer::create(*m_ctx,
                                                            pixels * kSmsReservoirStride,
                                                            reservoirUsage | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                                                           VMA_MEMORY_USAGE_GPU_TO_CPU,
+                                                           VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
                                                            "theia.sms.reservoir.temporal");
             if (!temporal)
                 return false;
@@ -99,11 +104,30 @@ bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
             auto historyReservoir = harmonia::core::Buffer::create(*m_ctx,
                                                                    pixels * kSmsReservoirStride,
                                                                    reservoirUsage,
-                                                                   VMA_MEMORY_USAGE_GPU_TO_CPU,
+                                                                   VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
                                                                    "theia.sms.reservoir.history");
             if (!historyReservoir)
                 return false;
             m_smsHistoryReservoir = std::move(*historyReservoir);
+            if (m_smsDiagEnabled) {
+                constexpr auto stagingUsage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+                auto temporalStaging = harmonia::core::Buffer::create(*m_ctx,
+                                                                      pixels * kSmsReservoirStride,
+                                                                      stagingUsage,
+                                                                      VMA_MEMORY_USAGE_GPU_TO_CPU,
+                                                                      "theia.sms.reservoir.temporal.staging");
+                if (!temporalStaging)
+                    return false;
+                m_smsTemporalStaging = std::move(*temporalStaging);
+                auto historyStaging = harmonia::core::Buffer::create(*m_ctx,
+                                                                     pixels * kSmsReservoirStride,
+                                                                     stagingUsage,
+                                                                     VMA_MEMORY_USAGE_GPU_TO_CPU,
+                                                                     "theia.sms.reservoir.history.staging");
+                if (!historyStaging)
+                    return false;
+                m_smsHistoryStaging = std::move(*historyStaging);
+            }
         }
         const std::filesystem::path shared{HARMONIA_SHADER_DIR};
         auto sms = harmonia::pipeline::SmsPass::create(
@@ -134,14 +158,13 @@ bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
     }
     // Immutable configuration, uploaded only at initialization/resize. A disabled
     // context is real configuration, never a host-written hot-path work counter.
-    // Host-visible so the diagnostics readback can verify the GPU-visible
-    // reservoir pointers during the temporal bring-up.
+    // Device-local: every SMS dispatch loads it (uploadData stages the copy).
     auto buffer =
         harmonia::core::Buffer::create(*m_ctx,
                                        sizeof(SmsProducerContext),
                                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
                                            VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                       VMA_MEMORY_USAGE_GPU_TO_CPU,
+                                       VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
                                        "theia.sms.context");
     if (!buffer)
         return false;
@@ -245,16 +268,17 @@ void GiPass::reportSmsDiagnostics() const noexcept {
         std::bit_cast<float>(counters[57]),
         counters[60],
         counters[61]);
-    // Ground truth: direct host readback of the stored reservoirs. Locate the
-    // temporal merge magic (reserved0 = 0x12345678) to establish the stride
-    // the shader actually used, then dump that entry's fields.
-    if (m_smsTemporalReservoir.isValid() && m_smsHistoryReservoir.isValid()) {
+    // Ground truth: direct host readback of the stored reservoirs (through the
+    // host-visible staging copies recorded at frame end). Locate the temporal
+    // merge magic (reserved0 = 0x12345678) to establish the stride the shader
+    // actually used, then dump that entry's fields.
+    if (m_smsTemporalStaging.isValid() && m_smsHistoryStaging.isValid()) {
         const std::uint64_t slots = std::uint64_t{m_cfg.width} * m_cfg.height;
         const std::uint64_t words = slots * 80;
         std::vector<std::uint32_t> temporal(words);
         std::vector<std::uint32_t> history(words);
-        if (m_smsTemporalReservoir.readData(temporal.data(), temporal.size() * sizeof(std::uint32_t)) == VK_SUCCESS &&
-            m_smsHistoryReservoir.readData(history.data(), history.size() * sizeof(std::uint32_t)) == VK_SUCCESS) {
+        if (m_smsTemporalStaging.readData(temporal.data(), temporal.size() * sizeof(std::uint32_t)) == VK_SUCCESS &&
+            m_smsHistoryStaging.readData(history.data(), history.size() * sizeof(std::uint32_t)) == VK_SUCCESS) {
             for (auto* table : {&temporal, &history}) {
                 // Full-buffer magic scan: every occurrence of the merge magic
                 // (reserved0) regardless of stride. The spacing between hits IS
