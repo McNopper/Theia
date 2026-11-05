@@ -70,7 +70,13 @@ void main(uint3 group:SV_GroupID,uint lane:SV_GroupIndex) {
     float centralUcw=exp2(centralUcwLog);
     smsDiagnosticMaxFloat(33u,centralUcw);
     float3 centralEstimate=asfloat(work.words[11].xyz);
-    float centralLuminance=smsLuminance(centralEstimate);
+    // words[11] carries the FINAL weighted local estimate E = f*W_local (the
+    // sample pass overwrites it at reciprocal completion). The reservoir
+    // contract (Hong et al. 2025) stores the RAW integrand f with the weight
+    // carried separately; recover f = E/W so the RIS never re-applies W.
+    if (!(centralUcw>0.0) || !isfinite(centralUcw)) return;
+    float3 centralIntegrand=centralEstimate/centralUcw;
+    float centralLuminance=smsLuminance(centralIntegrand);
     smsDiagnosticMaxFloat(34u,centralLuminance);
     if (!(centralLuminance>0.0) || !isfinite(centralLuminance)) return;
     // Temporal domain: reprojected previous-frame reservoir. Clamp the fetch to
@@ -184,7 +190,7 @@ void main(uint3 group:SV_GroupID,uint lane:SV_GroupIndex) {
         merged.estimate=temporalEstimateLinear;
         merged.count=temporalCount;
     } else {
-        merged.estimate=centralEstimate;
+        merged.estimate=centralIntegrand;
         merged.count=centralCount;
     }
     merged.weight=asuint(weightSum/selectedLuminance);

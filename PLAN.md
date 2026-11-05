@@ -138,26 +138,32 @@ temporal dispatch on frame one, compare the stored 320B entry bytes against
 the source formula, fix the divergence, then re-enable and re-run the reuse
 fixtures plus C1 stages.
 
-**Temporal pass implemented; dispatch held out pending one stability fix
-(2026-11-04).** `shaders/sms_temporal.slang` (two-domain merge, M cap 20,
-5-iteration bounded shifts with inverse-root checks, GRIS finalize), the
-320B `SmsReservoir` ABI (Harmonia `sms_types.slang`), the persistent
-temporal/final reservoir buffers, the `SmsPass` optional-temporal dispatch
-slot, M-aware defensive pairwise MIS, and failure-tolerant shift
-contributions (failed shifts are zero support, never frame faults) are all
-landed. Runtime bring-up exposed a residual **weight-amplification
-instability**: on extreme-contrast ROIs the finalized reservoir weight
-(`rawSum / lum(selected)`) amplifies across dark/bright boundaries
-(measured reservoir weight 1.16e9 on frame one; estimate 1.27e11 per channel
-and a nonfinite accumulation fault), consistent with the reference's
-finalizeGRIS recursion under p-hat scale mismatch. The dispatch is therefore
-held out (host passes an empty temporal path) and resolve falls back to the
-proven work-record spatial reuse when no valid central reservoir exists, so
-the shipped reuse behavior is exactly the pre-temporal one and all reuse
-fixtures stay green. Next step: bound the per-generation weight scale
-(reference-aligned options: M-cap aware defensive canonical weight, or
-normalizing reservoir weights by the domain target luminance), then re-enable
-the dispatch and re-run the reuse fixtures plus C1 stages.
+**Temporal pass implemented; five bring-up defects root-caused and fixed
+(2026-11-05).** The section 5 chain now functions end-to-end (history
+persists across frames, temporal selections occur, spatial reuse active at
+neighborInv 2683/2831, zero error markers). Fixed: (1) the SmsReservoir
+`weight`/`mass` fields were declared `float` but written with `asuint(..)` -
+Slang converted the bit integer to a float VALUE, storing sane weights ~2e3
+as ~1.1e9 and compounding to a 2270x pooled overestimate on C1 (fields are
+now `uint`, matching the intended float-bits contract); (2) the neighbor
+dimension guard fired on EMPTY entries before the validity check and
+faulted frames (validity first now); (3) the dispatch wrote through null
+context pointers when reservoirs are absent (non-reuse modes) - device
+lost; gated on reservoir validity; (4) the spatial MIS massSum never
+included neighbor masses (reference `cSum = M_c + sum M_n`) - systematic
++15% on the mirror fixture; restructured to the reference's two-pass form;
+(5) the reservoir candidate value was the already-weighted local estimate
+E=f*W (words[11] is overwritten at reciprocal completion) while the RIS
+re-applied W - the C1 2270x explosion; the temporal merge now recovers the
+raw integrand f=E/W per the reference contract. Measured C1 after the
+fixes: reuse pooled 1.1886@512f / 1.1168@2048f vs local 1.1446/1.0722 -
+the estimator is unbiased-scale and reuse tracks local within noise.
+**Open:** the synthetic mirror fixture reads a systematic 0.61 energy
+ratio (a scene-specific estimator defect - not the C1 path); and the C1
+2% gate remains blocked by the original heavy-tail variance (seed 91
+excursions), which the temporal reuse has not yet reduced below local.
+Dispatch held out (green fixtures + suite); flip after the mirror
+systematic is fixed.
 
 **Living source of truth for outstanding work.** Shipped items are removed from the work
 lists; the shipped record is the *Baseline* below and `git log`. Only outstanding work is

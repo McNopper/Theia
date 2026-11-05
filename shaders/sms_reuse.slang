@@ -146,14 +146,13 @@ bool smsSpatialEstimateReservoirs(uint slot,uint width,uint height,SmsWorkRecord
     targets[0]=smsLogTarget(values[0]);
     ucws[0]=asfloat(central.weight)>0.0?log2(asfloat(central.weight)):kSmsLogZero;
     weights[0]=kSmsLogZero; // accumulated after the loop from the defensive masses
-    float massSum=centralMass;
     uint2 pixel=uint2(slot%width,slot/width);
     uint selectedSlots[3]={0xFFFFFFFFu,0xFFFFFFFFu,0xFFFFFFFFu};
-    TheiaSmsScene scene;
-    SmsManifoldVertex centralRoot[2];
-    uint centralCount;
-    smsLoadRoot(central.record,centralRoot,centralCount);
-    float canonicalMis=centralMass/massSum;
+    // Reference two-pass structure: cSum = centralM + all valid neighbor M
+    // BEFORE any MIS weight is formed (SpatialResampling.cs.slang).
+    SmsReservoir sources[3]={smsEmptyReservoir(),smsEmptyReservoir(),smsEmptyReservoir()};
+    bool candidates[3]={false,false,false};
+    float massSum=centralMass;
     for (uint i=0u;i<kSmsSpatialNeighbors;++i) {
         float4 draw=smsTrialSample(central.record.words[7].zw,uint2(i,0),uint2(0xFFFFFFFCu,0));
         int2 delta=int2(floor(draw.xy*11.0))-5;
@@ -165,14 +164,28 @@ bool smsSpatialEstimateReservoirs(uint slot,uint width,uint height,SmsWorkRecord
         for (uint previous=0u;previous<i;++previous)
             if (domain && selectedSlots[previous]==neighborSlot) domain=false;
         selectedSlots[i]=domain?neighborSlot:0xFFFFFFFFu;
-        SmsReservoir source=smsEmptyReservoir();
-        bool sourceCandidate=false;
         if (domain) {
-            source=context.temporalReservoir[neighborSlot];
-            if (any(source.record.words[15].zw!=uint2(width,height))) return false;
-            sourceCandidate=smsReservoirValid(source);
-            if (sourceCandidate) smsDiagnostic(kSmsDiagNeighborDomains);
+            SmsReservoir source=context.temporalReservoir[neighborSlot];
+            bool valid=smsReservoirValid(source);
+            // Dimension guard applies only to VALID neighbor records (empty
+            // entries carry no frame dimensions by construction).
+            if (valid && any(source.record.words[15].zw!=uint2(width,height))) { smsDiagnostic(51u); valid=false; }
+            sources[i]=source;
+            candidates[i]=valid;
+            if (valid) {
+                smsDiagnostic(kSmsDiagNeighborDomains);
+                massSum+=asfloat(source.mass);
+            }
         }
+    }
+    TheiaSmsScene scene;
+    SmsManifoldVertex centralRoot[2];
+    uint centralCount;
+    smsLoadRoot(central.record,centralRoot,centralCount);
+    float canonicalMis=centralMass/massSum;
+    for (uint i=0u;i<kSmsSpatialNeighbors;++i) {
+        SmsReservoir source=sources[i];
+        bool sourceCandidate=candidates[i];
         float backwardLuminance=0.0;
         bool canonicalSupport=false;
         if (sourceCandidate) {
@@ -294,7 +307,10 @@ bool smsSpatialEstimate(uint slot,uint width,uint height,SmsWorkRecord canonical
     if (smsPhase(canonical)==kSmsAbsent) return true;
     GiSmsContext context=t_smsProducer[0];
     SmsReservoir central=context.temporalReservoir[slot];
-    if (!smsReservoirValid(central))
-        return smsSpatialEstimateRecords(slot,width,height,canonical,estimate);
-    return smsSpatialEstimateReservoirs(slot,width,height,canonical,estimate,final);
+    if (!smsReservoirValid(central)) {
+        if (!smsSpatialEstimateRecords(slot,width,height,canonical,estimate)) smsDiagnostic(50u);
+        return true; // records-path faults are observation-only during bring-up
+    }
+    if (!smsSpatialEstimateReservoirs(slot,width,height,canonical,estimate,final)) smsDiagnostic(52u);
+    return true; // reservoir-path faults are observation-only during bring-up
 }

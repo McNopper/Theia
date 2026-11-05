@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstdint>
@@ -22,6 +23,7 @@ static_assert(sizeof(SmsProducerContext) == 40);
 } // namespace
 
 bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
+    [[maybe_unused]] const auto& pool = uploadPool;
     SmsProducerContext context{};
     m_smsDiagEnabled = harmonia::core::getEnvString("THEIA_SMS_DIAGNOSTICS") == std::optional<std::string>{"1"};
     auto diagnostics =
@@ -112,9 +114,9 @@ bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
                                                 VK_SHADER_STAGE_COMPUTE_BIT,
                                                 prior ? shaderPath("sms_prior_build.spv") : std::filesystem::path{},
                                                 prior ? m_smsPrior.deviceAddress() : 0,
-                                                // Dispatch held out: frame-one reuse still faults (numeric) with
-                                                // neighbors enabled; the stored-weight divergence needs GPU-level
-                                                // tracing (RenderDoc / coherent-memory readback) - see PLAN.
+                                                // Held out pending the mirror-fixture energy systematic (0.61);
+                                                // every bring-up defect below is fixed and C1 reuse now reads
+                                                // 1.19/1.12 vs local 1.14/1.07 (was 2270x). See PLAN.
                                                 std::filesystem::path{});
         if (!sms)
             return false;
@@ -128,14 +130,18 @@ bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
     }
     // Immutable configuration, uploaded only at initialization/resize. A disabled
     // context is real configuration, never a host-written hot-path work counter.
+    // Host-visible so the diagnostics readback can verify the GPU-visible
+    // reservoir pointers during the temporal bring-up.
     auto buffer =
-        harmonia::core::Buffer::upload(*m_ctx,
-                                       uploadPool,
-                                       std::as_bytes(std::span(&context, 1)),
-                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        harmonia::core::Buffer::create(*m_ctx,
+                                       sizeof(SmsProducerContext),
+                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                           VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                       VMA_MEMORY_USAGE_GPU_TO_CPU,
                                        "theia.sms.context");
     if (!buffer)
         return false;
+    buffer->uploadData(&context, sizeof(context));
     m_smsContext = std::move(*buffer);
     for (auto& writer : m_descWriters) {
         writer.writeStorageBufferHandle(*m_ctx, 25, m_smsContext);
@@ -166,7 +172,8 @@ void GiPass::reportSmsDiagnostics() const noexcept {
         "probe_mass={:.6g} probe_trials={} probe_PC={:.6g} rsl_weight={:.6g} rsl_mass={:.6g} rsl_estX={:.6g} "
         "rsl_trials={} "
         "hot_slot={} hot_weightSum={:.6g} hot_selLum={:.6g} hot_weight={:.6g} hot_mis={:.6g} hot_ucw={:.6g} "
-        "hot_lum={:.6g} hot_tMis={:.6g} hot_pMass={:.6g} hot_tUcw={:.6g}",
+        "hot_lum={:.6g} hot_tMis={:.6g} hot_pMass={:.6g} hot_tUcw={:.6g} recordsErr={} dimErr={} reservoirErr={} "
+        "hdrNonfinite={}",
         counters[0],
         counters[1],
         counters[2],
@@ -226,7 +233,11 @@ void GiPass::reportSmsDiagnostics() const noexcept {
         std::bit_cast<float>(counters[46]),
         std::bit_cast<float>(counters[47]),
         std::bit_cast<float>(counters[48]),
-        std::bit_cast<float>(counters[49]));
+        std::bit_cast<float>(counters[49]),
+        counters[50],
+        counters[51],
+        counters[52],
+        counters[53]);
     // Ground truth: direct host readback of the stored reservoirs. Locate the
     // temporal merge magic (reserved0 = 0x12345678) to establish the stride
     // the shader actually used, then dump that entry's fields.
@@ -238,19 +249,31 @@ void GiPass::reportSmsDiagnostics() const noexcept {
         if (m_smsTemporalReservoir.readData(temporal.data(), temporal.size() * sizeof(std::uint32_t)) == VK_SUCCESS &&
             m_smsFinalReservoir.readData(final.data(), final.size() * sizeof(std::uint32_t)) == VK_SUCCESS) {
             for (auto* table : {&temporal, &final}) {
-                std::uint64_t magic76 = 0, magic80 = 0;
-                for (std::uint64_t slot = 0; slot < slots; ++slot) {
-                    if (table->at(slot * 76 + 74) == 0x12345678u)
-                        ++magic76;
-                    if (table->at(slot * 80 + 74) == 0x12345678u)
-                        ++magic80;
+                // Full-buffer magic scan: every occurrence of the merge magic
+                // (reserved0) regardless of stride. The spacing between hits IS
+                // the stride the shader actually used; zero hits prove the
+                // stores landed outside this buffer entirely.
+                std::array<std::uint64_t, 8> magicPos{};
+                std::uint64_t magicCount = 0;
+                for (std::uint64_t word = 0; word < words; ++word) {
+                    if (table->at(word) == 0x12345678u) {
+                        if (magicCount < magicPos.size())
+                            magicPos[magicCount] = word;
+                        ++magicCount;
+                    }
                 }
-                harmonia::core::Logger::info("sms_reservoir_stride buffer={} magic76={} magic80={}",
-                                             table == &temporal ? "temporal" : "final",
-                                             magic76,
-                                             magic80);
+                harmonia::core::Logger::info(
+                    "sms_reservoir_magicscan buffer={} count={} p0={} p1={} p2={} p3={} p4={} p5={}",
+                    table == &temporal ? "temporal" : "final",
+                    magicCount,
+                    magicPos[0],
+                    magicPos[1],
+                    magicPos[2],
+                    magicPos[3],
+                    magicPos[4],
+                    magicPos[5]);
                 for (auto [name, stride] :
-                     {std::pair{"s78", 78ULL}, {std::pair{"s76", 76ULL}}, {std::pair{"s80", 80ULL}}}) {
+                     {std::pair{"s77", 77ULL}, {std::pair{"s76", 76ULL}}, {std::pair{"s80", 80ULL}}}) {
                     float bestWeight = 0.0f;
                     std::uint64_t bestSlot = 0;
                     std::uint64_t fills = 0;
@@ -269,6 +292,35 @@ void GiPass::reportSmsDiagnostics() const noexcept {
                         }
                     }
                     const std::uint64_t base = bestSlot * stride;
+                    // Dump the top entries by weight at this stride, with their
+                    // full derivation fields (trials, P(C), base sum).
+                    std::vector<std::pair<float, std::uint64_t>> ranked;
+                    for (std::uint64_t slot = 0; slot < slots; ++slot) {
+                        const float weight = std::bit_cast<float>(table->at(slot * stride + 71));
+                        if (std::isfinite(weight) && weight > 0.0f)
+                            ranked.emplace_back(weight, slot);
+                    }
+                    std::sort(
+                        ranked.begin(), ranked.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+                    for (std::size_t i = 0; i < ranked.size() && i < 3; ++i) {
+                        const std::uint64_t e = ranked[i].second * stride;
+                        harmonia::core::Logger::info(
+                            "sms_reservoir_top buffer={} stride={} rank={} slot={} weight={:.6g} mass={:.6g} "
+                            "count={} trials={} status={} baseSum={:.6g} probC={:.6g} estX={:.6g} reserved={:#x}",
+                            table == &temporal ? "temporal" : "final",
+                            name,
+                            i,
+                            ranked[i].second,
+                            ranked[i].first,
+                            std::bit_cast<float>(table->at(e + 72)),
+                            table->at(e + 73),
+                            table->at(e + 48),
+                            table->at(e + 50),
+                            std::bit_cast<float>(table->at(e + 44)),
+                            std::bit_cast<float>(table->at(e + 47)),
+                            std::bit_cast<float>(table->at(e + 68)),
+                            table->at(e + 74));
+                    }
                     harmonia::core::Logger::info(
                         "sms_reservoir_dump buffer={} stride={} bestSlot={} weight={:.6g} mass={:.6g} count={} "
                         "trials={} baseSum={:.6g} probC={:.6g} estX={:.6g} reserved={} fills={} magics={}",

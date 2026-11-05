@@ -56,7 +56,7 @@ void main(uint3 group : SV_GroupID,uint lane : SV_GroupIndex) {
         t_smsProducer[0].finalReservoir[slot]=final;
     }
     float3 value=previous.xyz+estimate*asfloat(work.words[14].x);
-    if (!all(isfinite(value))) { smsQueueCompletionError(pc,kSmsQueueNumericError); return; }
+    if (!all(isfinite(value))) { smsDiagnostic(53u); smsQueueCompletionError(pc,kSmsQueueNumericError); return; }
     smsDiagnosticMaxFloat(16u,estimate.x);
     smsDiagnosticMaxFloat(17u,estimate.y);
     smsDiagnosticMaxFloat(18u,estimate.z);
