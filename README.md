@@ -16,7 +16,7 @@ It implements the [OpenPBR Surface v1.1.1](https://academysoftwarefoundation.git
 
 ## Screenshots
 
-*Same 30 test scenes as [Hyperion](https://github.com/McNopper/Hyperion) — converged to visual parity through accumulation.* Theia at **256 frames**, 1280×720.
+*Same 30 test scenes as [Hyperion](https://github.com/McNopper/Hyperion) — converged to visual parity through accumulation.* Theia at **256 frames**, 1280×720. Plus the three **sms_** GI-SMS caustic qualification scenes (SMS-reuse mode).
 
 | cornell_classic | cornell_classic_rec709 | cornell_empty |
 |:---:|:---:|:---:|
@@ -57,6 +57,12 @@ It implements the [OpenPBR Surface v1.1.1](https://academysoftwarefoundation.git
 | camera_suzanne | ABeautifulGame | dragon_teapot |
 |:---:|:---:|:---:|
 | ![camera_suzanne](screenshots/camera_suzanne.png) | ![ABeautifulGame](screenshots/ABeautifulGame.png) | ![dragon_teapot](screenshots/dragon_teapot.png) |
+
+The three **sms_** scenes below are the GI-SMS caustic qualification set (curved glass, absorption prefix, boundary mixed), rendered in spatiotemporal **SMS-reuse** mode — the PSMS-ReSTIR port (Hong et al. 2025). Prepared scene definitions live in `Harmonia/tests/assets/sms/` (see `tools/qualify_sms.py`).
+
+| sms_c1_curved_glass | sms_c2_absorption_prefix | sms_c3_boundary_mixed |
+|:---:|:---:|:---:|
+| ![sms_c1_curved_glass](screenshots/sms_c1_curved_glass.png) | ![sms_c2_absorption_prefix](screenshots/sms_c2_absorption_prefix.png) | ![sms_c3_boundary_mixed](screenshots/sms_c3_boundary_mixed.png) |
 
 ---
 
