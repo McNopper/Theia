@@ -6,8 +6,8 @@ struct GiSmsContext {
     SmsWorkRecord* work;
     float4* prefixes;
     uint resolution,flags;
-    SmsReservoir* temporalReservoir; // per-frame temporal merge output (read by reuse)
-    SmsReservoir* finalReservoir;    // persistent last-frame post-reuse state (temporal input)
+    SmsReservoir* temporalReservoir; // this frame's PRE-SPATIAL merge output (spatial reads)
+    SmsReservoir* historyReservoir;  // last frame's pre-spatial merge (temporal input)
 };
 [[vk::binding(25,0)]] StructuredBuffer<GiSmsContext> t_smsProducer;
 

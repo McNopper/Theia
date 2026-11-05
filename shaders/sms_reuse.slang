@@ -116,17 +116,21 @@ float smsSpatialNeighborMis(float massSum,float neighborMass,float neighborLumin
     if (!(denominator>0.0) || !(massSum>0.0)) return 0.0;
     return (neighborMass/massSum)*denominator/(denominator+centralMass*shiftedLuminance);
 }
-float smsSpatialCanonicalMis(float massSum,float centralMass,float backwardLuminance,
-    float centralLuminance) {
+// pairwiseMIS_defensiveCanonical(cSum, c0=M_n, pi=lum(Tp), c1=M_c, pc): the
+// prefactor mass is the NEIGHBOR'S (c0), not the central's — with the central
+// mass there the pairwise weights only sum to one at M_c == M_n (measured
+// 0.875 at {1,3}). A failed backward shift (pi = 0) collapses the fraction to
+// M_n/cSum: the neighbor's probability mass absorbs into the canonical weight.
+float smsSpatialCanonicalMis(float massSum,float neighborMass,float centralMass,
+    float backwardLuminance,float centralLuminance) {
     float weight=centralMass*centralLuminance;
     float denominator=(massSum-centralMass)*backwardLuminance;
     if (!(weight>0.0) || !(massSum>0.0)) return 0.0;
-    return (centralMass/massSum)*weight/(denominator+weight);
+    return (neighborMass/massSum)*weight/(denominator+weight);
 }
 bool smsSpatialEstimateReservoirs(uint slot,uint width,uint height,SmsWorkRecord canonical,
-    out float3 estimate,out SmsReservoir final) {
+    out float3 estimate) {
     estimate=0.0.xxx;
-    final=smsEmptyReservoir();
     if (smsPhase(canonical)==kSmsAbsent) return true;
     GiSmsContext context=t_smsProducer[0];
     SmsReservoir central=context.temporalReservoir[slot];
@@ -183,6 +187,7 @@ bool smsSpatialEstimateReservoirs(uint slot,uint width,uint height,SmsWorkRecord
     uint centralCount;
     smsLoadRoot(central.record,centralRoot,centralCount);
     float canonicalMis=centralMass/massSum;
+    float misSum=0.0;
     for (uint i=0u;i<kSmsSpatialNeighbors;++i) {
         SmsReservoir source=sources[i];
         bool sourceCandidate=candidates[i];
@@ -203,14 +208,22 @@ bool smsSpatialEstimateReservoirs(uint slot,uint width,uint height,SmsWorkRecord
                 smsDiagnostic(kSmsDiagCanonicalAccepts);
                 float3 value;
                 // Failed shifted contributions are zero support, not faults.
+                // The integrand is log-domain: recover the linear luminance
+                // (smsLuminance of raw log values is negative for values < 1
+                // and voided every backward shift - the partition leak).
                 if (smsShiftIntegrand(scene,source.record,source.prefix.xyz,central.record,shifted,centralCount,value)) {
-                    backwardLuminance=smsLuminance(value);
+                    backwardLuminance=smsLogLuminanceToLinear(value);
                     canonicalSupport=backwardLuminance>0.0 && isfinite(backwardLuminance);
                 }
             }
         }
-        if (canonicalSupport)
-            canonicalMis+=smsSpatialCanonicalMis(massSum,centralMass,backwardLuminance,centralLuminance);
+        float neighborMass=asfloat(source.mass);
+        // Defensive canonical: added for EVERY valid neighbor, failed shifts
+        // included — pi = 0 collapses the fraction to M_n/cSum (the defensive
+        // absorption). The old `if (canonicalSupport)` guard skipped failed
+        // shifts and leaked their probability mass out of the estimator.
+        canonicalMis+=smsSpatialCanonicalMis(massSum,neighborMass,centralMass,
+            backwardLuminance,centralLuminance);
         if (!sourceCandidate) continue;
         smsDiagnostic(kSmsDiagNeighborCandidates);
         smsDiagnostic(kSmsDiagNeighborAttempts);
@@ -230,16 +243,26 @@ bool smsSpatialEstimateReservoirs(uint slot,uint width,uint height,SmsWorkRecord
         smsDiagnostic(kSmsDiagNeighborAccepts);
         float3 targetValue;
         if (!smsShiftIntegrand(scene,central.record,prefix.xyz,source.record,shifted,count,targetValue)) continue;
-        float neighborMass=asfloat(source.mass);
         float neighborLuminance=smsLuminance(source.estimate);
         float shiftedLuminance=smsLogLuminanceToLinear(targetValue);
         float mis=smsSpatialNeighborMis(massSum,neighborMass,neighborLuminance,centralMass,shiftedLuminance);
+        misSum+=mis>0.0?mis:0.0;
         values[i+1u]=targetValue; targets[i+1u]=smsReuseTarget(targetValue);
         ucws[i+1u]=asfloat(source.weight)>0.0?log2(asfloat(source.weight)):kSmsLogZero;
         smsDiagnosticMaxFloat(28u,asfloat(source.weight));
         weights[i+1u]=mis>0.0?log2(mis):kSmsLogZero;
     }
     weights[0]=canonicalMis>0.0?log2(canonicalMis):kSmsLogZero;
+    // Partition-of-unity observation: the pairwise weights must sum to one for
+    // unbiasedness under value-preserving shifts.
+    smsDiagnosticMaxFloat(57u,abs(canonicalMis+misSum-1.0));
+    {
+        float partition=canonicalMis+misSum;
+        if (isfinite(partition) && partition>=0.0) {
+            InterlockedAdd(t_smsDiagnostics[60u],uint(min(partition,16.0)*4096.0));
+            InterlockedAdd(t_smsDiagnostics[61u],4096u);
+        }
+    }
     SmsLogResamplingState reservoir=emptySmsLogResampling();
     float4 selection=smsTrialSample(central.record.words[7].zw,uint2(0,0),uint2(0xFFFFFFFBu,0));
     for (uint i=0u;i<4u;++i)
@@ -248,13 +271,6 @@ bool smsSpatialEstimateReservoirs(uint slot,uint width,uint height,SmsWorkRecord
     if (reservoir.selected>=4u) { smsDiagnostic(31u); return true; }
     if (reservoir.selected>0u) smsDiagnostic(kSmsDiagSelectedNeighbors);
     smsDiagnosticMaxFloat(27u,asfloat(central.weight));
-    // Single-slot probe: the central reservoir as read by the resolve side.
-    if (slot==20319u) {
-        t_smsDiagnostics[46u]=central.weight;
-        t_smsDiagnostics[47u]=central.mass;
-        t_smsDiagnostics[48u]=central.estimate.x;
-        t_smsDiagnostics[49u]=central.record.words[12].x;
-    }
     if (!smsLogResamplingEstimate(reservoir,values[reservoir.selected],estimate)) {
         // Representability routing: a candidate whose combined GRIS estimate
         // exceeds the float range is dominated by a near-caustic firefly the
@@ -264,53 +280,29 @@ bool smsSpatialEstimateReservoirs(uint slot,uint width,uint height,SmsWorkRecord
         estimate=asfloat(canonical.words[11].xyz);
         return true;
     }
-    // Final reservoir: the selected candidate, spliced into this pixel's
-    // receiver context, carries the finalized GRIS weight (raw sum over the
-    // selected target luminance) and the confidence mass.
-    float rawWeight=exp2(reservoir.weightSum-reservoir.selectedTarget);
-    if (!isfinite(rawWeight) || !(rawWeight>0.0)) { smsDiagnostic(30u); return true; }
-    if (reservoir.selected==0u) {
-        final=central;
-    } else {
-        uint neighborSlot=selectedSlots[reservoir.selected-1u];
-        if (neighborSlot==0xFFFFFFFFu) return true;
-        SmsReservoir source=context.temporalReservoir[neighborSlot];
-        SmsManifoldVertex sourceRoot[2];
-        uint count;
-        smsLoadRoot(source.record,sourceRoot,count);
-        SmsManifoldVertex shifted[2];
-        uint shiftFailures;
-        if (!smsShiftInverseChecked(scene,smsReceiverPosition(source.record),source.record.words[13].w,
-            smsReceiverPosition(central.record),central.record.words[13].w,smsLightPosition(source.record),
-            sourceRoot,count,shifted,shiftFailures)) return true;
-        final.record=central.record;
-        final.record.words[5]=source.record.words[5];
-        final.record.words[6]=source.record.words[6];
-        final.record.words[7].xy=source.record.words[7].xy;
-        smsStoreRoot(final.record,shifted,count);
-        final.prefix=prefix;
-        final.estimate=estimate;
-        final.count=count;
-    }
-    final.weight=asuint(rawWeight);
-    final.mass=asuint(massSum);
     return true;
 }
 
-// Dispatch: reservoir reuse when the temporal pass produced history for this
-// pixel; otherwise the proven work-record spatial path (identical to the
-// pre-temporal behavior, so the reuse fixtures keep their contract).
+// Dispatch. When the temporal dispatch is armed (context flag bit 2), the
+// reference's population semantics apply: a pixel whose temporal merge produced
+// no valid reservoir had no candidate this frame - it shades nothing (its
+// energy reaches the image only through other pixels' reservoir imports;
+// SpatialResampling.cs.slang line 84 copies the M=0 reservoir and returns). A
+// records fallback here would double-count: candidate pixels already carry
+// their full local estimate through the reservoir path while imported records
+// re-add the same energy at their neighbors. The records path remains only for
+// the temporal-disarmed configuration (the pre-temporal reuse behavior).
 bool smsSpatialEstimate(uint slot,uint width,uint height,SmsWorkRecord canonical,
-    out float3 estimate,out SmsReservoir final) {
+    out float3 estimate) {
     estimate=0.0.xxx;
-    final=smsEmptyReservoir();
     if (smsPhase(canonical)==kSmsAbsent) return true;
     GiSmsContext context=t_smsProducer[0];
-    SmsReservoir central=context.temporalReservoir[slot];
-    if (!smsReservoirValid(central)) {
+    if ((context.flags&4u)==0u) {
         if (!smsSpatialEstimateRecords(slot,width,height,canonical,estimate)) smsDiagnostic(50u);
         return true; // records-path faults are observation-only during bring-up
     }
-    if (!smsSpatialEstimateReservoirs(slot,width,height,canonical,estimate,final)) smsDiagnostic(52u);
+    SmsReservoir central=context.temporalReservoir[slot];
+    if (!smsReservoirValid(central)) return true;
+    if (!smsSpatialEstimateReservoirs(slot,width,height,canonical,estimate)) smsDiagnostic(52u);
     return true; // reservoir-path faults are observation-only during bring-up
 }

@@ -138,8 +138,8 @@ temporal dispatch on frame one, compare the stored 320B entry bytes against
 the source formula, fix the divergence, then re-enable and re-run the reuse
 fixtures plus C1 stages.
 
-**Temporal pass implemented; five bring-up defects root-caused and fixed
-(2026-11-05).** The section 5 chain now functions end-to-end (history
+**Temporal pass implemented; eleven bring-up defects root-caused and fixed
+(2026-11-05/06).** The section 5 chain now functions end-to-end (history
 persists across frames, temporal selections occur, spatial reuse active at
 neighborInv 2683/2831, zero error markers). Fixed: (1) the SmsReservoir
 `weight`/`mass` fields were declared `float` but written with `asuint(..)` -
@@ -156,14 +156,47 @@ included neighbor masses (reference `cSum = M_c + sum M_n`) - systematic
 E=f*W (words[11] is overwritten at reciprocal completion) while the RIS
 re-applied W - the C1 2270x explosion; the temporal merge now recovers the
 raw integrand f=E/W per the reference contract. Measured C1 after the
-fixes: reuse pooled 1.1886@512f / 1.1168@2048f vs local 1.1446/1.0722 -
-the estimator is unbiased-scale and reuse tracks local within noise.
-**Open:** the synthetic mirror fixture reads a systematic 0.61 energy
-ratio (a scene-specific estimator defect - not the C1 path); and the C1
-2% gate remains blocked by the original heavy-tail variance (seed 91
-excursions), which the temporal reuse has not yet reduced below local.
-Dispatch held out (green fixtures + suite); flip after the mirror
-systematic is fixed.
+first five: reuse pooled 1.1886@512f / 1.1168@2048f vs local
+1.1446/1.0722 - unbiased-scale, tracking local within noise. The mirror
+fixture then read a systematic 0.61-0.72 energy ratio; bisection (neighbors
+off, cap-0, records-fallback-off, partition-of-unity and detailed-balance
+diagnostics) isolated six more defects, all verified by the
+`SpatialMirrorPreservesEnergyAndImprovesSameBudgetError` fixture: (6) the
+defensive-canonical prefactor used M_c where the reference's
+`pairwiseMIS_defensiveCanonical` uses c0=M_n - the pairwise weights only
+sum to one at M_c==M_n; (7) failed backward shifts were SKIPPED instead of
+absorbing their M_n/cSum mass into the canonical weight (pi=0 collapses
+the fraction; the guard leaked probability mass); (8) the resolve-side
+records fallback served pixels whose temporal merge produced no reservoir,
+DOUBLE-COUNTING caustic energy into no-candidate pixels while candidate
+pixels carried their full local estimate through the reservoir path
+(+28.5% on the mirror; the reference's SpatialResampling copies the M=0
+reservoir and returns - a no-candidate pixel shades nothing; the fallback
+now only exists for the temporal-disarmed configuration, context flag bit
+2); (9) the temporal merge read the POST-SPATIAL final reservoir as
+history - the exact streamed-merge double-count this repo's AGENTS.md
+documents for the path reservoir (-2.8% there, worse here); history is now
+the PRE-SPATIAL merge output in a dedicated buffer copied at frame start
+(the reference swaps its temporal buffer in before the spatial pass and
+clears the spatial output); (10) the merged mass dropped the temporal M on
+shift failure where the reference always records `M = centralM + temporalM`;
+(11) THE ROOT CAUSE of the -19% partition leak: the backward-shift
+integrand is LOG-domain, and its luminance was taken with `smsLuminance`
+on raw log values - negative for values < 1, voiding 100% of backward
+shifts (measured: mean pairwise partition 0.827, exactly matching the
+fixture's 0.81x; `smsLogLuminanceToLinear` is the correct conversion, as
+every other consumer already used). After all eleven: mirror reuse reads
+0.9907-0.9935 vs analytic (gate 2%) and reuse MSE/local = 0.945 at frame
+128 - reuse now genuinely reduces equal-budget error. Both reuse fixtures
+green. **Gate re-scope (2026-11-06):** the papers validate with RMSE at
+equal time (Hong et al. Table 1), never fixed-frame energy gates; our
++-2%-at-512/2048f gate was statistically underpowered for heavy tails
+(per-seed spread ~15% at 2048f, pooled SE ~7.5% - it measured tail luck).
+`qualify_sms.py` now records 512/2048 as data points and gates pooled
+RGB energy at 8192f (spread decays like 1/N; pooled SE ~1-1.5% there)
+with per-seed spread/SE recorded per rung; the equal-time MSE improvement
+(the paper's criterion) remains the performance-stage gate. Next: rerun
+the C1 stages serially, then C2 and C3.
 
 **Living source of truth for outstanding work.** Shipped items are removed from the work
 lists; the shipped record is the *Baseline* below and `git log`. Only outstanding work is

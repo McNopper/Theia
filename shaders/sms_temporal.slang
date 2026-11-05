@@ -79,8 +79,12 @@ void main(uint3 group:SV_GroupID,uint lane:SV_GroupIndex) {
     float centralLuminance=smsLuminance(centralIntegrand);
     smsDiagnosticMaxFloat(34u,centralLuminance);
     if (!(centralLuminance>0.0) || !isfinite(centralLuminance)) return;
-    // Temporal domain: reprojected previous-frame reservoir. Clamp the fetch to
-    // the bound image extent (the 1x1 dummy must never be read out of bounds).
+    // Temporal domain: reprojected previous-frame reservoir. The history is the
+    // PRE-SPATIAL merge output (the reference swaps its temporal buffer in
+    // before the spatial pass and clears the spatial output - feeding the
+    // post-spatial reservoir back double-counts re-selected history). Clamp the
+    // fetch to the bound image extent (the 1x1 dummy must never be read out of
+    // bounds).
     uint motionWidth,motionHeight;
     t_smsMotionVectors.GetDimensions(motionWidth,motionHeight);
     uint2 fetchPixel=min(pixel,uint2(motionWidth-1u,motionHeight-1u));
@@ -89,7 +93,7 @@ void main(uint3 group:SV_GroupID,uint lane:SV_GroupIndex) {
     int2 previousPixel=int2(round(float2(pixel)+motion+smsTemporalJitter(work,slot)));
     bool temporalDomain=all(previousPixel>=int2(0,0)) &&
         previousPixel.x<int(width) && previousPixel.y<int(height);
-    SmsReservoir previous=context.finalReservoir[temporalDomain?uint(previousPixel.y*width+previousPixel.x):slot];
+    SmsReservoir previous=context.historyReservoir[temporalDomain?uint(previousPixel.y*width+previousPixel.x):slot];
     float previousMass=smsReservoirValid(previous)?min(asfloat(previous.mass),kSmsTemporalMassCap):0.0;
     smsDiagnosticMaxFloat(26u,previousMass);
     TheiaSmsScene scene;
@@ -166,15 +170,16 @@ void main(uint3 group:SV_GroupID,uint lane:SV_GroupIndex) {
     float selectedLuminance=selectTemporal?temporalLuminance:centralLuminance;
     if (!(selectedLuminance>0.0) || !isfinite(selectedLuminance)) return;
     smsDiagnosticMaxFloat(38u,selectedLuminance);
-    // Single-slot probe: dump the full merge state of one fixed slot so the
-    // temporal-written reservoir can be compared with the resolve-side read.
-    if (asfloat(merged.weight)>1.0e6) {
+    // Single-slot probe: dump the full merge state of one fixed slot per frame
+    // so the aged-candidate chain can be traced numerically (identity-shift
+    // check: pPrev vs pShifted must match on a static scene).
+    if (slot==6208u) {
         t_smsDiagnostics[40u]=slot;
         t_smsDiagnostics[41u]=asuint(weightSum);
         t_smsDiagnostics[42u]=asuint(selectedLuminance);
-        t_smsDiagnostics[43u]=merged.weight;
-        t_smsDiagnostics[44u]=asuint(centralMis);
-        t_smsDiagnostics[45u]=asuint(centralUcw);
+        t_smsDiagnostics[43u]=asuint(asfloat(merged.weight));
+        t_smsDiagnostics[44u]=asuint(previousLuminance);
+        t_smsDiagnostics[45u]=asuint(temporalLuminance);
         t_smsDiagnostics[46u]=asuint(centralLuminance);
         t_smsDiagnostics[47u]=asuint(temporalMis);
         t_smsDiagnostics[48u]=asuint(previousMass);
@@ -194,7 +199,10 @@ void main(uint3 group:SV_GroupID,uint lane:SV_GroupIndex) {
         merged.count=centralCount;
     }
     merged.weight=asuint(weightSum/selectedLuminance);
-    merged.mass=asuint(centralMass+(temporalSupported?previousMass:0.0));
+    // Reference M bookkeeping (TemporalResampling.cs.slang line 108): the
+    // merged mass is centralM + temporalM regardless of shift success - M is
+    // the reservoir's sample count, not a support indicator.
+    merged.mass=asuint(centralMass+previousMass);
     merged.reserved0=0x12345678u; // stride/magic probe for the host dump
     smsDiagnosticMaxFloat(25u,asfloat(merged.weight));
     smsDiagnosticMaxFloat(26u,previousMass);

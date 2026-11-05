@@ -596,8 +596,16 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
             // Probe pattern: 0xDEADBEEF proves the fill executed and lets the
             // host dump distinguish filled-but-unwritten entries from garbage.
             vkCmdFillBuffer(cmd, m_smsTemporalReservoir.handle(), 0, VK_WHOLE_SIZE, 0xDEADBEEFu);
-            vkCmdFillBuffer(cmd, m_smsFinalReservoir.handle(), 0, VK_WHOLE_SIZE, 0xDEADBEEFu);
+            vkCmdFillBuffer(cmd, m_smsHistoryReservoir.handle(), 0, VK_WHOLE_SIZE, 0xDEADBEEFu);
             m_smsReservoirsCleared = true;
+        }
+        if (m_smsTemporalReservoir.isValid() && m_smsHistoryReservoir.isValid()) {
+            // Publish last frame's pre-spatial merge as this frame's temporal
+            // history BEFORE the passes run (the reference swaps its temporal
+            // buffer in at the same point). Recorded ahead of the SMS passes,
+            // like the one-time fill above.
+            VkBufferCopy copy{0, 0, m_smsTemporalReservoir.size()};
+            vkCmdCopyBuffer(cmd, m_smsTemporalReservoir.handle(), m_smsHistoryReservoir.handle(), 1, &copy);
         }
         m_frameError = m_sms.recordBegin(cmd);
         if (m_frameError == VK_SUCCESS)

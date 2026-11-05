@@ -17,13 +17,13 @@ namespace {
 struct SmsProducerContext {
     VkDeviceAddress work, prefixes;
     std::uint32_t resolution, flags;
-    VkDeviceAddress temporalReservoir, finalReservoir;
+    VkDeviceAddress temporalReservoir, historyReservoir;
 };
 static_assert(sizeof(SmsProducerContext) == 40);
 } // namespace
 
 bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
-    [[maybe_unused]] const auto& pool = uploadPool;
+    static_cast<void>(uploadPool); // staging is handled by Buffer::uploadData
     SmsProducerContext context{};
     m_smsDiagEnabled = harmonia::core::getEnvString("THEIA_SMS_DIAGNOSTICS") == std::optional<std::string>{"1"};
     auto diagnostics =
@@ -70,11 +70,14 @@ bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
             m_smsPrior = std::move(*buffer);
         }
         // Hong et al. 2025, section 5: persistent spatiotemporal reservoirs.
-        // Final reservoirs survive across frames; temporal reservoirs are the
-        // per-frame merge output consumed by resolve. The 320B SmsReservoir
-        // stride is fixed by the shader ABI. The temporal dispatch is held
-        // out until the residual dark/bright boundary weight amplification is
-        // fixed (see PLAN); the reuse path then runs spatially only.
+        // `temporal` holds this frame's PRE-SPATIAL merge output (the spatial
+        // pass reads it); `history` holds last frame's copy (the temporal pass
+        // reads it - copied at each frame start so the merge never races its
+        // own output). The reference keeps the same split by swapping its
+        // temporal buffer in before the spatial pass and clearing the spatial
+        // output: history must be pre-spatial, or re-selected history
+        // double-counts across frames. The 320B SmsReservoir stride is fixed
+        // by the shader ABI.
         if (m_cfg.smsSpatialReuse) {
             // SmsReservoir: sizeof as computed by Slang = 320B (the struct tail
             // rounds up to 16-byte alignment). Must match the shader's pointer
@@ -87,46 +90,47 @@ bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
                                             VK_BUFFER_USAGE_TRANSFER_DST_BIT;
             auto temporal = harmonia::core::Buffer::create(*m_ctx,
                                                            pixels * kSmsReservoirStride,
-                                                           reservoirUsage,
+                                                           reservoirUsage | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                                            VMA_MEMORY_USAGE_GPU_TO_CPU,
                                                            "theia.sms.reservoir.temporal");
             if (!temporal)
                 return false;
             m_smsTemporalReservoir = std::move(*temporal);
-            auto finalReservoir = harmonia::core::Buffer::create(*m_ctx,
-                                                                 pixels * kSmsReservoirStride,
-                                                                 reservoirUsage,
-                                                                 VMA_MEMORY_USAGE_GPU_TO_CPU,
-                                                                 "theia.sms.reservoir.final");
-            if (!finalReservoir)
+            auto historyReservoir = harmonia::core::Buffer::create(*m_ctx,
+                                                                   pixels * kSmsReservoirStride,
+                                                                   reservoirUsage,
+                                                                   VMA_MEMORY_USAGE_GPU_TO_CPU,
+                                                                   "theia.sms.reservoir.history");
+            if (!historyReservoir)
                 return false;
-            m_smsFinalReservoir = std::move(*finalReservoir);
+            m_smsHistoryReservoir = std::move(*historyReservoir);
         }
         const std::filesystem::path shared{HARMONIA_SHADER_DIR};
-        auto sms =
-            harmonia::pipeline::SmsPass::create(*m_ctx,
-                                                static_cast<std::uint32_t>(pixels),
-                                                m_pipelineLayout,
-                                                shared / "sms_queue_control.spv",
-                                                shaderPath("sms_sample.spv"),
-                                                shaderPath("sms_resolve.spv"),
-                                                m_cfg.smsTrialBudget,
-                                                VK_SHADER_STAGE_COMPUTE_BIT,
-                                                prior ? shaderPath("sms_prior_build.spv") : std::filesystem::path{},
-                                                prior ? m_smsPrior.deviceAddress() : 0,
-                                                // Held out pending the mirror-fixture energy systematic (0.61);
-                                                // every bring-up defect below is fixed and C1 reuse now reads
-                                                // 1.19/1.12 vs local 1.14/1.07 (was 2270x). See PLAN.
-                                                std::filesystem::path{});
+        auto sms = harmonia::pipeline::SmsPass::create(
+            *m_ctx,
+            static_cast<std::uint32_t>(pixels),
+            m_pipelineLayout,
+            shared / "sms_queue_control.spv",
+            shaderPath("sms_sample.spv"),
+            shaderPath("sms_resolve.spv"),
+            m_cfg.smsTrialBudget,
+            VK_SHADER_STAGE_COMPUTE_BIT,
+            prior ? shaderPath("sms_prior_build.spv") : std::filesystem::path{},
+            prior ? m_smsPrior.deviceAddress() : 0,
+            m_smsTemporalReservoir.isValid() ? shaderPath("sms_temporal.spv") : std::filesystem::path{});
         if (!sms)
             return false;
         m_sms = std::move(*sms);
         context = {m_sms.workBuffer().deviceAddress(),
                    m_smsPrefixes.deviceAddress(),
                    m_cfg.smsPartitionResolution,
-                   (m_cfg.smsSpatialReuse ? 1U : 0U) | (m_smsDiagEnabled ? 2U : 0U),
+                   (m_cfg.smsSpatialReuse ? 1U : 0U) | (m_smsDiagEnabled ? 2U : 0U) |
+                       // Bit 2: the temporal dispatch is armed - the reuse
+                       // population semantics follow the reference (no records
+                       // fallback; see smsSpatialEstimate).
+                       (m_smsTemporalReservoir.isValid() ? 4U : 0U),
                    m_smsTemporalReservoir.isValid() ? m_smsTemporalReservoir.deviceAddress() : 0,
-                   m_smsFinalReservoir.isValid() ? m_smsFinalReservoir.deviceAddress() : 0};
+                   m_smsHistoryReservoir.isValid() ? m_smsHistoryReservoir.deviceAddress() : 0};
     }
     // Immutable configuration, uploaded only at initialization/resize. A disabled
     // context is real configuration, never a host-written hot-path work counter.
@@ -173,7 +177,7 @@ void GiPass::reportSmsDiagnostics() const noexcept {
         "rsl_trials={} "
         "hot_slot={} hot_weightSum={:.6g} hot_selLum={:.6g} hot_weight={:.6g} hot_mis={:.6g} hot_ucw={:.6g} "
         "hot_lum={:.6g} hot_tMis={:.6g} hot_pMass={:.6g} hot_tUcw={:.6g} recordsErr={} dimErr={} reservoirErr={} "
-        "hdrNonfinite={}",
+        "hdrNonfinite={} partitionMax={} partitionSum={} partitionN={}",
         counters[0],
         counters[1],
         counters[2],
@@ -237,18 +241,21 @@ void GiPass::reportSmsDiagnostics() const noexcept {
         counters[50],
         counters[51],
         counters[52],
-        counters[53]);
+        counters[53],
+        std::bit_cast<float>(counters[57]),
+        counters[60],
+        counters[61]);
     // Ground truth: direct host readback of the stored reservoirs. Locate the
     // temporal merge magic (reserved0 = 0x12345678) to establish the stride
     // the shader actually used, then dump that entry's fields.
-    if (m_smsTemporalReservoir.isValid() && m_smsFinalReservoir.isValid()) {
+    if (m_smsTemporalReservoir.isValid() && m_smsHistoryReservoir.isValid()) {
         const std::uint64_t slots = std::uint64_t{m_cfg.width} * m_cfg.height;
         const std::uint64_t words = slots * 80;
         std::vector<std::uint32_t> temporal(words);
-        std::vector<std::uint32_t> final(words);
+        std::vector<std::uint32_t> history(words);
         if (m_smsTemporalReservoir.readData(temporal.data(), temporal.size() * sizeof(std::uint32_t)) == VK_SUCCESS &&
-            m_smsFinalReservoir.readData(final.data(), final.size() * sizeof(std::uint32_t)) == VK_SUCCESS) {
-            for (auto* table : {&temporal, &final}) {
+            m_smsHistoryReservoir.readData(history.data(), history.size() * sizeof(std::uint32_t)) == VK_SUCCESS) {
+            for (auto* table : {&temporal, &history}) {
                 // Full-buffer magic scan: every occurrence of the merge magic
                 // (reserved0) regardless of stride. The spacing between hits IS
                 // the stride the shader actually used; zero hits prove the
@@ -264,7 +271,7 @@ void GiPass::reportSmsDiagnostics() const noexcept {
                 }
                 harmonia::core::Logger::info(
                     "sms_reservoir_magicscan buffer={} count={} p0={} p1={} p2={} p3={} p4={} p5={}",
-                    table == &temporal ? "temporal" : "final",
+                    table == &temporal ? "temporal" : "history",
                     magicCount,
                     magicPos[0],
                     magicPos[1],
@@ -307,7 +314,7 @@ void GiPass::reportSmsDiagnostics() const noexcept {
                         harmonia::core::Logger::info(
                             "sms_reservoir_top buffer={} stride={} rank={} slot={} weight={:.6g} mass={:.6g} "
                             "count={} trials={} status={} baseSum={:.6g} probC={:.6g} estX={:.6g} reserved={:#x}",
-                            table == &temporal ? "temporal" : "final",
+                            table == &temporal ? "temporal" : "history",
                             name,
                             i,
                             ranked[i].second,
@@ -324,7 +331,7 @@ void GiPass::reportSmsDiagnostics() const noexcept {
                     harmonia::core::Logger::info(
                         "sms_reservoir_dump buffer={} stride={} bestSlot={} weight={:.6g} mass={:.6g} count={} "
                         "trials={} baseSum={:.6g} probC={:.6g} estX={:.6g} reserved={} fills={} magics={}",
-                        table == &temporal ? "temporal" : "final",
+                        table == &temporal ? "temporal" : "history",
                         name,
                         bestSlot,
                         std::bit_cast<float>(table->at(base + 71)),
@@ -346,7 +353,7 @@ void GiPass::reportSmsDiagnostics() const noexcept {
         if (m_smsContext.readData(context.data(), sizeof(context)) == VK_SUCCESS) {
             harmonia::core::Logger::info(
                 "sms_context_dump ctxWork={:#x} ctxPrefixes={:#x} ctxResolution={} ctxFlags={} "
-                "ctxTemporal={:#x} ctxFinal={:#x} allocTemporal={:#x} allocFinal={:#x}",
+                "ctxTemporal={:#x} ctxHistory={:#x} allocTemporal={:#x} allocHistory={:#x}",
                 context[0] | std::uint64_t(context[1]) << 32,
                 context[2] | std::uint64_t(context[3]) << 32,
                 context[4],
@@ -354,7 +361,7 @@ void GiPass::reportSmsDiagnostics() const noexcept {
                 context[6] | std::uint64_t(context[7]) << 32,
                 context[8] | std::uint64_t(context[9]) << 32,
                 m_smsTemporalReservoir.deviceAddress(),
-                m_smsFinalReservoir.deviceAddress());
+                m_smsHistoryReservoir.deviceAddress());
         }
     }
 }
