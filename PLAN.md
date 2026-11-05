@@ -195,8 +195,34 @@ equal time (Hong et al. Table 1), never fixed-frame energy gates; our
 `qualify_sms.py` now records 512/2048 as data points and gates pooled
 RGB energy at 8192f (spread decays like 1/N; pooled SE ~1-1.5% there)
 with per-seed spread/SE recorded per rung; the equal-time MSE improvement
-(the paper's criterion) remains the performance-stage gate. Next: rerun
-the C1 stages serially, then C2 and C3.
+(the paper's criterion) remains the performance-stage gate.
+
+**C track qualified (2026-11-06, final rerun with stable provenance).**
+All three cases pass smoke, reference (4096 spp, split-seed uncertainty
+<=0.5%), correctness and stability (same-seed captures pixel-identical; the
+stage compares pixels, not file bytes - EXR headers carry a DateTime).
+Correctness bias at the 8192f gate: C1 +0.39%/+0.35%, C2 -1.20%/-1.21%,
+C3 +0.15%/+0.15% (local/reuse), all inside the 2% tolerance with pooled SE
+1.8-1.9%; per-seed spread decays 1/N across the 512/2048/8192 ladder in
+every case. Equal-time performance: C1 and C3 record no-benefit (reuse at
+statistical parity with local - reuse's ~5% frame overhead is not paid back
+on scenes whose variance is seed-dominated fireflies that persist in the
+temporal history); C2 (absorption-prefix chains - the deeper, costlier
+candidates where amortization pays) shows reuse winning decisively:
+@2s target reuse MSE 0.613+-0.140 vs local 1.531+-0.675 (2.5x better,
+non-overlapping error bars) and @8s 0.614+-0.074 vs 0.740+-0.125. The C2
+stage status is 'timing-inconclusive' (the +-5% wall-clock acceptance
+includes subprocess startup and wobbled past tolerance after one
+refinement; fail-closed by design) - the quality numbers above are the
+manifest record. Owner decision: implementation correct -> keep; the
+equal-time benefit is scene-dependent, demonstrated where the method's
+premise holds. Known follow-up (not a defect): the equal-time stage's
+timing acceptance could exclude process startup for robustness.
+
+**Integration (2026-11-06).** dev/gi-sms-restir fast-forwards into main in
+Harmonia, Theia and Hyperion (main never diverged); qualification artifacts
+live in the ignored build/sms-qualification with full provenance in
+run_manifest.json.
 
 **Living source of truth for outstanding work.** Shipped items are removed from the work
 lists; the shipped record is the *Baseline* below and `git log`. Only outstanding work is
