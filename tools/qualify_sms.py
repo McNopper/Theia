@@ -407,8 +407,11 @@ def stage_stability(case: str) -> None:
     scene = prepare_run_dir(case)
     first, _ = render_theia(f"stab_{case}_a", scene, "reuse", 64, SEEDS[0])
     second, _ = render_theia(f"stab_{case}_b", scene, "reuse", 64, SEEDS[0])
-    if sha256(first) != sha256(second):
-        raise SystemExit("stability: same-seed captures are not byte-identical")
+    # The EXR header carries a DateTime attribute, so byte-identical files are
+    # impossible across wall-clock seconds; determinism is a property of the
+    # pixel data. Exact array equality (nonfinite pixels already rejected).
+    if not np.array_equal(read_checked(first), read_checked(second)):
+        raise SystemExit("stability: same-seed captures are not pixel-identical")
     energies = []
     for seed in SEEDS:
         path, _ = render_theia(f"stab_{case}_{seed}", scene, "reuse", 64, seed)
