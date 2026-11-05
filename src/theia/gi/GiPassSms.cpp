@@ -112,10 +112,8 @@ bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
                                                 VK_SHADER_STAGE_COMPUTE_BIT,
                                                 prior ? shaderPath("sms_prior_build.spv") : std::filesystem::path{},
                                                 prior ? m_smsPrior.deviceAddress() : 0,
-                                                // Dispatch held out: the temporal merge stores reservoir weights
-                                                // contradicting its instrumented inputs on frame one; root-cause
-                                                // first (see PLAN) before enabling.
-                                                std::filesystem::path{});
+                                                m_smsTemporalReservoir.isValid() ? shaderPath("sms_temporal.spv")
+                                                                                 : std::filesystem::path{});
         if (!sms)
             return false;
         m_sms = std::move(*sms);
@@ -227,45 +225,71 @@ void GiPass::reportSmsDiagnostics() const noexcept {
         std::bit_cast<float>(counters[47]),
         std::bit_cast<float>(counters[48]),
         std::bit_cast<float>(counters[49]));
-    // Ground truth: direct host readback of the stored reservoirs. The
-    // SmsReservoir stride is 320B = 80 uint32 words; weight word 71, mass 72,
-    // count 73; record trials at word 48, base sum at 44, P(C') at 47.
+    // Ground truth: direct host readback of the stored reservoirs. Locate the
+    // temporal merge magic (reserved0 = 0x12345678) to establish the stride
+    // the shader actually used, then dump that entry's fields.
     if (m_smsTemporalReservoir.isValid() && m_smsFinalReservoir.isValid()) {
         const std::uint64_t slots = std::uint64_t{m_cfg.width} * m_cfg.height;
-        const std::uint64_t words = slots * 80; // SmsReservoir = 320B = 80 uint32
+        const std::uint64_t words = slots * 80;
         std::vector<std::uint32_t> temporal(words);
         std::vector<std::uint32_t> final(words);
         if (m_smsTemporalReservoir.readData(temporal.data(), temporal.size() * sizeof(std::uint32_t)) == VK_SUCCESS &&
             m_smsFinalReservoir.readData(final.data(), final.size() * sizeof(std::uint32_t)) == VK_SUCCESS) {
             for (auto* table : {&temporal, &final}) {
-                float bestWeight = 0.0f;
-                std::uint64_t bestSlot = 0;
-                std::uint64_t heavy = 0;
+                std::uint64_t magic76 = 0, magic80 = 0;
                 for (std::uint64_t slot = 0; slot < slots; ++slot) {
-                    const std::uint64_t base = slot * 80;
-                    const float weight = std::bit_cast<float>(table->at(base + 71));
-                    if (std::isfinite(weight) && weight > bestWeight) {
-                        bestWeight = weight;
-                        bestSlot = slot;
-                    }
-                    if (weight > 1.0e6f)
-                        ++heavy;
+                    if (table->at(slot * 76 + 74) == 0x12345678u) ++magic76;
+                    if (table->at(slot * 80 + 74) == 0x12345678u) ++magic80;
                 }
-                const std::uint64_t base = bestSlot * 80;
                 harmonia::core::Logger::info(
-                    "sms_reservoir_dump buffer={} bestSlot={} weight={:.6g} mass={:.6g} count={} trials={} "
-                    "baseSum={:.6g} probC={:.6g} heavy={} estX={:.6g}",
-                    table == &temporal ? "temporal" : "final",
-                    bestSlot,
-                    std::bit_cast<float>(table->at(base + 71)),
-                    std::bit_cast<float>(table->at(base + 72)),
-                    table->at(base + 73),
-                    table->at(base + 48),
-                    std::bit_cast<float>(table->at(base + 44)),
-                    std::bit_cast<float>(table->at(base + 47)),
-                    heavy,
-                    std::bit_cast<float>(table->at(base + 68)));
+                    "sms_reservoir_stride buffer={} magic76={} magic80={}",
+                    table == &temporal ? "temporal" : "final", magic76, magic80);
+                for (auto [name, stride] : {std::pair{"s76", 76ULL}, {std::pair{"s80", 80ULL}}}) {
+                    float bestWeight = 0.0f;
+                    std::uint64_t bestSlot = 0;
+                    std::uint64_t fills = 0;
+                    for (std::uint64_t slot = 0; slot < slots; ++slot) {
+                        if (table->at(slot * stride + 74) == 0xDEADBEEFu) ++fills;
+                    }
+                    for (std::uint64_t slot = 0; slot < slots; ++slot) {
+                        const float weight = std::bit_cast<float>(table->at(slot * stride + 71));
+                        if (std::isfinite(weight) && weight > bestWeight) {
+                            bestWeight = weight;
+                            bestSlot = slot;
+                        }
+                    }
+                    const std::uint64_t base = bestSlot * stride;
+                    harmonia::core::Logger::info(
+                        "sms_reservoir_dump buffer={} stride={} bestSlot={} weight={:.6g} mass={:.6g} count={} "
+                        "trials={} baseSum={:.6g} probC={:.6g} estX={:.6g} reserved={} fills={}",
+                        table == &temporal ? "temporal" : "final", name, bestSlot,
+                        std::bit_cast<float>(table->at(base + 71)),
+                        std::bit_cast<float>(table->at(base + 72)),
+                        table->at(base + 73),
+                        table->at(base + 48),
+                        std::bit_cast<float>(table->at(base + 44)),
+                        std::bit_cast<float>(table->at(base + 47)),
+                        std::bit_cast<float>(table->at(base + 68)),
+                        table->at(base + 74),
+                        fills);
+                }
             }
+        }
+        // Context pointer audit: read back the uploaded context buffer and
+        // compare its reservoir pointers with the allocations' addresses.
+        std::array<std::uint32_t, 10> context{};
+        if (m_smsContext.readData(context.data(), sizeof(context)) == VK_SUCCESS) {
+            harmonia::core::Logger::info(
+                "sms_context_dump ctxWork={:#x} ctxPrefixes={:#x} ctxResolution={} ctxFlags={} "
+                "ctxTemporal={:#x} ctxFinal={:#x} allocTemporal={:#x} allocFinal={:#x}",
+                context[0] | std::uint64_t(context[1]) << 32,
+                context[2] | std::uint64_t(context[3]) << 32,
+                context[4],
+                context[5],
+                context[6] | std::uint64_t(context[7]) << 32,
+                context[8] | std::uint64_t(context[9]) << 32,
+                m_smsTemporalReservoir.deviceAddress(),
+                m_smsFinalReservoir.deviceAddress());
         }
     }
 }

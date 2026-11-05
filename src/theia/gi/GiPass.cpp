@@ -593,10 +593,10 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         if (m_smsPrior.isValid())
             vkCmdFillBuffer(cmd, m_smsPrior.handle(), 0, VK_WHOLE_SIZE, 0);
         if (m_smsTemporalReservoir.isValid() && !m_smsReservoirsCleared) {
-            // Reservoir memory starts invalid: mass bits of zero keep the first
-            // frame temporal-free until a resolved candidate exists.
-            vkCmdFillBuffer(cmd, m_smsTemporalReservoir.handle(), 0, VK_WHOLE_SIZE, 0);
-            vkCmdFillBuffer(cmd, m_smsFinalReservoir.handle(), 0, VK_WHOLE_SIZE, 0);
+            // Probe pattern: 0xDEADBEEF proves the fill executed and lets the
+            // host dump distinguish filled-but-unwritten entries from garbage.
+            vkCmdFillBuffer(cmd, m_smsTemporalReservoir.handle(), 0, VK_WHOLE_SIZE, 0xDEADBEEFu);
+            vkCmdFillBuffer(cmd, m_smsFinalReservoir.handle(), 0, VK_WHOLE_SIZE, 0xDEADBEEFu);
             m_smsReservoirsCleared = true;
         }
         m_frameError = m_sms.recordBegin(cmd);

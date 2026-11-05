@@ -189,6 +189,7 @@ void main(uint3 group:SV_GroupID,uint lane:SV_GroupIndex) {
     }
     merged.weight=asuint(weightSum/selectedLuminance);
     merged.mass=asuint(centralMass+(temporalSupported?previousMass:0.0));
+    merged.reserved0=0x12345678u; // stride/magic probe for the host dump
     smsDiagnosticMaxFloat(25u,asfloat(merged.weight));
     smsDiagnosticMaxFloat(26u,previousMass);
     context.temporalReservoir[slot]=merged;

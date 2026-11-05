@@ -107,10 +107,36 @@ domain MIS `m = M_pHat / (M_pHat + M_central*pHat(Tp2))`; merged
 reuse then consumes `M`-weighted defensive pairwise MIS instead of the
 implicit all-ones confidence, and moves to the paper-default single dithered
 neighbor drawn from an offset table with a resolution-scaled radius.
-Invalidation: reservoirs reset on scene/resolution change; unvalidated
-reservoir state never reaches accumulation; work-queue validation contract
-unchanged. C1 re-runs reference/correctness/performance after the temporal
-pass lands; reuse-vs-local equal-time MSE is the acceptance metric.
+**Temporal pass implemented; dispatch held out pending one stability fix
+(2026-11-04).** `shaders/sms_temporal.slang` (two-domain merge, M cap 20,
+5-iteration bounded shifts with inverse-root checks, GRIS finalize), the
+SmsReservoir ABI (Harmonia `sms_types.slang`), the persistent
+temporal/final reservoir buffers, the `SmsPass` optional-temporal dispatch
+slot, M-aware defensive pairwise MIS, and failure-tolerant shift
+contributions (failed shifts are zero support, never frame faults) are all
+landed. **Plus the 2026-11-05 bring-up findings:** (1) the diagnostics
+buffer was extended to 64 entries after the bring-up probes wrote out of
+bounds (indices up to 49 past a 32/48-entry buffer with robustness2 off) -
+the OOB writes are a credible cause of the earlier nondeterministic fault
+signatures; (2) combined GRIS estimates beyond float range now route to the
+pixel local estimate with an overflow marker instead of failing the frame
+(representability routing, not clamping); (3) the reservoir buffers are
+host-visible with a per-frame host readback dump (best-slot weight/mass/
+trials/probC) for ground truth. **Open:** on the reuse path with neighbors
+enabled, frame one still faults with a numeric queue error while
+central-candidate-only reuse survives; the host dump and the shader-side
+max-markers disagree with each other AND with the source formula (stored
+weights 4.4e37/1.16e9 vs the bounded mis·UCW <= 3017 the source computes;
+negative mass bits; entries retaining the fill pattern), which points at a
+host-readback coherence problem (GPU_TO_CPU without invalidation) and/or a
+compiled-store divergence in the new pointer-based pass - resolvable only
+with GPU-level debugging (RenderDoc capture of the temporal dispatch, or a
+dedicated coherent-memory test). The dispatch stays held out; reuse runs the
+proven work-record spatial fallback; reuse fixtures and the full suite are
+green on this state. Next step: RenderDoc (or coherent-memory) trace of the
+temporal dispatch on frame one, compare the stored 320B entry bytes against
+the source formula, fix the divergence, then re-enable and re-run the reuse
+fixtures plus C1 stages.
 
 **Temporal pass implemented; dispatch held out pending one stability fix
 (2026-11-04).** `shaders/sms_temporal.slang` (two-domain merge, M cap 20,
