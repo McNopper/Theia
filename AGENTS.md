@@ -137,7 +137,9 @@ the 320×240 parity resolution.
 - **Local SMS scene adapter:** `shaders/sms_scene.slang` reads Theia's native set-0
   triangle resources and implements the shared projector contract. Native RT
   triangle/normal, planar R/TT, production-fallback and raw-occlusion fixtures are
-  tested. Local SMS candidates are integrated; SMS ReSTIR reuse is ongoing. Do not
+  tested. SMS sampling ships as the default (`--sms-mode local`) and spatiotemporal
+  PSMS-ReSTIR reuse (`--sms-mode reuse`) is qualified and shipped (v0.8.2; see PLAN
+  Baseline). Do not
   use a shading-reconstruction failure as proof that a shadow ray is clear.
   Native `sms_sample`, `sms_prior_build` and one-candidate `sms_resolve` entries
   use the shared sampler and actual-event ownership classifier. Each pixel freezes
