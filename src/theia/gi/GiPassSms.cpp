@@ -112,8 +112,9 @@ bool GiPass::createSmsResources(const harmonia::core::CommandPool& uploadPool) {
                                                 VK_SHADER_STAGE_COMPUTE_BIT,
                                                 prior ? shaderPath("sms_prior_build.spv") : std::filesystem::path{},
                                                 prior ? m_smsPrior.deviceAddress() : 0,
-                                                m_smsTemporalReservoir.isValid() ? shaderPath("sms_temporal.spv")
-                                                                                 : std::filesystem::path{});
+                                                // Dispatch held out: frame-one reuse still faults (numeric) with
+                                                // neighbors enabled; see PLAN for the weight-scale investigation.
+                                                std::filesystem::path{});
         if (!sms)
             return false;
         m_sms = std::move(*sms);
@@ -238,18 +239,22 @@ void GiPass::reportSmsDiagnostics() const noexcept {
             for (auto* table : {&temporal, &final}) {
                 std::uint64_t magic76 = 0, magic80 = 0;
                 for (std::uint64_t slot = 0; slot < slots; ++slot) {
-                    if (table->at(slot * 76 + 74) == 0x12345678u) ++magic76;
-                    if (table->at(slot * 80 + 74) == 0x12345678u) ++magic80;
+                    if (table->at(slot * 76 + 74) == 0x12345678u)
+                        ++magic76;
+                    if (table->at(slot * 80 + 74) == 0x12345678u)
+                        ++magic80;
                 }
-                harmonia::core::Logger::info(
-                    "sms_reservoir_stride buffer={} magic76={} magic80={}",
-                    table == &temporal ? "temporal" : "final", magic76, magic80);
+                harmonia::core::Logger::info("sms_reservoir_stride buffer={} magic76={} magic80={}",
+                                             table == &temporal ? "temporal" : "final",
+                                             magic76,
+                                             magic80);
                 for (auto [name, stride] : {std::pair{"s76", 76ULL}, {std::pair{"s80", 80ULL}}}) {
                     float bestWeight = 0.0f;
                     std::uint64_t bestSlot = 0;
                     std::uint64_t fills = 0;
                     for (std::uint64_t slot = 0; slot < slots; ++slot) {
-                        if (table->at(slot * stride + 74) == 0xDEADBEEFu) ++fills;
+                        if (table->at(slot * stride + 74) == 0xDEADBEEFu)
+                            ++fills;
                     }
                     for (std::uint64_t slot = 0; slot < slots; ++slot) {
                         const float weight = std::bit_cast<float>(table->at(slot * stride + 71));
@@ -262,7 +267,9 @@ void GiPass::reportSmsDiagnostics() const noexcept {
                     harmonia::core::Logger::info(
                         "sms_reservoir_dump buffer={} stride={} bestSlot={} weight={:.6g} mass={:.6g} count={} "
                         "trials={} baseSum={:.6g} probC={:.6g} estX={:.6g} reserved={} fills={}",
-                        table == &temporal ? "temporal" : "final", name, bestSlot,
+                        table == &temporal ? "temporal" : "final",
+                        name,
+                        bestSlot,
                         std::bit_cast<float>(table->at(base + 71)),
                         std::bit_cast<float>(table->at(base + 72)),
                         table->at(base + 73),
