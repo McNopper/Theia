@@ -51,8 +51,8 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
 
 ## At a glance
 
-- **Release:** v0.8.1 - timestamp lifecycle fix and general shared fixes; Harmonia v0.7.19, Aether v0.8.1. README gallery refreshed at 1280x720 / 256 frames. No SMS integration.
-- **Prior:** v0.8.0 - PERF5 wavefront arc adjudicated and parked; PassTimer instrumentation.
+- **Release:** v0.8.3 - Vulkan capability wave consumed via Harmonia v0.7.21 (VK21 memory-budget startup log + offscreen guard; VK18 present-timing telemetry; VK4 subgroup set); README gallery regenerated on the capability-set change.
+- **Prior:** v0.8.2 - GI-SMS caustics with spatiotemporal reuse (the PSMS-ReSTIR port, Hong et al. 2025). v0.8.1 - timestamp lifecycle fix and general shared fixes. v0.8.0 - PERF5 wavefront arc adjudicated and parked; PassTimer instrumentation.
 - **Quality gates (family-uniform):** blocking lint (Q2-Q6) on every push -
   clang-format pinned 22.1.3, ruff contract in `ruff.toml` (identical x5), cppcheck,
   bandit, actionlint 1.7.12, yamllint. Coverage stays a local activity (the test
@@ -538,6 +538,17 @@ low-spp reference).
 
 ## Baseline
 
+- **v0.8.3** (consumes Harmonia v0.7.21, Aether v0.8.1): **Vulkan capability wave consumed;
+  gallery refreshed on the capability-set change.** No estimator or renderer-code change —
+  the release banks the Harmonia v0.7.21 capability wave through the pin (VK21 memory-budget
+  startup log + offscreen-capture guard; VK18 present-timing telemetry behind
+  `HARMONIA_PRESENT_TIMING=1`; VK4 subgroup-set adoption) and the README gallery re-rendered
+  with the release binary: 25 of 30 scenes byte-identical, the 5 changed shaderball scenes
+  (fuzz/specular/subsurface/thinfilm/transmission) pixel-identical or speckle-level only
+  (max 10/255 across 18 sampled pixels of shaderball_transmission; 3 of the 5 container-only
+  byte diffs) — noise-realization shifts from the capability-set change (feature enablement
+  alters driver shader-compilation paths), not estimator changes. Full local suites; all lint
+  lanes.
 - **v0.8.2** (consumes Harmonia v0.7.20, Aether v0.8.1): **GI-SMS caustics with spatiotemporal reuse — the PSMS-ReSTIR port (Hong et al. 2025).** The section-5 temporal merge and spatial reservoir reuse with pre-spatial device-local history, the reference's population semantics (no records fallback under the temporal dispatch), and full defensive pairwise MIS. Qualified on the C1/C2/C3 track: pooled-energy bias 0.15-1.2% at the 8192-frame gate (gate 2%, pooled SE ~1.8%), deterministic same-seed captures, a 2.5x equal-time MSE win on absorption-prefix chains and parity on light-tailed scenes; reuse runs at ~5% frame-time overhead (device-local reservoirs; host-visible placement cost 4.8x). Eleven root-caused bring-up defects fixed across the bring-up, ending with the log-domain backward-shift luminance that voided every backward shift (mean pairwise weight partition 0.827). Full local suites; all lint lanes.
 - **v0.8.1** (consumes Harmonia v0.7.19, Aether v0.8.1): **timestamp lifecycle and shared rendering correctness.** Query pairs reset on their owning command buffers for first/reused/skipped use; shared BSDF/lifetime fixes consumed via Harmonia. All 30 README scenes regenerated at 1280x720 / 256 frames with validation (8 changed, 22 pixel-identical). Full local 34/34; all lint lanes. No SMS integration.
 - **v0.8.0** (consumes Harmonia v0.7.18, Aether v0.8.0, slang-math v0.8.0 transitive):
