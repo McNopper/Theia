@@ -1,6 +1,6 @@
 # PLAN — Theia
 
-**Release:** v0.8.2 - GI-SMS caustics with spatiotemporal reuse (see Baseline). **Work continues on `main`** (the `dev/gi-sms-restir` branch is retired; its full history is `git log` and the Baseline below).
+**Release:** v0.8.3 - Vulkan capability wave consumed via Harmonia v0.7.21 (see Baseline). **Work continues on `main`** (the `dev/gi-sms-restir` branch is retired; its full history is `git log` and the Baseline below).
 
 **C track: shipped.** The PSMS-ReSTIR port (Hong et al., SIGGRAPH Asia 2025; reference at `external/PSMS-ReSTIR`) is complete and qualified on the C1/C2/C3 track: pooled-energy bias 0.15-1.2% at the 8192-frame gate (gate 2%, pooled SE ~1.8%), deterministic same-seed captures, a 2.5x equal-time MSE win on absorption-prefix chains and parity on light-tailed scenes, reuse at ~5% frame-time overhead. SMS sampling is active by default (`--sms-mode local`); spatiotemporal reuse via `--sms-mode reuse`. Eleven root-caused bring-up defects were fixed on the way (receipts: Baseline v0.8.2, the git log of the merge wave, and the qualification manifest under `build/sms-qualification/run_manifest.json`). The gallery regression check after the merge: byte-identical or pixel-identical everywhere except speckle-level firefly shifts on the glass-bearing scenes (cornell_spheres/suzanne, dragon_teapot, shaderball_transmission), means <=0.07/255.
 
@@ -57,11 +57,13 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
   clang-format pinned 22.1.3, ruff contract in `ruff.toml` (identical x5), cppcheck,
   bandit, actionlint 1.7.12, yamllint. Coverage stays a local activity (the test
   suite needs a GPU).
-- **Next:** PERF4 re-plans as a **combined wavefront + reordering arc** against the
-  measured budget (entry gate: the reordering must recover the measured ~2x; see
-  the PERF5 design section). The shared-estimator next-up items (GI-SMS, C9, DN3,
-  LS2, C11, C12) are tracked in `Harmonia/PLAN.md` and wire into `gi.comp.slang`
-  when they land.
+- **Next:** the **PERF5 + PERF4 combined arc is measured-parked** (2026-11-06
+  adjudication — Baseline v0.8.0; the PERF4 feasibility spike measured the reordering
+  yield at most ~6% with sort cost two orders of magnitude above the savings —
+  externally corroborated 2026-11-07, Harmonia §5.1/§5.6; revisit triggers recorded).
+  Theia's live items: **GI-ENH** remaining (replay stream compaction) and the
+  shared-estimator adopters as they land in `Harmonia/PLAN.md` (C11, C12 wire into
+  the shared passes).
 ## How to continue
 
 **Working branch is `main`.** All three family repos (Harmonia, Theia, Hyperion)
@@ -89,7 +91,7 @@ authority).
 | MOD4 | **Swapchain recreate on resize → `VK_EXT_swapchain_maintenance1` release path** — v1 goal: on window resize, release the OLD swapchain (`vkReleaseSwapchainImagesEXT`) once its present fence (`VkSwapchainPresentFenceInfoEXT`) has signaled, so the new swapchain can be created without waiting on the old one's presentation-engine retirement. **Report (needs a Harmonia-side change; orchestrator sequences it):** the presentation stack is entirely Harmonia's (`App::handleResize` → `Swapchain::recreate`; SDL resize events + acquire/present `VK_ERROR_OUT_OF_DATE_KHR`/`VK_SUBOPTIMAL_KHR` all funnel there), and the pinned Harmonia v0.7.15 has the maintenance1 extension **disabled** (`Context.cpp`: the driver-side *scaling* attempt was reverted — `supportedPresentScaling = 0` for all present modes, driver 616.92) with no present-fence / release usage anywhere (`Swapchain::present` chains only `VkPresentId2KHR`; `recreate` passes `oldSwapchain` then move-assigns — RAII destroys the old handle under `App::handleResize`'s `vkDeviceWaitIdle`). The fence+release sub-feature is independent of the scaling probe. Needed Harmonia change: (1) re-enable `VK_EXT_swapchain_maintenance1` + the `swapchainMaintenance1` device feature, (2) `Swapchain::present` chains `VkSwapchainPresentFenceInfoEXT` (per-present/per-image fence), (3) `Swapchain::recreate` waits the old present fence, then `vkReleaseSwapchainImagesEXT` for still-acquired images, before retiring the old handle, (4) narrow `App::handleResize`'s whole-device `vkDeviceWaitIdle` to slot-scoped sync, (5) revisit the `IRenderer::onResize` contract (Theia's hook tears down/rebuilds GiPass/MotionVector/TAA/ForwardRenderer immediately — safe only under device-idle today). Follow-ups once landed: pre-rotation (`VkSwapchainPresentScalingCreateInfoEXT` when drivers mature), present-fence reuse. Recreate-on-resize remains the proven behavior until the Harmonia change lands. | Harmonia change | **report** |
 | SM6-Theia | **slang-math trig migration slice** - verified **zero migratable sites** (sweep v0.7.0-era, 3 patterns over `src/theia` + `src/demo`): the cited CameraController trig is the spherical-to-cartesian formula - five scalar std:: calls over two scalar angles, not the per-component vector pattern; the remaining sites are scalar-on-scalar, which the scalar/vector collision rule sanctions (std:: stays). The saturate slice was already consumed (prior migration). No pin bump applies - slang-math arrives transitively via Harmonia since the dead direct declare was removed. Track origin: slang-math/PLAN.md SM6. | slang-math v0.7.0 | **done (verified empty)** |
 | PERF5 | **Megakernel → wavefront GI split** (Padilla et al. 2026, arXiv:2605.27323; family item in `Harmonia/PLAN.md` §5.1 — this is the Theia wire): restructure `gi.comp.slang` (2266 lines — ReSTIR PT + medium walk + path trace fused in one dispatch) into **generate → trace → shade** waves over a persistent GPU ray/hit buffer, enabling PERF4 ray reordering. **Stage-1 contract: bit-identical rendered output
-(AMENDED in 10c to the calibrated gate — see the design section §3)** — scheduling moves only; same RNG streams, same estimator, same reservoir logic. **Stages:** 10a design + per-pass timing instrumentation (done — see the design section below) → 10b generate/trace/shade split of the per-sample indirect walks → 10c path-reservoir candidates (local walk + spatial replays) into the wavefront → 10d async shadow rays + medium-walk segmentation (consumes Harmonia's M2 estimator shadow-split) → 10e GPU-driven live-count dispatch + stream compaction (GD law; PERF4 sort hookup). | Harmonia PERF5 (estimator untouched in 10a/10b) | **in progress** (10a–10b done; 10c done under the AMENDED calibrated gate — see "Verification gate" in the design section; dragon_teapot verdict open for orchestrator adjudication; 10d–10e open) |
+(AMENDED in 10c to the calibrated gate — see the design section §3)** — scheduling moves only; same RNG streams, same estimator, same reservoir logic. **Stages:** 10a design + per-pass timing instrumentation (done — see the design section below) → 10b generate/trace/shade split of the per-sample indirect walks → 10c path-reservoir candidates (local walk + spatial replays) into the wavefront → 10d async shadow rays + medium-walk segmentation (consumes Harmonia's M2 estimator shadow-split) → 10e GPU-driven live-count dispatch + stream compaction (GD law; PERF4 sort hookup). | Harmonia PERF5 (estimator untouched in 10a/10b) | **parked** (2026-11-06 adjudication — Baseline v0.8.0; Harmonia §5.1 measured the combined PERF5+PERF4 recovery arc uneconomical on this GPU, externally corroborated 2026-11-07). 10a–10c shipped under the amended calibrated gate (PassTimer instrumentation + the calibrated wavefront split remain shipped value); 10d–10e not started. Revisit triggers recorded in the PERF4 row (Harmonia §5.1) |
 
 ### PERF5 wavefront design (stage 10a)
 
@@ -452,17 +454,25 @@ Multi-frame captures are run-to-run pixel-reproducible. Remaining:
   **DN1** (RaNAD neural denoiser for the low-spp window; unblocked by VK1 cooperative matrix),
   **C11** (ReSTIR SSS — brings Theia's realtime SSS onto the shared random-walk model
   Hyperion already runs → SSS parity), **C9/C12** (BSDF)
-  — all tracked in `Harmonia/PLAN.md`. **PERF5/PERF4** (wavefront — Theia is the harder
-  wire: `gi.comp.slang` 2266 lines fuses ReSTIR PT + medium walk + path trace): the
-  estimator/paper track stays in `Harmonia/PLAN.md` §5.1, but the Theia scheduling wire
-  is now tracked **in this file** (roadmap row PERF5 + the stage-10a design section
-  above); PERF4 is gated by its 10e.
-- **VK4** (subgroup rotate/reconvergence → faster reservoir merging/compaction) and **VK5**
-  (pipeline binaries → cuts Theia's cold start: 5 pipelines at init — opaque/transparent/sky/
-  cull/GI — and speeds `.spv` hot-reload) — Harmonia covers the probe→enable; Theia consumes.
-- **ANI2** (per-frame TLAS refit; needs PERF3), **ANI6** (animated parity gate; needs ANI7),
+  — all tracked in `Harmonia/PLAN.md`. **PERF5/PERF4** (wavefront + reordering — Theia is
+  the harder wire: `gi.comp.slang` 2266 lines fuses ReSTIR PT + medium walk + path trace):
+  **measured-parked** (2026-11-06); the roadmap row PERF5 + the stage-10a design section
+  above keep the shipped 10a–10c value — PassTimer instrumentation + the calibrated
+  split — and the revisit triggers.
+- **VK4** (subgroup rotate/reconvergence → faster reservoir merging/compaction; adopted)
+  and **VK5** (pipeline binaries — **shipped in Harmonia as the opt-in
+  `core::PipelineBinaryCache`**, `HARMONIA_PIPELINE_BINARY_CACHE=<dir>`; the Theia wire =
+  pointing its 9 pipeline-creation sites at the cache: 3 graphics in
+  ForwardRendererPipelines (opaque/transparent/sky) + 6 compute (GiPass, GpuCullPass,
+  LightCuller, Hi-Z, motion vectors, TAA); also speeds `.spv` hot-reload) —
+  Harmonia covers the capability; Theia consumes.
+- **ANI2** (per-frame TLAS refit; needs PERF3 — **ANI1 is done upstream in Aether**,
+  `SceneAnimator::evaluate`), **ANI6** (animated parity gate; needs ANI7),
   **BV4** (wavefront AABB consumers; gated by PERF5) — tracked in `Harmonia/PLAN.md`.
-- **NH2/NH3** (node hierarchy) once **NH1** (Aether) lands.
+- **NH2** is **dropped** (the architecture directive settled compounding loader-side in
+  Aether — NH1 **landed**; renderers consume the flat world-resolved list). Remaining
+  hierarchy work (instanced-subtree buffer sharing) is a perf concern, not a feature —
+  revisit only with a measured need (Harmonia §6.1).
 
 ## Governance
 
