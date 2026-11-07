@@ -10,6 +10,7 @@
 #include <harmonia/core/Barrier.hpp>
 #include <harmonia/core/Env.hpp>
 #include <harmonia/core/Logger.hpp>
+#include <harmonia/core/PipelineBinaryCache.hpp>
 #include <harmonia/core/ShaderModule.hpp>
 #include <slang-math/slang-math.hpp>
 #include <theia/camera/CameraJitter.hpp>
@@ -302,9 +303,9 @@ bool ForwardRenderer::createOpaquePipeline() {
         .pDynamicState = &b.dynamicState,
         .layout = m_pipelineLayout,
     };
-    VkPipeline graphicsPipeline{};
-    if (vkCreateGraphicsPipelines(m_ctx->device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline) !=
-        VK_SUCCESS) {
+    auto pipelineResult =
+        harmonia::core::PipelineBinaryCache::graphicsPipeline(*m_ctx, pipelineInfo, "theia.forward.opaque");
+    if (!pipelineResult) {
         harmonia::core::Logger::error("Failed to create graphics pipeline");
         m_pipelineLayout.reset();
         m_desc.mesh.shutdown();
@@ -316,7 +317,7 @@ bool ForwardRenderer::createOpaquePipeline() {
         m_desc.meshSetLayout.reset();
         return false;
     }
-    m_graphicsPipeline = harmonia::core::UniquePipeline{m_ctx->device, graphicsPipeline};
+    m_graphicsPipeline = harmonia::core::UniquePipeline{m_ctx->device, *pipelineResult};
     return true;
 }
 
@@ -381,10 +382,9 @@ bool ForwardRenderer::createTransparentPipeline() {
         .pDynamicState = &b.dynamicState,
         .layout = m_pipelineLayout,
     };
-    VkPipeline graphicsPipelineTransparent{};
-    if (vkCreateGraphicsPipelines(
-            m_ctx->device, VK_NULL_HANDLE, 1, &transparentPipelineInfo, nullptr, &graphicsPipelineTransparent) !=
-        VK_SUCCESS) {
+    auto transparentPipelineResult = harmonia::core::PipelineBinaryCache::graphicsPipeline(
+        *m_ctx, transparentPipelineInfo, "theia.forward.transparent");
+    if (!transparentPipelineResult) {
         harmonia::core::Logger::error("Failed to create transparent graphics pipeline");
         m_graphicsPipeline.reset();
         m_pipelineLayout.reset();
@@ -398,7 +398,7 @@ bool ForwardRenderer::createTransparentPipeline() {
         m_desc.meshSetLayout.reset();
         return false;
     }
-    m_graphicsPipelineTransparent = harmonia::core::UniquePipeline{m_ctx->device, graphicsPipelineTransparent};
+    m_graphicsPipelineTransparent = harmonia::core::UniquePipeline{m_ctx->device, *transparentPipelineResult};
     return true;
 }
 
@@ -489,16 +489,15 @@ bool ForwardRenderer::createSkyPipeline() {
         .pDynamicState = &b.dynamicState,
         .layout = m_skyPipelineLayout,
     };
-    VkPipeline skyPipeline{};
-    const VkResult skyRes =
-        vkCreateGraphicsPipelines(m_ctx->device, VK_NULL_HANDLE, 1, &skyPipelineInfo, nullptr, &skyPipeline);
+    auto skyPipelineResult =
+        harmonia::core::PipelineBinaryCache::graphicsPipeline(*m_ctx, skyPipelineInfo, "theia.forward.sky");
     vkDestroyShaderModule(m_ctx->device, skyVert, nullptr);
     vkDestroyShaderModule(m_ctx->device, skyFrag, nullptr);
-    if (skyRes != VK_SUCCESS) {
+    if (!skyPipelineResult) {
         harmonia::core::Logger::error("Failed to create sky pipeline");
         return false;
     }
-    m_skyPipeline = harmonia::core::UniquePipeline{m_ctx->device, skyPipeline};
+    m_skyPipeline = harmonia::core::UniquePipeline{m_ctx->device, *skyPipelineResult};
     return true;
 }
 

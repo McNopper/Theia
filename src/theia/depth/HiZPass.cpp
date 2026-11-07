@@ -6,6 +6,7 @@
 #include <cstdint>
 
 #include "harmonia/core/Logger.hpp"
+#include "harmonia/core/PipelineBinaryCache.hpp"
 #include "harmonia/core/ShaderModule.hpp"
 #include "theia/renderer/ShaderPath.hpp"
 
@@ -194,13 +195,13 @@ bool HiZPass::createPipeline(const char* spvName) noexcept {
                   .pName = "main"},
         .layout = m_pipelineLayout,
     };
-    VkPipeline pipeline{};
-    const VkResult res = vkCreateComputePipelines(m_ctx->device, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &pipeline);
+    auto pipelineResult = harmonia::core::PipelineBinaryCache::computePipeline(*m_ctx, pipeInfo, "theia.hiZ");
     vkDestroyShaderModule(m_ctx->device, *module, nullptr);
-    if (res != VK_SUCCESS) {
+    if (!pipelineResult) {
         harmonia::core::Logger::error("HiZPass: failed to create compute pipeline");
         return false;
     }
+    VkPipeline pipeline = *pipelineResult;
     m_pipeline = harmonia::core::UniquePipeline{m_ctx->device, pipeline};
     return true;
 }

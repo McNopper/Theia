@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "harmonia/core/Logger.hpp"
+#include "harmonia/core/PipelineBinaryCache.hpp"
 #include "harmonia/core/ShaderModule.hpp"
 #include "theia/renderer/RendererConstants.hpp"
 #include "theia/renderer/ShaderPath.hpp"
@@ -151,14 +152,13 @@ bool GpuCullPass::initialize(const harmonia::DeviceContext& ctx, const char* spv
             },
         .layout = m_pipelineLayout,
     };
-    VkPipeline pipeline{};
-    const VkResult pipeResult =
-        vkCreateComputePipelines(ctx.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline);
+    auto pipeResult = harmonia::core::PipelineBinaryCache::computePipeline(ctx, pipelineInfo, "theia.gpuCull");
     vkDestroyShaderModule(ctx.device, shaderModule, nullptr);
-    if (pipeResult != VK_SUCCESS) {
+    if (!pipeResult) {
         harmonia::core::Logger::error("GpuCullPass: failed to create compute pipeline");
         return false;
     }
+    VkPipeline pipeline = *pipeResult;
     m_pipeline = harmonia::core::UniquePipeline{ctx.device, pipeline};
 
     // --- MOD1: descriptor buffer (replaces the pool + set) ---
