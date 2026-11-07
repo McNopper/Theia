@@ -82,3 +82,6 @@ sheen_check/
 
 # Showcase screenshots are tracked as PNG only; EXRs are local scratch.
 screenshots/*.exr
+
+screenshots-cache-check/
+screenshots-cache-off/
