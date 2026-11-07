@@ -1,6 +1,10 @@
 # PLAN — Theia
 
-**Release:** v0.8.3 - Vulkan capability wave consumed via Harmonia v0.7.21 (see Baseline). **Work continues on `main`** (the `dev/gi-sms-restir` branch is retired; its full history is `git log` and the Baseline below).
+**Release:** v0.8.4 - **VK5 pipeline-binary cache wired** (all 9 pipeline-creation sites through
+Harmonia's `core::PipelineBinaryCache`; consumes Harmonia v0.7.23 — pin bump) + alignment audit.
+Galleries re-rendered with the cache on: 24/30 scenes byte-identical, the 6 speckle-class glass
+scenes gate-PASS at EXR precision (mean ≤ 0.001, SSIM 1.0). **Work continues on `main`** (the
+`dev/gi-sms-restir` branch is retired; its full history is `git log` and the Baseline below).
 
 **C track: shipped.** The PSMS-ReSTIR port (Hong et al., SIGGRAPH Asia 2025; reference at `external/PSMS-ReSTIR`) is complete and qualified on the C1/C2/C3 track: pooled-energy bias 0.15-1.2% at the 8192-frame gate (gate 2%, pooled SE ~1.8%), deterministic same-seed captures, a 2.5x equal-time MSE win on absorption-prefix chains and parity on light-tailed scenes, reuse at ~5% frame-time overhead. SMS sampling is active by default (`--sms-mode local`); spatiotemporal reuse via `--sms-mode reuse`. Eleven root-caused bring-up defects were fixed on the way (receipts: Baseline v0.8.2, the git log of the merge wave, and the qualification manifest under `build/sms-qualification/run_manifest.json`). The gallery regression check after the merge: byte-identical or pixel-identical everywhere except speckle-level firefly shifts on the glass-bearing scenes (cornell_spheres/suzanne, dragon_teapot, shaderball_transmission), means <=0.07/255.
 
@@ -51,8 +55,11 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
 
 ## At a glance
 
-- **Release:** v0.8.3 - Vulkan capability wave consumed via Harmonia v0.7.21 (VK21 memory-budget startup log + offscreen guard; VK18 present-timing telemetry; VK4 subgroup set); README gallery regenerated on the capability-set change.
-- **Prior:** v0.8.2 - GI-SMS caustics with spatiotemporal reuse (the PSMS-ReSTIR port, Hong et al. 2025). v0.8.1 - timestamp lifecycle fix and general shared fixes. v0.8.0 - PERF5 wavefront arc adjudicated and parked; PassTimer instrumentation.
+- **Prior:** v0.8.3 - Vulkan capability wave consumed via Harmonia v0.7.21 (VK21 memory-budget
+  startup log + offscreen guard; VK18 present-timing telemetry; VK4 subgroup set); README gallery
+  regenerated on the capability-set change. v0.8.2 - GI-SMS caustics with spatiotemporal reuse
+  (the PSMS-ReSTIR port, Hong et al. 2025). v0.8.1 - timestamp lifecycle fix and general shared
+  fixes. v0.8.0 - PERF5 wavefront arc adjudicated and parked; PassTimer instrumentation.
 - **Quality gates (family-uniform):** blocking lint (Q2-Q6) on every push -
   clang-format pinned 22.1.3, ruff contract in `ruff.toml` (identical x5), cppcheck,
   bandit, actionlint 1.7.12, yamllint. Coverage stays a local activity (the test
@@ -548,6 +555,17 @@ low-spp reference).
 
 ## Baseline
 
+- **v0.8.4** (consumes Harmonia v0.7.23, Aether v0.8.1): **VK5 wire + alignment audit.** All 9
+  pipeline-creation sites (3 graphics in ForwardRendererPipelines — opaque/transparent/sky — plus
+  6 compute: GiPass, GpuCullPass, LightCuller, HiZPass, MotionVectorPass, TaaPass) route through
+  Harmonia's `core::PipelineBinaryCache` — the first run captures driver binaries, later runs
+  create from them without compilation. Receipts: galleries re-rendered cache-on — 24/30 scenes
+  byte-identical vs the committed gallery; the 6 speckle-class glass/transmission scenes gate-PASS
+  at EXR precision (shaderball_metal: mean 0.000 / max 0.106 / PSNR 125.6 dB; shaderball_transmission:
+  mean 0.001, SSIM 1.0); warm-run receipts show every pipeline created from cached blobs.
+  Audit: At-a-glance header synced to the tagged v0.8.3, PERF arc parked wording (Next bullet,
+  PERF5 row, shared-estimator list), VK5 bullet corrected to the shipped opt-in cache + the real
+  creation-site count, NH2 dropped (NH1 landed), ANI2 notes ANI1 done upstream.
 - **v0.8.3** (consumes Harmonia v0.7.21, Aether v0.8.1): **Vulkan capability wave consumed;
   gallery refreshed on the capability-set change.** No estimator or renderer-code change —
   the release banks the Harmonia v0.7.21 capability wave through the pin (VK21 memory-budget

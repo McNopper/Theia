@@ -233,7 +233,7 @@ FetchContent_Declare(
 FetchContent_Declare(
     harmonia
     GIT_REPOSITORY https://github.com/McNopper/Harmonia.git
-    GIT_TAG v0.7.21
+    GIT_TAG v0.7.23
 )
 # slang-math arrives transitively: Aether and Harmonia are its direct consumers
 # and pin it in their own CMakeLists; Harmonia is the renderer-tier vendor
