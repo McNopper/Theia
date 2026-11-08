@@ -213,7 +213,9 @@ different version reformats differently and fails), cppcheck (explicit source-fi
 scan of `src/` + `include/`, gate = no `error:` severity), ruff over `tools/`
 (contract: root `ruff.toml`, identical in all five family repos; findings stay at
 zero - fix code, do not grow ignores), bandit (accepted tool-script patterns in the
-`--skip` list), actionlint + yamllint on the workflows. Local pre-flight: run the
+`--skip` list), actionlint + yamllint on the workflows. The build jobs check out
+Aether with `lfs: false` (pointers only — build-only CI never reads asset binaries;
+Git LFS bandwidth quota guard). Local pre-flight: run the
 same commands from the repo root before pushing a lint-affecting change.
 
 **Static analysis:** `python tools/check_tidy.py` — parallel clang-tidy over
