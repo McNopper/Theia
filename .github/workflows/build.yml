@@ -79,6 +79,10 @@ jobs:
       # cache step below. OpenImageIO builds from source on a cold cache â€”
       # that cost is paid once, not on every run.
       VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg-binary-cache,readwrite"
+      # Port-source downloads (github.com tarballs) are cached too: after the
+      # first run they are served from the Actions cache, never re-downloaded
+      # (immune to github.com download throttling; quota guard).
+      X_VCPKG_ASSET_SOURCES: "clear;files,${{ github.workspace }}/vcpkg-asset-cache,readwrite"
 
     steps:
       # Sibling checkouts: build Harmonia/Aether/slang-math HEAD, the way
@@ -287,7 +291,9 @@ jobs:
 
       - uses: actions/cache@v4
         with:
-          path: ${{ github.workspace }}/vcpkg-binary-cache
+          path: |
+            ${{ github.workspace }}/vcpkg-binary-cache
+            ${{ github.workspace }}/vcpkg-asset-cache
           key: vcpkg-${{ runner.os }}-${{ hashFiles('Theia/vcpkg.json') }}
           restore-keys: |
             vcpkg-${{ runner.os }}-
