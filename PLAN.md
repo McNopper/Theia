@@ -458,8 +458,10 @@ Multi-frame captures are run-to-run pixel-reproducible. Remaining:
 ### Consumed items (defined elsewhere)
 
 - **GI-SMS** (caustics/SDS), **DN3** (converging denoiser — the à-trous replacement),
-  **DN1** (RaNAD — **adjudicated no-go 2026-11-08**: deep-image/offline method,
-  inapplicable to Theia's flat interactive window; see Harmonia §5.2),
+  **DN1** (real-time neural denoising slot — **open, no adoptable candidate**: the former
+  RaNAD candidate was adjudicated no-go 2026-11-08 and struck from the pipeline 2026-11-09;
+  researched landscape in Harmonia §5.2 — FSR Ray Regeneration adjudicated out, I3D 2025
+  tracked paper-tier pending weights release; DN8/NRD the non-neural fallback),
   **C11** (ReSTIR SSS — brings Theia's realtime SSS onto the shared random-walk model
   Hyperion already runs → SSS parity), **C9/C12** (BSDF)
   — all tracked in `Harmonia/PLAN.md`. **PERF5/PERF4** (wavefront + reordering — Theia is
