@@ -85,3 +85,6 @@ screenshots/*.exr
 
 screenshots-cache-check/
 screenshots-cache-off/
+
+# local GPU capture receipts (baseline/post comparison artifacts)
+receipts/
