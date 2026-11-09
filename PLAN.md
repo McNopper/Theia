@@ -68,7 +68,8 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
   adjudication — Baseline v0.8.0; the PERF4 feasibility spike measured the reordering
   yield at most ~6% with sort cost two orders of magnitude above the savings —
   externally corroborated 2026-11-07, Harmonia §5.1/§5.6; revisit triggers recorded).
-  Theia's live items: **GI-ENH** remaining (replay stream compaction) and the
+  Theia's live items: **GI-ENH** remaining (paper-faithful hybrid-shift gaps —
+  prefix-replay invertibility, k≥4, sampled-lobe alpha; §"ReSTIR-PT refinements") and the
   shared-estimator adopters as they land in `Harmonia/PLAN.md` (C11, C12 wire into
   the shared passes).
 ## How to continue
@@ -416,7 +417,7 @@ as the precondition.
 Accepted by design (no action): the `demo -> theia/renderer -> theia/scene`
 chain measures as a pass-through/Middle-Man proxy — it is the designed layer chain.
 
-### ReSTIR-PT refinements (GI-ENH — core landed; exploitation remains)
+### ReSTIR-PT refinements (GI-ENH — core + replay stream compaction landed)
 
 **Landed:** (b) vector-valued resampling weights (§6.3), (c) Gaussian
 paired-neighbor self-inverse maps (§3), (a) k=2 + k≥3 reconnection shifts (telescoping
@@ -426,7 +427,8 @@ consumed the reverse-direction shift, and the paper's section 3 pairing only
 amortises the pair of shifts that pairwise MIS needs), **forced NEE reconnection** (§6.2.3 — reconnect to x_k
 using NEE only, higher eligibility), **Russian roulette at initial sampling only** (§6.2.4),
 and the **critical `flags |=` fix** (reconnection shift was silently never firing).
-Multi-frame captures are run-to-run pixel-reproducible. Remaining:
+Multi-frame captures are run-to-run pixel-reproducible. **§6.2.2 replay stream
+compaction landed (2026-11-09)** — see below. Remaining:
 
 - **Hybrid shift, remaining (paper-faithful gaps - read `DQLin/ReSTIR_PT` before touching):**
 - *Prefix-replay invertibility.* The paper: "Shift invertibility is checked when connecting
@@ -444,7 +446,27 @@ Multi-frame captures are run-to-run pixel-reproducible. Remaining:
   so the k=3 body is barely hit. It needs a scene where the first pair fails (near-specular
   primary, or a sub-0.1 segment) before its correctness can be measured.
 
-**Stream compaction** (§6.2.2) — reduce warp divergence in replay.
+**Stream compaction** (§6.2.2) — **LANDED 2026-11-09.** The GI pass split into
+three kernels sharing one module/push-layout: `main` (emit — neighbour gates +
+inline shift attempts, results stored per pixel; replay jobs appended to an
+atomically compacted GPU stream), `replayMain` (uniform multi-bounce replay
+walks over the dense stream, `vkCmdDispatchIndirect` on a GPU-written group
+count — the `forward_cull` pattern), and `combineMain` (per-pixel re-merge in
+the ORIGINAL candidate order with a dedicated per-pixel merge-RNG stream,
+preserving the estimator sequence). Transient buffers are ping-ponged per
+frame slot (the cross-frame race the per-slot descriptor buffers fix).
+Determinism: replay jobs are independent and keyed by (pixel, slot) — the
+atomic stream order never enters a result; captures remain run-to-run
+pixel-reproducible (verified: two same-seed 256-frame captures bit-identical
+in image data). Receipts: module suite 58/58 (the SDS spatial-reuse tests
+caught a real dispatch-word bug — the indirect command read x=0 before the
+fix); capture comparisons vs the pre-change baseline PASS the strict-AND gate
+on cornell_classic / cornell_spheres / dragon_teapot (mean_diff ≤ 0.64,
+SSIM ≥ 0.993 @ 256 frames — the merge coin's move to the dedicated stream is a
+statistically equivalent, unbiased re-draw); **perf (PassTimer, gi pass,
+cornell_classic, 64 frames): 320p 1.42 → 1.51 ms (+0.09, dev-resolution
+overhead), 1080p 34.9 → 31.1 ms (−10.4%)** — the replay-divergence win scales
+with warp count and pays at production resolution.
 - **Dual motion vectors** (§6.4) — presentation stage only (A-SVGF/TAA reprojection).
 - **Temporal reuse without recursion bias:** an unbiased temporal form (e.g. GRIS pairwise
   MIS with canonical-sample accounting) could restore temporal memory for the interactive

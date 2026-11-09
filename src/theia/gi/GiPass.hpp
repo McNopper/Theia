@@ -199,7 +199,11 @@ class GiPass {
     static_assert(sizeof(GiPushConstants) == 252);
 
     [[nodiscard]] bool createDescriptors();
-    [[nodiscard]] bool createPipeline(const char* giSpv);
+    [[nodiscard]] bool createPipelineLayout();
+    [[nodiscard]] bool createComputePipeline(const char* spv,
+                                             const char* entry,
+                                             const char* cacheName,
+                                             harmonia::core::UniquePipeline& out);
     [[nodiscard]] bool createSmsResources(const harmonia::core::CommandPool& uploadPool);
     void reportSmsDiagnostics() const noexcept;
     void updateDescriptors(const FrameParams& params);
@@ -224,6 +228,10 @@ class GiPass {
 
     harmonia::core::UniquePipelineLayout m_pipelineLayout;
     harmonia::core::UniquePipeline m_pipeline;
+    /// GI-ENH §6.2.2: uniform replay + per-pixel combine passes over the same
+    /// descriptor set / push-constant layout as the emit megakernel.
+    harmonia::core::UniquePipeline m_replayPipeline;
+    harmonia::core::UniquePipeline m_combinePipeline;
     harmonia::pipeline::SmsPass m_sms;
     harmonia::core::Buffer m_smsContext, m_smsPrefixes, m_smsPrior, m_smsDiagnostics;
     harmonia::core::Buffer m_smsTemporalReservoir, m_smsHistoryReservoir;
@@ -265,6 +273,23 @@ class GiPass {
     bool m_pathReservoirsCleared = false;
     /// GI-ENH: Gaussian paired-neighbor pairing maps (binding 22, static after init).
     harmonia::core::Buffer m_pairingOffsetBuf{};
+
+    // ── GI-ENH §6.2.2 replay stream compaction (bindings 27-30) ──────────────
+    // Three-kernel split: emit (main) → uniform replay (replayMain) → combine
+    // (combineMain). Buffers are frame-transient; the count buffer doubles as
+    // the vkCmdDispatchIndirect command (words 0-2 = x/y/z, word 4 = record
+    // counter, reset by a per-frame fill).
+    static constexpr VkDeviceSize kPtParamsStride = 128;    // PtEmitParams (8 × 16 B)
+    static constexpr VkDeviceSize kReplayResultStride = 16; // float4 per (pixel, slot)
+    static constexpr std::uint32_t kReplayCountBytes = 20;  // 4 command words + counter
+    /// ONE INSTANCE PER FRAME SLOT (kDescriptorSlots): frames run pipelined, so a
+    /// single instance would let frame N+1's emit kernel overwrite the params/
+    /// records/results that frame N's replay/combine kernels are still reading —
+    /// the same cross-frame race the per-slot descriptor buffers fix.
+    harmonia::core::Buffer m_replayRecordsBuf[2]{}; // pixelSlots × uint
+    harmonia::core::Buffer m_replayCountBuf[2]{};   // 20 B: indirect command + counter
+    harmonia::core::Buffer m_ptParamsBuf[2]{};      // pixels × PtEmitParams
+    harmonia::core::Buffer m_replayResultsBuf[2]{}; // pixelSlots × float4
 
     VkImageView m_boundMotionVectorView = VK_NULL_HANDLE;
 };

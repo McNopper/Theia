@@ -134,8 +134,51 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx,
     if (!createDescriptors()) {
         return false;
     }
-    if (!createPipeline(giSpv)) {
+    if (!createPipelineLayout()) {
         return false;
+    }
+    // GI-ENH §6.2.2: emit megakernel + uniform replay pass + per-pixel combine.
+    if (!createComputePipeline(giSpv, "main", "theia.gi", m_pipeline)) {
+        return false;
+    }
+    if (!createComputePipeline("gi.comp.replayMain.spv", "replayMain", "theia.gi.replay", m_replayPipeline)) {
+        return false;
+    }
+    if (!createComputePipeline("gi.comp.combineMain.spv", "combineMain", "theia.gi.combine", m_combinePipeline)) {
+        return false;
+    }
+    // Replay-compaction buffers (bindings 27-30; see GiPass.hpp). The compaction
+    // is a pure restructuring of the replay path — these exist whenever the GI
+    // pass runs and stay dormant (count = 0) when the path reservoir is off.
+    {
+        const std::uint64_t pixels = static_cast<std::uint64_t>(m_cfg.width) * static_cast<std::uint64_t>(m_cfg.height);
+        const std::uint64_t pixelSlots = pixels * 3u; // kPathSpatialNeighbors (shader constant)
+        for (std::uint32_t inst = 0; inst < 2; ++inst) {
+            const std::vector<std::pair<harmonia::core::Buffer*, std::pair<VkDeviceSize, const char*>>> bufs{
+                {&m_replayRecordsBuf[inst], {pixelSlots * 4, "theia.gi.replayRecords"}},
+                {&m_replayCountBuf[inst], {kReplayCountBytes, "theia.gi.replayCount"}},
+                {&m_ptParamsBuf[inst], {pixels * kPtParamsStride, "theia.gi.ptParams"}},
+                {&m_replayResultsBuf[inst], {pixelSlots * kReplayResultStride, "theia.gi.replayResults"}},
+            };
+            for (auto& [buf, spec] : bufs) {
+                auto created = harmonia::core::Buffer::create(
+                    ctx,
+                    spec.first,
+                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                        VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+                    VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                    spec.second);
+                if (!created) {
+                    harmonia::core::Logger::error(
+                        "GiPass: failed to create replay-compaction buffer {}[{}]: VkResult {}",
+                        spec.second,
+                        inst,
+                        static_cast<int>(created.error()));
+                    return false;
+                }
+                *buf = std::move(*created);
+            }
+        }
     }
     if (!createSmsResources(uploadPool))
         return false;
@@ -159,8 +202,18 @@ void GiPass::shutdown() {
     m_pathReservoirsCleared = false;
     m_pathReservoirPingPong = 0;
     m_pairingOffsetBuf = {};
+    m_replayRecordsBuf[0] = {};
+    m_replayRecordsBuf[1] = {};
+    m_replayCountBuf[0] = {};
+    m_replayCountBuf[1] = {};
+    m_ptParamsBuf[0] = {};
+    m_ptParamsBuf[1] = {};
+    m_replayResultsBuf[0] = {};
+    m_replayResultsBuf[1] = {};
     m_boundMotionVectorView = VK_NULL_HANDLE;
     m_pipeline.reset();
+    m_replayPipeline.reset();
+    m_combinePipeline.reset();
     m_pipelineLayout.reset();
     for (auto& w : m_descWriters) {
         w.shutdown(); // MOD1: replaces pool + sets
@@ -176,7 +229,7 @@ void GiPass::shutdown() {
 }
 
 bool GiPass::createDescriptors() {
-    const std::array<VkDescriptorSetLayoutBinding, 27> bindings{{
+    const std::array<VkDescriptorSetLayoutBinding, 31> bindings{{
         {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // TLAS
         {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // hdr (RW)
         {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // giBuffer
@@ -213,12 +266,20 @@ bool GiPass::createDescriptors() {
         {25, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // immutable SMS producer
                                                                                           // context
         {26, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // optional SMS counters
+        {27, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI-ENH §6.2.2 replay
+                                                                                          // records (RW)
+        {28, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI-ENH §6.2.2 replay
+                                                                                          // count + indirect cmd (RW)
+        {29, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI-ENH §6.2.2 per-pixel
+                                                                                          // emit params (RW)
+        {30, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI-ENH §6.2.2 replay
+                                                                                          // results (RW)
     }};
 
     // MOD1: no UPDATE_AFTER_BIND — incompatible with DESCRIPTOR_BUFFER layouts.
     constexpr VkDescriptorBindingFlags kTextureFlags = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
-    const std::array<VkDescriptorBindingFlags, 27> bindingFlags{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, kTextureFlags,
-                                                                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    const std::array<VkDescriptorBindingFlags, 31> bindingFlags{
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, kTextureFlags, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = static_cast<std::uint32_t>(bindingFlags.size()),
@@ -241,7 +302,10 @@ bool GiPass::createDescriptors() {
 
     // MOD1: descriptor buffers (replaces the pool + allocated sets).
     for (std::uint32_t si = 0; si < kDescriptorSlots; ++si) {
-        if (!m_descWriters[si].init(*m_ctx, setLayout, 27, si == 0 ? "theia.gi.descBuf0" : "theia.gi.descBuf1")) {
+        if (!m_descWriters[si].init(*m_ctx,
+                                    setLayout,
+                                    static_cast<std::uint32_t>(bindings.size()),
+                                    si == 0 ? "theia.gi.descBuf0" : "theia.gi.descBuf1")) {
             harmonia::core::Logger::error("GiPass: failed to create descriptor buffer slot {}", si);
             for (std::uint32_t j = 0; j <= si; ++j)
                 m_descWriters[j].shutdown();
@@ -256,7 +320,7 @@ bool GiPass::createDescriptors() {
     return true;
 }
 
-bool GiPass::createPipeline(const char* giSpv) {
+bool GiPass::createPipelineLayout() {
     const VkPushConstantRange pcRange{
         .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
         .offset = 0,
@@ -275,10 +339,16 @@ bool GiPass::createPipeline(const char* giSpv) {
         return false;
     }
     m_pipelineLayout = harmonia::core::UniquePipelineLayout{m_ctx->device, pipelineLayout};
+    return true;
+}
 
-    auto module = harmonia::core::createShaderModule(m_ctx->device, shaderPath(giSpv));
+bool GiPass::createComputePipeline(const char* spv,
+                                   const char* /*entry*/,
+                                   const char* cacheName,
+                                   harmonia::core::UniquePipeline& out) {
+    auto module = harmonia::core::createShaderModule(m_ctx->device, shaderPath(spv));
     if (!module) {
-        harmonia::core::Logger::error("GiPass: cannot load shader: {}", giSpv);
+        harmonia::core::Logger::error("GiPass: cannot load shader: {}", spv);
         return false;
     }
 
@@ -288,17 +358,18 @@ bool GiPass::createPipeline(const char* giSpv) {
         .stage = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
                   .stage = VK_SHADER_STAGE_COMPUTE_BIT,
                   .module = *module,
+                  // slangc -entry emits the selected function named "main" in
+                  // the SPIR-V, so every per-entry spv's entry point is "main".
                   .pName = "main"},
         .layout = m_pipelineLayout,
     };
-    auto pipelineResult = harmonia::core::PipelineBinaryCache::computePipeline(*m_ctx, pipeInfo, "theia.gi");
+    auto pipelineResult = harmonia::core::PipelineBinaryCache::computePipeline(*m_ctx, pipeInfo, cacheName);
     vkDestroyShaderModule(m_ctx->device, *module, nullptr);
     if (!pipelineResult) {
-        harmonia::core::Logger::error("GiPass: failed to create compute pipeline");
+        harmonia::core::Logger::error("GiPass: failed to create compute pipeline {} (spv {})", cacheName, spv);
         return false;
     }
-    VkPipeline pipeline = *pipelineResult;
-    m_pipeline = harmonia::core::UniquePipeline{m_ctx->device, pipeline};
+    out = harmonia::core::UniquePipeline{m_ctx->device, *pipelineResult};
     return true;
 }
 
@@ -377,6 +448,16 @@ void GiPass::updateRestirDescriptors(const FrameParams& params, std::uint32_t sl
     w.writeSampledImage(*m_ctx, 18, params.motionVectorView, VK_IMAGE_LAYOUT_GENERAL);
     w.writeStorageBufferHandle(*m_ctx, 20, m_pathReservoirBuf[pathCur]);
     w.writeStorageBufferHandle(*m_ctx, 21, m_pathReservoirBuf[pathPrev]);
+    // GI-ENH §6.2.2 replay-compaction buffers — the ACTIVE slot's instances
+    // (frame-transient; the other slot may hold the pipelined previous frame).
+    if (m_replayRecordsBuf[0].isValid() && m_replayCountBuf[0].isValid() && m_ptParamsBuf[0].isValid() &&
+        m_replayResultsBuf[0].isValid()) {
+        const std::uint32_t inst = m_activeSlot;
+        w.writeStorageBufferHandle(*m_ctx, 27, m_replayRecordsBuf[inst]);
+        w.writeStorageBufferHandle(*m_ctx, 28, m_replayCountBuf[inst]);
+        w.writeStorageBufferHandle(*m_ctx, 29, m_ptParamsBuf[inst]);
+        w.writeStorageBufferHandle(*m_ctx, 30, m_replayResultsBuf[inst]);
+    }
     m_boundMotionVectorView = params.motionVectorView;
 }
 
@@ -582,6 +663,32 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         .smsEnabled = m_smsFrameActive ? 1U : 0U,
     };
 
+    const bool replayCompaction = (pc.restirPtPathEnabled != 0u) && m_replayCountBuf[0].isValid() &&
+                                  m_ptParamsBuf[0].isValid() && m_replayRecordsBuf[0].isValid() &&
+                                  m_replayResultsBuf[0].isValid();
+    const std::uint32_t rInst = m_activeSlot; // this frame's transient-buffer instance
+    if (replayCompaction) {
+        // Per-frame reset of the indirect command + record counter (words 0-4).
+        vkCmdFillBuffer(cmd, m_replayCountBuf[rInst].handle(), 0, kReplayCountBytes, 0u);
+        const VkBufferMemoryBarrier2 countReset{.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                                                .srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT,
+                                                .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                                                .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                                .dstAccessMask =
+                                                    VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
+                                                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                                .buffer = m_replayCountBuf[rInst].handle(),
+                                                .offset = 0,
+                                                .size = kReplayCountBytes};
+        const VkDependencyInfo resetDep{
+            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .bufferMemoryBarrierCount = 1,
+            .pBufferMemoryBarriers = &countReset,
+        };
+        vkCmdPipelineBarrier2(cmd, &resetDep);
+    }
+
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
     // MOD1: bind the descriptor buffer for the active slot (replaces vkCmdBindDescriptorSets).
     m_descWriters[m_activeSlot].bind(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout);
@@ -590,6 +697,76 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
     const std::uint32_t gx = (m_cfg.width + 7u) / 8u;
     const std::uint32_t gy = (m_cfg.height + 7u) / 8u;
     vkCmdDispatch(cmd, gx, gy, 1);
+
+    if (replayCompaction) {
+        // GI-ENH §6.2.2: emit → uniform replay → combine. The emit kernel's
+        // replay jobs (atomically compacted stream) and per-pixel emit params
+        // must be visible to the replay pass; the count words double as the
+        // indirect dispatch command (DRAW_INDIRECT read).
+        auto bufBarrier = [](VkBuffer buf, VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess) {
+            return VkBufferMemoryBarrier2{.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                                          .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                          .srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT,
+                                          .dstStageMask = dstStage,
+                                          .dstAccessMask = dstAccess,
+                                          .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                          .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                          .buffer = buf,
+                                          .offset = 0,
+                                          .size = VK_WHOLE_SIZE};
+        };
+        const std::array<VkBufferMemoryBarrier2, 4> emitToReplay{{
+            bufBarrier(m_replayCountBuf[rInst].handle(),
+                       VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                       VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_2_SHADER_READ_BIT),
+            bufBarrier(m_replayRecordsBuf[rInst].handle(),
+                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                       VK_ACCESS_2_SHADER_READ_BIT),
+            bufBarrier(
+                m_ptParamsBuf[rInst].handle(), VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_SHADER_READ_BIT),
+            // combineMain re-merges from the local reservoir the emit stage stored.
+            bufBarrier(m_pathReservoirBuf[m_pathReservoirPingPong].handle(),
+                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                       VK_ACCESS_2_SHADER_READ_BIT),
+        }};
+        const VkDependencyInfo emitToReplayDep{
+            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .bufferMemoryBarrierCount = static_cast<std::uint32_t>(emitToReplay.size()),
+            .pBufferMemoryBarriers = emitToReplay.data(),
+        };
+        vkCmdPipelineBarrier2(cmd, &emitToReplayDep);
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_replayPipeline);
+        vkCmdDispatchIndirect(cmd, m_replayCountBuf[rInst].handle(), 0);
+
+        // Replay → combine: replay results + the emit stage's partial HDR
+        // composite (combineMain reads and finishes the pixel's HDR write).
+        const std::array<VkBufferMemoryBarrier2, 1> replayToCombine{{
+            bufBarrier(m_replayResultsBuf[rInst].handle(),
+                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                       VK_ACCESS_2_SHADER_READ_BIT),
+        }};
+        const VkImageMemoryBarrier2 hdrForCombine =
+            harmonia::core::imageBarrier(m_cfg.hdrImage,
+                                         VK_IMAGE_LAYOUT_GENERAL,
+                                         VK_IMAGE_LAYOUT_GENERAL,
+                                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                         VK_ACCESS_2_SHADER_WRITE_BIT,
+                                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                         VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
+        const std::array<VkImageMemoryBarrier2, 1> hdrBarriers{hdrForCombine};
+        const VkDependencyInfo replayToCombineDep{
+            .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+            .bufferMemoryBarrierCount = static_cast<std::uint32_t>(replayToCombine.size()),
+            .pBufferMemoryBarriers = replayToCombine.data(),
+            .imageMemoryBarrierCount = static_cast<std::uint32_t>(hdrBarriers.size()),
+            .pImageMemoryBarriers = hdrBarriers.data(),
+        };
+        vkCmdPipelineBarrier2(cmd, &replayToCombineDep);
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_combinePipeline);
+        vkCmdDispatch(cmd, gx, gy, 1);
+    }
     if (m_smsFrameActive) {
         if (m_smsPrior.isValid())
             vkCmdFillBuffer(cmd, m_smsPrior.handle(), 0, VK_WHOLE_SIZE, 0);

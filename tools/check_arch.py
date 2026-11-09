@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
+# mypy: check-untyped-defs
 """check_arch.py - the generic architecture gate: analyze, define, check.
 
-DEVELOPMENT COPY - lives OUTSIDE every repository until placement is decided.
+THE CANONICAL ENGINE of the check-arch skill: a repository delegates to it
+or vendors a copy whose CHECK_ARCH_VERSION matches - compare the versions
+before trusting a vendored gate.
 
 THE IDEA (reflexion models, Murphy/Notkin/Sullivan 1995, applied as an
 architecture fitness function): the high-level model is POSITED in a
@@ -53,9 +56,14 @@ THE `arch` BLOCK (the whole contract; 100% generic - the engine knows no
 repo, no layer name, no namespace):
 
   ```arch
-  scan: src                      # comma-separated roots (repo-relative)
-  extensions: .hpp, .cpp         # scanned source extensions
-  exclude: build, _deps, .git    # substring-excluded directories
+  scan: src                      # comma-separated roots (repo-relative);
+                                 # a root that does not exist is an error
+  extensions: .hpp, .cpp         # scanned source extensions (leading '.')
+  exclude: build, _deps, .git    # excluded directories: a NAME (fnmatch
+                                 # globs, e.g. cmake-build-*) matches that
+                                 # directory anywhere below a root; a PATH
+                                 # (with '/') matches that repo-relative
+                                 # directory - never a substring
   unclassified: error            # error | ignore - files off the module map
   external: libfoo, libbar       # other-repo includes (reported, allowed)
   forbidden:                     # hard violations (e.g. sibling repos)
@@ -110,14 +118,19 @@ repo, no layer name, no namespace):
   `#` comments and blank lines are free; `allow` edges must reference
   declared modules (a typo is a contract error, never a silent no-op).
 
-THE EXACT GRAPH (`graph: scan-deps`): instead of the regex scan, the
-dependency graph comes from clang-scan-deps over the compile database -
-the preprocessor truth, conditional includes included. The database is
-CONTRACTED: a database whose translation units vanished on disk is
-REFUSED (exit 2), and every compiled TU must be scanned or the run fails
-(exit 1) - a partial scan never passes silently. In this mode
-forbidden/external match against the resolved repo-relative paths, and
-`resolve`/`unresolved` do not apply (the graph is exact).
+THE EXACT GRAPH (`graph: scan-deps`): clang-scan-deps over the compile
+database supplies the preprocessor truth per translation unit -
+conditional includes included - and the include scan still supplies the
+direct project relationships (header-to-header edges, header-only
+cycles); the rules check both, so a compiler-observed transitive
+dependency is an edge like a direct one. The database is CONTRACTED: an
+unreadable database, or one whose translation units vanished on disk, is
+REFUSED (exit 2); every compiled TU must be scanned or the run fails
+(exit 1); a blind graph (no TU inside the scanned roots) is refused
+(exit 2) - a partial or degraded scan never passes silently. forbidden /
+external match the include text in the direct graph and the repo-relative
+path of compiler-observed files; the quote chain and `unresolved` apply
+to the direct graph.
 
 THE SMELL PROXIES (refactoring.guru catalog, the deterministic tier):
 smells are REPORT-ONLY queue items for the review cadence - never findings
@@ -134,21 +147,23 @@ Statements, ...) belong to the lint matrix (clang-tidy / cppcheck), not
 this tool; the rest of the catalog is review judgment.
 
 Exit codes: 0 clean - 1 violations - 2 config/usage error - 77 skipped.
-Usage: python tools/check_arch.py [--doc FILE] [--report] [--diagram]
-                                  [--derive [--scan DIRS] [--out FILE]]
-                                  [--selftest] [-h]
+Usage: python check_arch.py [--repo DIR] [--doc FILE] [--report] [--json]
+                            [--diagram] [--derive [--scan DIRS] [--out FILE]]
+                            [--selftest] [--version] [-h]
 """
 
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
+import posixpath
 import re
 import shutil
 import subprocess
 import sys
-from shutil import which
+import tempfile
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -158,7 +173,7 @@ EXIT_VIOLATIONS = 1
 EXIT_USAGE = 2
 EXIT_SKIP = 77
 
-CHECK_ARCH_VERSION = "1.4.0"
+CHECK_ARCH_VERSION = "1.5.0"
 
 INCLUDE_RE = re.compile(r'^\s*#\s*include\s*([<"])([^>"]+)[>"]', re.MULTILINE)
 ARCH_BLOCK_RE = re.compile(r"```arch[ \t]*\r?\n(.*?)```", re.DOTALL)
@@ -167,20 +182,67 @@ DIAGRAM_END = "<!-- check_arch: diagram END -->"
 DEFAULT_EXTS = [".hpp", ".cpp", ".h", ".c"]
 DEFAULT_EXCLUDES = ["build", "_deps", ".git"]
 DOC_CANDIDATES = ["docs/ARCHITECTURE.md", "ARCHITECTURE.md", "tools/ARCHITECTURE.md"]
-VSWHERE = r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+VSWHERE = os.path.join(
+    os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+    "Microsoft Visual Studio",
+    "Installer",
+    "vswhere.exe",
+)
+# compile-database entries the scanner reads: C/C++ translation units only
+TU_EXTS = (".cpp", ".c", ".cc", ".cxx")
+# CMake's C++ module scanning flags reference .modmap files that only exist
+# after a build; the scan strips them so it works on a fresh tree
+MODULE_SCAN_FLAGS = ("-fmodules-ts", "-MD")
+NAMESPACE_RE = re.compile(r"^[A-Za-z_]\w*(?:::[A-Za-z_]\w*)*$")
+# the quote chains: where a quoted include is looked up, in order
+QUOTE_STEPS: dict[str, tuple[str, ...]] = {
+    "": (),
+    "includer": ("includer",),
+    "root": ("root",),
+    "includer-then-root": ("includer", "root"),
+    "root-then-includer": ("root", "includer"),
+}
 
 KNOB_KEYS = {
-    "scan", "extensions", "exclude", "unclassified", "external", "forbidden",
-    "quotes_relative", "repo_fallback", "quotes_resolve", "within_layer",
-    "cycles", "graph", "db", "clang_scan_deps", "nesting", "unresolved",
-    "smells", "smell_limits", "kind", "header_size",
-    "namespace_root", "namespace_module", "namespace_require",
+    "scan",
+    "extensions",
+    "exclude",
+    "unclassified",
+    "external",
+    "forbidden",
+    "quotes_relative",
+    "repo_fallback",
+    "quotes_resolve",
+    "within_layer",
+    "cycles",
+    "graph",
+    "db",
+    "clang_scan_deps",
+    "nesting",
+    "unresolved",
+    "smells",
+    "smell_limits",
+    "kind",
+    "header_size",
+    "namespace_root",
+    "namespace_module",
+    "namespace_require",
 }
 
 # derive quarantines these directory names - vendored / non-source trees are
 # never architecture (ecosystem convention, not any repo's naming)
-VENDOR_DIRS = {"third_party", "thirdparty", "vendor", "external", "deps",
-               "downloads", "packages", "ports", "vcpkg", "_deps"}
+VENDOR_DIRS = {
+    "third_party",
+    "thirdparty",
+    "vendor",
+    "external",
+    "deps",
+    "downloads",
+    "packages",
+    "ports",
+    "vcpkg",
+    "_deps",
+}
 
 # the smell-proxy thresholds and their documented defaults (smell_limits)
 SMELL_LIMIT_DEFAULTS = {"fan": 8, "mutual": 3, "files": 12, "lines": 1000}
@@ -190,11 +252,19 @@ class ContractError(Exception):
     """A contract problem the user must fix (exit 2)."""
 
 
-def _strip(s):
-    s = s.strip()
-    if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'":
-        s = s[1:-1].strip()
-    return s
+def _norm_root(root):
+    """A scan root as written -> its normalized repo-relative posix form
+    (`./src/` and `src\\` both become `src`): module stripping compares
+    against it, so every spelling must classify alike."""
+    return posixpath.normpath(root.replace("\\", "/"))
+
+
+def _check_extensions(path, key, values):
+    """Extensions start with '.': `hpp` would match no file at all and turn
+    the gate into a silent skip."""
+    bad = [x for x in values if len(x) < 2 or not x.startswith(".")]
+    if bad:
+        raise ContractError(f"{path}: {key}: each entry starts with '.', got {bad}")
 
 
 def _safe_id(path):
@@ -209,10 +279,10 @@ class Contract:
         blocks = ARCH_BLOCK_RE.findall(text)
         if not blocks:
             raise ContractError(f"{path}: no ```arch block (the machine contract)")
-        knobs = {}
-        layers = []
-        modules = []   # (path, layer-or-None)
-        edges = []
+        knobs: dict[str, str] = {}
+        layers: list[str] = []
+        modules: list[tuple[str, str | None]] = []  # (path, layer-or-None)
+        edges: list[tuple[str, str]] = []
         for block in blocks:
             for raw in block.splitlines():
                 line = raw.split("#")[0].strip()
@@ -232,38 +302,53 @@ class Contract:
                     continue
                 if ":" in line:
                     k, v = line.split(":", 1)
-                    if k.strip() not in KNOB_KEYS:
-                        raise ContractError(f"{path}: unknown knob {k.strip()!r} "
-                                            f"(known: {sorted(KNOB_KEYS)})")
-                    knobs[k.strip()] = v.strip()
+                    key = k.strip()
+                    if key not in KNOB_KEYS:
+                        raise ContractError(
+                            f"{path}: unknown knob {key!r} (known: {sorted(KNOB_KEYS)})"
+                        )
+                    if key in knobs:
+                        # last-wins would silently drop the first declaration
+                        raise ContractError(
+                            f"{path}: duplicate knob {key!r} (declare each knob once)"
+                        )
+                    knobs[key] = v.strip()
                     continue
-                raise ContractError(f"{path}: cannot parse contract line: {raw.strip()!r}")
+                raise ContractError(
+                    f"{path}: cannot parse contract line: {raw.strip()!r}"
+                )
 
-        dupes = sorted({ly for ly in layers if layers.count(ly) > 1})
+        dupes = sorted({l for l in layers if layers.count(l) > 1})
         if dupes:
             raise ContractError(f"{path}: duplicate layer declarations {dupes}")
-        self.stack = layers                    # bottom-up: first = the bottom
+        self.stack = layers  # bottom-up: first = the bottom
         self.rank = {name: i for i, name in enumerate(layers)}
         dupes = sorted({p for p, _ in modules if [x for x, _ in modules].count(p) > 1})
         if dupes:
             raise ContractError(f"{path}: duplicate module declarations {dupes}")
         self.modules = {p for p, _ in modules}
-        self.layer_of = {}
+        self.layer_of: dict[str, str] = {}
         for p, lay in modules:
             if lay is not None and lay not in self.rank:
-                raise ContractError(f"{path}: module {p} in undeclared layer {lay!r} "
-                                    f"(declare it with 'layer')")
+                raise ContractError(
+                    f"{path}: module {p} in undeclared layer {lay!r} "
+                    f"(declare it with 'layer')"
+                )
             if lay is not None:
                 self.layer_of[p] = lay
         self.edges = set(edges)
         for a, b in edges:
             missing = [x for x in (a, b) if x not in self.modules]
             if missing:
-                raise ContractError(f"{path}: edge {a} -> {b} references undeclared "
-                                    f"module(s) {missing} (declare them with 'module')")
+                raise ContractError(
+                    f"{path}: edge {a} -> {b} references undeclared "
+                    f"module(s) {missing} (declare them with 'module')"
+                )
         selfloops = sorted({a for a, b in edges if a == b})
         if selfloops:
-            raise ContractError(f"{path}: self-edges are implicit, drop them: {selfloops}")
+            raise ContractError(
+                f"{path}: self-edges are implicit, drop them: {selfloops}"
+            )
 
         def lst(key, default):
             v = knobs.get(key)
@@ -279,10 +364,13 @@ class Contract:
                 return False
             raise ContractError(f"{path}: {key}: true/false expected, got {v!r}")
 
-        self.roots = lst("scan", [])
+        self.roots = [_norm_root(r) for r in lst("scan", [])]
         if not self.roots:
-            raise ContractError(f"{path}: the contract needs 'scan:' (at least one root)")
+            raise ContractError(
+                f"{path}: the contract needs 'scan:' (at least one root)"
+            )
         self.extensions = lst("extensions", DEFAULT_EXTS)
+        _check_extensions(path, "extensions", self.extensions)
         self.exclude_dirs = lst("exclude", DEFAULT_EXCLUDES)
         self.unclassified = knobs.get("unclassified") or "error"
         if self.unclassified not in ("error", "ignore"):
@@ -295,28 +383,66 @@ class Contract:
         self.ns_root = knobs.get("namespace_root") or None
         self.ns_module = knobs.get("namespace_module") or None
         if bool(self.ns_root) != bool(self.ns_module):
-            raise ContractError(f"{path}: namespace_root and namespace_module go together")
+            raise ContractError(
+                f"{path}: namespace_root and namespace_module go together"
+            )
+        if self.ns_root and not NAMESPACE_RE.match(self.ns_root):
+            raise ContractError(
+                f"{path}: namespace_root: a C++ namespace expected "
+                f"(e.g. proj or proj::core), got {self.ns_root!r}"
+            )
+        if self.ns_module and not any(
+            m == self.ns_module or m.startswith(self.ns_module + "/")
+            for m in self.modules
+        ):
+            raise ContractError(
+                f"{path}: namespace_module {self.ns_module!r} is neither a "
+                "declared module nor the path prefix of one"
+            )
         self.ns_require_all = lst("namespace_require", [])
+        _check_extensions(path, "namespace_require", self.ns_require_all)
+        if self.ns_require_all and not self.ns_root:
+            raise ContractError(
+                f"{path}: namespace_require needs namespace_root and "
+                "namespace_module (the gate it tightens)"
+            )
+        # rooted-include bases per repository (see _prefix_bases)
+        self.prefix_cache: dict[str, dict[str, list[str]]] = {}
 
         self.graph = knobs.get("graph") or "regex"
         if self.graph not in ("regex", "scan-deps"):
-            raise ContractError(f"{path}: graph: regex|scan-deps expected, got {self.graph!r}")
+            raise ContractError(
+                f"{path}: graph: regex|scan-deps expected, got {self.graph!r}"
+            )
         self.db = knobs.get("db") or ""
         if self.graph == "scan-deps" and not self.db:
-            raise ContractError(f"{path}: graph: scan-deps needs 'db:' (the compile database)")
-        self.clang_scan_deps = (knobs.get("clang_scan_deps")
-                                or os.environ.get("CHECK_ARCH_CLANG_SCAN_DEPS") or "")
+            raise ContractError(
+                f"{path}: graph: scan-deps needs 'db:' (the compile database)"
+            )
+        self.clang_scan_deps = (
+            knobs.get("clang_scan_deps")
+            or os.environ.get("CHECK_ARCH_CLANG_SCAN_DEPS")
+            or ""
+        )
         self.nesting = knobs.get("nesting") or "off"
         if self.nesting not in ("off", "error"):
-            raise ContractError(f"{path}: nesting: off|error expected, got {self.nesting!r}")
+            raise ContractError(
+                f"{path}: nesting: off|error expected, got {self.nesting!r}"
+            )
         self.unresolved_policy = knobs.get("unresolved") or "info"
         if self.unresolved_policy not in ("info", "error"):
             raise ContractError(f"{path}: unresolved: info|error expected")
         self.quotes_resolve = knobs.get("quotes_resolve") or None
         if self.quotes_resolve and self.quotes_resolve not in (
-                "includer", "root", "includer-then-root", "root-then-includer"):
-            raise ContractError(f"{path}: quotes_resolve: includer | root | "
-                                "includer-then-root | root-then-includer expected")
+            "includer",
+            "root",
+            "includer-then-root",
+            "root-then-includer",
+        ):
+            raise ContractError(
+                f"{path}: quotes_resolve: includer | root | "
+                "includer-then-root | root-then-includer expected"
+            )
         self.within_layer = knobs.get("within_layer") or "deny"
         if self.within_layer not in ("deny", "allow", "warn"):
             raise ContractError(f"{path}: within_layer: deny|allow|warn expected")
@@ -328,24 +454,31 @@ class Contract:
         if lim:
             for item in lim.replace(",", " ").split():
                 if "=" not in item:
-                    raise ContractError(f"{path}: smell_limits: key=value expected, "
-                                        f"got {item!r}")
+                    raise ContractError(
+                        f"{path}: smell_limits: key=value expected, got {item!r}"
+                    )
                 k, v = item.split("=", 1)
                 if k not in SMELL_LIMIT_DEFAULTS:
-                    raise ContractError(f"{path}: smell_limits: unknown limit {k!r} "
-                                        f"(known: {sorted(SMELL_LIMIT_DEFAULTS)})")
+                    raise ContractError(
+                        f"{path}: smell_limits: unknown limit {k!r} "
+                        f"(known: {sorted(SMELL_LIMIT_DEFAULTS)})"
+                    )
                 if not v.isdigit():
-                    raise ContractError(f"{path}: smell_limits: {k}: integer "
-                                        f"expected, got {v!r}")
+                    raise ContractError(
+                        f"{path}: smell_limits: {k}: integer expected, got {v!r}"
+                    )
                 self.smell_limits[k] = int(v)
         self.kind = knobs.get("kind") or "application"
         if self.kind not in ("application", "library"):
-            raise ContractError(f"{path}: kind: application|library expected, "
-                                f"got {self.kind!r}")
+            raise ContractError(
+                f"{path}: kind: application|library expected, got {self.kind!r}"
+            )
         self.header_size = knobs.get("header_size") or "warn"
         if self.header_size not in ("report", "warn", "error"):
-            raise ContractError(f"{path}: header_size: report|warn|error expected, "
-                                f"got {self.header_size!r}")
+            raise ContractError(
+                f"{path}: header_size: report|warn|error expected, "
+                f"got {self.header_size!r}"
+            )
 
     def quote_chain(self):
         """How a quoted include resolves, in order: 'includer' = relative to
@@ -366,15 +499,18 @@ class Contract:
         """File (posix, scan-root-stripped) -> declared module (longest prefix)."""
         best = None
         for m in self.modules:
-            if rel != m and not rel.startswith(m + "/"):
-                continue
-            if best is None or len(m) > len(best):
+            if (rel == m or rel.startswith(m + "/")) and (
+                best is None or len(m) > len(best)
+            ):
                 best = m
         return best
 
     def _direct_children(self, m):
-        return sorted(c for c in self.modules
-                      if c.startswith(m + "/") and "/" not in c[len(m) + 1:])
+        return sorted(
+            c
+            for c in self.modules
+            if c.startswith(m + "/") and "/" not in c[len(m) + 1 :]
+        )
 
     def _container_modules(self):
         return sorted(m for m in self.modules if self._direct_children(m))
@@ -400,8 +536,10 @@ class Contract:
         """Dependency levels within a group (leaf = 0; a cycle caps at the
         group size, deterministically). Returns {member: level}."""
         group = set(group)
-        deps = {m: {b for (a, b) in self.edges if a == m and b in group and b != m}
-                for m in group}
+        deps = {
+            m: {b for (a, b) in self.edges if a == m and b in group and b != m}
+            for m in group
+        }
         level = {m: 0 for m in group}
         for _ in range(len(group) + 1):
             changed = False
@@ -419,11 +557,13 @@ class Contract:
         """The dependency fall of a group, top-down: consumers above, used
         modules below. [(comment, [(member, pull weight)])]."""
         level = self._fall_levels(members)
-        by_level = {}
+        by_level: dict[int, list[str]] = {}
         for m in sorted(members):
             by_level.setdefault(level[m], []).append(m)
-        return [(None, [(m, self._pull_weight(m)) for m in by_level[lvl]])
-                for lvl in sorted(by_level, reverse=True)]
+        return [
+            (None, [(m, self._pull_weight(m)) for m in by_level[lvl]])
+            for lvl in sorted(by_level, reverse=True)
+        ]
 
     def _block_text(self, rows):
         """One block-beta diagram: rows top-down; a block spans EXACTLY its
@@ -448,93 +588,76 @@ class Contract:
         into its direct children - and so on, level by level, until the
         final module level. A leaf module gets no diagram: this tool stops
         exactly where class diagrams would make more sense."""
-        sections = []
+        sections: list[tuple[str, str]] = []
         # --- the top: the layer stack (each block = one layer)
-        rows = []
+        rows: list[tuple[str | None, list[tuple[str, int]]]] = []
         for lay in reversed(self.stack):
             if any(self.layer_of.get(m) == lay for m in self.modules):
                 rows.append((None, [(lay, self._layer_pull(lay))]))
-        unlayered = sorted(m for m in self.modules if m not in self.layer_of
-                           and self._root_module(m))
+        unlayered = sorted(
+            m for m in self.modules if m not in self.layer_of and self._root_module(m)
+        )
         if unlayered:
             rows.append(("unlayered", [(m, self._pull_weight(m)) for m in unlayered]))
         if rows:
             sections.append(("the layers", self._block_text(rows)))
         # --- each layer resolves into its (top-level) modules
         for lay in reversed(self.stack):
-            members = sorted(m for m in self.modules if self.layer_of.get(m) == lay
-                             and self._root_module(m))
+            members = sorted(
+                m
+                for m in self.modules
+                if self.layer_of.get(m) == lay and self._root_module(m)
+            )
             if members:
-                sections.append((f"layer {lay} - the modules",
-                                 self._block_text(self._fall_rows(members))))
-        if any(m not in self.layer_of for m in self.modules):
-            unlayered_all = sorted(m for m in self.modules if m not in self.layer_of
-                                   and self._root_module(m))
-            if unlayered_all:
-                sections.append(("unlayered - the modules",
-                                 self._block_text(self._fall_rows(unlayered_all))))
+                sections.append(
+                    (
+                        f"layer {lay} - the modules",
+                        self._block_text(self._fall_rows(members)),
+                    )
+                )
+        if unlayered:
+            sections.append(
+                (
+                    "unlayered - the modules",
+                    self._block_text(self._fall_rows(unlayered)),
+                )
+            )
         # --- then each container module resolves into its children, and so on
         for m in self._container_modules():
-            sections.append((f"{m} - the nested modules",
-                             self._block_text(self._fall_rows(self._direct_children(m)))))
+            sections.append(
+                (
+                    f"{m} - the nested modules",
+                    self._block_text(self._fall_rows(self._direct_children(m))),
+                )
+            )
         return sections
 
     def marked_diagram(self):
         """The whole marked section: every generated diagram of the drill-down."""
-        return "\n\n".join(f"### {heading}\n\n```mermaid\n{text}\n```"
-                           for heading, text in self.diagram_sections())
-        rows = []
-        for lay in reversed(self.stack):
-            members = sorted(m for m in self.modules if self.layer_of.get(m) == lay)
-            if members:
-                rows.append((lay, members))
-        unlayered = sorted(m for m in self.modules if m not in self.layer_of)
-        if unlayered:
-            rows.append((None, unlayered))
-        if not rows:
-            return "block-beta"
-        below = {m: 0 for m in self.modules}
-        for a, b in self.edges:
-            la, lb = self.layer_of.get(a), self.layer_of.get(b)
-            if la and lb and self.rank[lb] < self.rank[la]:
-                below[a] += 1
-        weight = {m: 1 + below[m] for m in self.modules}
-        width = max(sum(weight[m] for m in members) for _, members in rows)
-
-        def spans(members):
-            """Proportional split of the row's own weight sum; the slack
-            (width - total) becomes `space`."""
-            total = sum(weight[m] for m in members)
-            exact = [width * weight[m] / total for m in members]
-            base = [int(x) for x in exact]
-            order = sorted(range(len(members)),
-                           key=lambda i: (-(exact[i] - base[i]), members[i]))
-            for i in order[:width - sum(base)]:
-                base[i] += 1
-            return base
-
-        out = ["block-beta", f"    columns {width}"]
-        for lay, members in rows:
-            out.append(f"    %% layer: {lay if lay else 'unlayered'}")
-            sp = spans(members)
-            for m, s in zip(members, sp):
-                out.append(f'    {_safe_id(m)}["{m}"]' + (f":{s}" if s > 1 else ""))
-            slack = width - sum(sp)
-            if slack:
-                out.append("    space" if slack == 1 else f"    space:{slack}")
-        return "\n".join(out)
+        return "\n\n".join(
+            f"### {heading}\n\n```mermaid\n{text}\n```"
+            for heading, text in self.diagram_sections()
+        )
 
 
 def load_contract_text(repo, doc_arg):
     if doc_arg:
         p = doc_arg if os.path.isabs(doc_arg) else os.path.join(repo, doc_arg)
     else:
-        p = next((os.path.join(repo, c) for c in DOC_CANDIDATES if os.path.isfile(
-            os.path.join(repo, c))), None)
+        p = next(
+            (
+                os.path.join(repo, c)
+                for c in DOC_CANDIDATES
+                if os.path.isfile(os.path.join(repo, c))
+            ),
+            None,
+        )
         if p is None:
-            raise ContractError("no contract document found (looked for "
-                                + ", ".join(DOC_CANDIDATES)
-                                + "; run check_arch.py --derive to draft one)")
+            raise ContractError(
+                "no contract document found (looked for "
+                + ", ".join(DOC_CANDIDATES)
+                + "; run check_arch.py --derive to draft one)"
+            )
     if not os.path.isfile(p):
         raise ContractError(f"contract document not found: {p}")
     # newline="": the document's own line endings survive the round trip -
@@ -543,52 +666,110 @@ def load_contract_text(repo, doc_arg):
         return p, fh.read()
 
 
-def scan_files(contract, repo):
-    files = {}
-    for root in contract.roots:
+def _diagram_span(text):
+    """(begin, end) offsets of the marked diagram section, or None when the
+    document carries no markers. A half-present or reversed pair is a
+    contract error: the drift gate would skip it in silence, and a rewrite
+    would duplicate the text between the markers."""
+    a = text.find(DIAGRAM_BEGIN)
+    b = text.find(DIAGRAM_END)
+    if a < 0 and b < 0:
+        return None
+    if a < 0 or b < a:
+        raise ContractError(
+            f"diagram markers malformed: {DIAGRAM_BEGIN} must precede {DIAGRAM_END}"
+        )
+    return a, b
+
+
+def _excluded(rel_dir, patterns):
+    """True when a directory is excluded. A pattern without '/' matches the
+    directory NAME wherever it sits (fnmatch globs, case-sensitive); a
+    pattern with '/' matches the repo-relative directory PATH. Never a
+    substring: neither the checkout location nor an unrelated name such as
+    `rebuild_queue` may hide sources from the gate."""
+    name = rel_dir.rsplit("/", 1)[-1]
+    for pattern in patterns:
+        if "/" in pattern:
+            if fnmatch.fnmatchcase(rel_dir, pattern.strip("/")):
+                return True
+        elif fnmatch.fnmatchcase(name, pattern):
+            return True
+    return False
+
+
+def _walk_sources(repo, roots, extensions, excludes):
+    """-> ({absolute path: repo-relative posix path}, [pruned repo-relative
+    directories]): every source below the roots, excluded directories
+    pruned whole."""
+    files: dict[str, str] = {}
+    pruned: list[str] = []
+    for root in roots:
         base = os.path.normpath(os.path.join(repo, root))
-        if not os.path.isdir(base):
-            continue
         for dirpath, dirnames, filenames in os.walk(base):
-            dirnames[:] = sorted(
-                d for d in dirnames
-                if not any(x in os.path.join(dirpath, d) for x in contract.exclude_dirs))
+            rel_dir = os.path.relpath(dirpath, repo).replace(os.sep, "/")
+            keep = []
+            for d in sorted(dirnames):
+                rel = d if rel_dir == "." else f"{rel_dir}/{d}"
+                if _excluded(rel, excludes):
+                    pruned.append(rel)
+                else:
+                    keep.append(d)
+            dirnames[:] = keep
             for name in sorted(filenames):
-                if os.path.splitext(name)[1] in contract.extensions:
+                if os.path.splitext(name)[1] in extensions:
                     p = os.path.normpath(os.path.join(dirpath, name))
                     files[p] = os.path.relpath(p, repo).replace(os.sep, "/")
+    return files, pruned
+
+
+def scan_files(contract, repo):
+    """The contract's sources: {absolute path: repo-relative posix path}. A
+    declared root that does not exist is a contract error - a typo would
+    otherwise drop its sources from the gate in silence."""
+    missing = [r for r in contract.roots if not os.path.isdir(os.path.join(repo, r))]
+    if missing:
+        raise ContractError(
+            f"{contract.path}: scan root(s) {missing} do not exist under {repo}"
+        )
+    files, _ = _walk_sources(
+        repo, contract.roots, contract.extensions, contract.exclude_dirs
+    )
     return files
 
 
 def _prefix_bases(contract, repo):
-    """Rooted-include bases derived from the scan roots: a first segment that
-    is a real directory under a scan root maps to that root
-    (`proj/types.hpp` with src/proj/ -> src/)."""
-    if not hasattr(contract, "_pbases"):
-        pbases = []
+    """The rooted-include bases: {first path segment: [the scan roots holding
+    a directory of that name]} - `proj/types.hpp` with src/proj/ resolves
+    against src/. Roots keep their declaration order, so two roots sharing
+    a directory name resolve identically on every run."""
+    bases = contract.prefix_cache.get(repo)
+    if bases is None:
+        bases = {}
         for root in contract.roots:
             base = os.path.join(repo, root)
             if not os.path.isdir(base):
                 continue
             for name in sorted(os.listdir(base)):
                 if os.path.isdir(os.path.join(base, name)):
-                    pbases.append((name + "/", root))
-        contract._pbases = sorted(set(pbases), key=lambda x: -len(x[0]))
-    return contract._pbases
+                    bases.setdefault(name, []).append(root)
+        contract.prefix_cache[repo] = bases
+    return bases
 
 
 def resolve(contract, repo, inc, kind, from_file, files):
-    for prefix, base in _prefix_bases(contract, repo):
-        if inc.startswith(prefix):
+    """An include -> the scanned file it names, or None. The rooted bases
+    come first (every root holding the first segment, in declaration
+    order); a quoted include then walks the contract's quote chain - also
+    when a rooted candidate does not exist."""
+    if "/" in inc:
+        for base in _prefix_bases(contract, repo).get(inc.split("/", 1)[0], ()):
             t = os.path.normpath(os.path.join(repo, base, inc))
-            return t if t in files else None
+            if t in files:
+                return t
     if kind != '"':
         return None
-    chain = contract.quote_chain()
-    if not chain:
-        return None
-    steps = ["root", "includer"] if chain == "root-then-includer" else chain.split("-")
-    for step in steps:
+    for step in QUOTE_STEPS[contract.quote_chain()]:
         if step == "includer":
             t = os.path.normpath(os.path.join(os.path.dirname(from_file), inc))
         else:
@@ -598,36 +779,65 @@ def resolve(contract, repo, inc, kind, from_file, files):
     return None
 
 
-def build_graph(contract, repo, files):
-    adj = {p: set() for p in files}
-    file_mod = {}
+def classify(contract, files):
+    """{file: declared module or None}: the longest declared module prefix
+    of the path without its scan-root segment, else with it (roots may be
+    technical containers like src/, or architectural units like app/). One
+    classifier serves both graph modes."""
+    file_mod: dict[str, str | None] = {}
     for p, rel in files.items():
         stripped = rel
         for root in contract.roots:
-            if stripped.startswith(root + "/"):
-                stripped = stripped[len(root) + 1:]
+            if root != "." and rel.startswith(root + "/"):
+                stripped = rel[len(root) + 1 :]
                 break
-        # a module prefix matches with or without the scan-root segment
-        # (roots may be technical containers like src/, or architectural
-        # units like app/, engine/)
         file_mod[p] = contract.module_of(stripped) or contract.module_of(rel)
-    mod_edges = {}
-    ext_counts = {}
-    forbidden_hits = []
-    unresolved = []
+    return file_mod
+
+
+def build_graph(contract, repo, files, observed=None):
+    """The direct include graph -> (adj, file_mod, mod_edges, ext_counts,
+    forbidden_hits, unresolved). `observed` (scan-deps mode) maps a file to
+    the project files the compiler saw with it: the fallback for an include
+    the resolver cannot bind - one candidate binds, several refuse."""
+    adj: dict[str, set[str]] = {p: set() for p in files}
+    file_mod = classify(contract, files)
+    mod_edges: dict[tuple[str, str], int] = {}
+    ext_counts: dict[str, int] = {}
+    forbidden_hits: list[str] = []
+    unresolved: list[str] = []
     for p, rel in files.items():
         with open(p, encoding="utf-8", errors="replace") as fh:
             text = fh.read()
         for m in INCLUDE_RE.finditer(text):
             kind, inc = m.group(1), m.group(2)
             if any(inc.startswith(x) for x in contract.forbidden):
-                forbidden_hits.append(f'{rel}: must not include "{inc}" (forbidden dependency)')
+                forbidden_hits.append(
+                    f'{rel}: must not include "{inc}" (forbidden dependency)'
+                )
                 continue
-            if any(inc.split("/")[0] == x or inc.startswith(x + "/") for x in contract.external):
+            if any(
+                inc.split("/")[0] == x or inc.startswith(x + "/")
+                for x in contract.external
+            ):
                 key = inc.split("/")[0]
                 ext_counts[key] = ext_counts.get(key, 0) + 1
                 continue
             t = resolve(contract, repo, inc, kind, p, files)
+            if t is None and observed is not None:
+                suffix = "/" + inc.replace("\\", "/")
+                candidates = sorted(
+                    target
+                    for target in observed.get(p, ())
+                    if target.replace("\\", "/").endswith(suffix)
+                )
+                if len(candidates) > 1:
+                    raise ContractError(
+                        f'{rel}: ambiguous project include "{inc}" '
+                        f"(observed candidates: {[files[x] for x in candidates]})"
+                    )
+                if candidates:
+                    t = candidates[0]
             if t is None:
                 if kind == '"':
                     unresolved.append(f'{rel}: "{inc}"')
@@ -641,29 +851,59 @@ def build_graph(contract, repo, files):
     return adj, file_mod, mod_edges, ext_counts, forbidden_hits, unresolved
 
 
+def _make_rules(text):
+    """Make output -> logical rules: backslash-continued lines joined."""
+    text = text.replace("\\\r\n", " ").replace("\\\n", " ")
+    return text[:-1].splitlines() if text.endswith("\\") else text.splitlines()
+
+
+MAKE_CUT_RE = re.compile(r":(?:[ \t]|$)")
+# a backslash run before an escaped blank (the blank already marked as NUL)
+MAKE_BLANK_RE = re.compile(r"(\\*)\x00")
+
+
+def _make_unescape(word):
+    """Undo the emitter's escapes in a word whose escaped blanks the split
+    marked as NUL: 2k+1 backslashes before a blank are k backslashes and a
+    literal blank, a backslash before '#' escapes it, '$$' is '$'. Any
+    other backslash is literal (Windows separators)."""
+    if "\x00" in word:
+        if "\\\x00" in word:  # a longer backslash run before a blank
+            word = MAKE_BLANK_RE.sub(
+                lambda m: "\\" * ((len(m.group(1)) + 1) // 2) + " ", word
+            )
+        else:
+            word = word.replace("\x00", " ")
+    if "\\#" in word:
+        word = word.replace("\\#", "#")
+    if "$$" in word:
+        word = word.replace("$$", "$")
+    return word
+
+
 def parse_make_deps(text):
-    """clang-scan-deps make-style output -> {tu: set(include paths)}.
-    (A proven make-style parser: $-continued dependency blocks, the TU
-    first, headers below.)"""
-    deps = {}
-    current = None
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line:
+    """clang-scan-deps make output -> {tu: set(dependency paths)}, '/'-separated.
+
+    One rule per translation unit, `target: tu dep dep ...`: it may span
+    backslash-continued lines and carry several paths per line (short paths
+    share a line), the target ends at the first ':' followed by a blank (a
+    drive letter's ':' is not), the first prerequisite is the TU, and
+    escaped blanks survive (`C:\\Program\\ Files\\...`). Rules naming the same
+    TU merge."""
+    deps: dict[str, set[str]] = {}
+    for rule in _make_rules(text):
+        cut = MAKE_CUT_RE.search(rule)
+        if cut is None:
             continue
-        if line.endswith("\\"):
-            line = line[:-1].strip()
-        if line.endswith(":"):
-            current = None
-            continue
-        if not (line.startswith("/") or (len(line) > 2 and line[1] == ":")):
-            continue
-        p = line.replace("\\", "/")
-        if current is None and p.lower().endswith((".cpp", ".c", ".cc", ".cxx")):
-            current = p
-            deps[current] = set()
-        elif current is not None and p != current:
-            deps[current].add(p)
+        paths = [
+            (
+                _make_unescape(w) if ("\x00" in w or "\\#" in w or "$$" in w) else w
+            ).replace("\\", "/")
+            for w in rule[cut.end() :].replace("\\ ", "\x00").split()
+        ]
+        if paths:
+            tu = paths[0]
+            deps.setdefault(tu, set()).update(p for p in paths[1:] if p != tu)
     return deps
 
 
@@ -673,12 +913,13 @@ def find_clang_scan_deps(explicit):
     edition change needs no repo edit."""
     if explicit:
         return explicit
-    p = which("clang-scan-deps")
+    p = shutil.which("clang-scan-deps")
     if p:
         return p
     try:
         root = subprocess.check_output(
-            [VSWHERE, "-latest", "-property", "installationPath"], text=True).strip()
+            [VSWHERE, "-latest", "-property", "installationPath"], text=True
+        ).strip()
         cand = os.path.join(root, r"VC\Tools\Llvm\x64\bin\clang-scan-deps.exe")
         if os.path.isfile(cand):
             return cand
@@ -687,113 +928,233 @@ def find_clang_scan_deps(explicit):
     return "clang-scan-deps"
 
 
-TU_EXTS = (".cpp", ".c", ".cc", ".cxx")
-MODULE_SCAN_FLAGS = ("-fmodules-ts", "-MD")
+def _path_key(path):
+    """A comparison key for a filesystem path: normalized, and case-folded
+    where the filesystem is case-insensitive (Windows: `c:\\x` is `C:/X`)."""
+    return os.path.normcase(os.path.normpath(path))
+
+
+def _repo_relative(path, repo):
+    """The repo-relative posix form of `path`, or None outside the repo."""
+    try:
+        rel = os.path.relpath(os.path.normpath(path), repo).replace(os.sep, "/")
+    except ValueError:  # another drive (Windows)
+        return None
+    if rel == ".." or rel.startswith("../") or os.path.isabs(rel):
+        return None
+    return rel
+
+
+def _keep_scan_arg(arg):
+    """False for CMake's C++ module scanning arguments (see MODULE_SCAN_FLAGS)."""
+    return not (
+        arg.startswith(("@CMakeFiles", "-fmodule-mapper", "-fdeps-format"))
+        or arg in MODULE_SCAN_FLAGS
+    )
+
+
+def _scrub_entry(entry):
+    """A compile-database entry without module scanning arguments, in its own
+    form: `arguments` stays a list, `command` stays a string."""
+    e = dict(entry)
+    if isinstance(e.get("arguments"), list):
+        e["arguments"] = [
+            a for a in e["arguments"] if not isinstance(a, str) or _keep_scan_arg(a)
+        ]
+    elif isinstance(e.get("command"), str):
+        e["command"] = " ".join(a for a in e["command"].split() if _keep_scan_arg(a))
+    return e
+
+
+class _Observed:
+    """{file: the project files the compiler saw in a TU with it}, built on
+    first use per file - the include fallback rarely needs it, and building
+    it eagerly costs O(headers^2) per translation unit."""
+
+    def __init__(self, tu_sets, containing):
+        self._tu_sets = tu_sets
+        self._containing = containing
+        self._cache: dict[str, set[str]] = {}
+
+    def get(self, path, default=()):
+        if path not in self._containing:
+            return default
+        seen = self._cache.get(path)
+        if seen is None:
+            seen = set()
+            for index in self._containing[path]:
+                seen |= self._tu_sets[index]
+            seen.discard(path)
+            self._cache[path] = seen
+        return seen
 
 
 def build_graph_scan_deps(contract, repo, files):
-    """The EXACT graph: clang-scan-deps over the compile database.
+    """Complete compiler dependencies plus direct project include topology.
 
     -> (graph-6-tuple, error_code, error_lines): on success the tuple and
-    (0, []); a refused database (missing, vanished TUs, tool failure) is
-    (None, EXIT_USAGE, [...]); an incomplete scan (a compiled TU the scan
+    (0, []); a refused database (missing, unreadable, vanished TUs, tool
+    failure) is (None, EXIT_USAGE, [...]); a missing tool is
+    (None, EXIT_SKIP, [...]); an incomplete scan (a compiled TU the scan
     missed) never passes silently: (None, EXIT_VIOLATIONS, [...])."""
     db = os.path.normpath(os.path.join(repo, contract.db))
     if not os.path.isfile(db):
         return None, EXIT_USAGE, [f"compile database not found: {db} (configure first)"]
-    with open(db, encoding="utf-8") as fh:
-        entries = json.load(fh)
-    tus = {}
-    for e in entries:
-        f = e.get("file", "")
-        if not f.lower().endswith(TU_EXTS):
-            continue  # e.g. RC entries are no clang input
-        norm = (os.path.normpath(f) if os.path.isabs(f)
-                else os.path.normpath(os.path.join(e.get("directory", ""), f)))
-        tus[norm] = True
-        if not os.path.isfile(norm):
-            return (None, EXIT_USAGE,
-                    [f"stale compile database: {norm} vanished (reconfigure first)"])
-    csd = find_clang_scan_deps(contract.clang_scan_deps)
-    # a missing tool is caught at the subprocess below: exit 77, never a
-    # traceback (A2) - a missing dependency is a SKIP, not a failure
-    # CMake's C++ module scanning flags reference .modmap files that only
-    # exist after a build; strip them so the scan works on a fresh tree.
+    try:
+        with open(db, encoding="utf-8") as fh:
+            entries = json.load(fh)
+    except (OSError, ValueError) as error:  # ValueError: bad JSON or bad UTF-8
+        return None, EXIT_USAGE, [f"compile database unreadable: {db} ({error})"]
+    if not isinstance(entries, list) or not all(
+        isinstance(e, dict)
+        and isinstance(e.get("file"), str)
+        and isinstance(e.get("directory", ""), str)
+        for e in entries
+    ):
+        return (
+            None,
+            EXIT_USAGE,
+            [f"compile database malformed: {db} (a list of entries with 'file')"],
+        )
+    tus: dict[str, str] = {}  # path key -> the TU as the database names it
     scrubbed = []
     for e in entries:
-        e = dict(e)
-        parts = [p for p in e.get("command", "").split()
-                 if not p.startswith("@CMakeFiles")
-                 and p not in MODULE_SCAN_FLAGS
-                 and not p.startswith("-fmodule-mapper")
-                 and not p.startswith("-fdeps-format")]
-        e["command"] = " ".join(parts)
-        scrubbed.append(e)
-    tmp = os.path.join(os.environ.get("TEMP", os.path.dirname(db)),
-                       "check_arch_scan_deps_db.json")
-    with open(tmp, "w") as fh:
-        json.dump(scrubbed, fh)
+        f = e["file"]
+        if not f.lower().endswith(TU_EXTS):
+            continue  # resource/assembler commands are no C/C++ scanner input
+        norm = os.path.normpath(
+            f if os.path.isabs(f) else os.path.join(e.get("directory", ""), f)
+        )
+        if not os.path.isfile(norm):
+            return (
+                None,
+                EXIT_USAGE,
+                [f"stale compile database: {norm} vanished (reconfigure first)"],
+            )
+        tus[_path_key(norm)] = norm
+        scrubbed.append(_scrub_entry(e))
+    csd = find_clang_scan_deps(contract.clang_scan_deps)
     try:
-        r = subprocess.run([csd, "-compilation-database=" + tmp],
-                           capture_output=True, text=True, check=False)
-    except OSError:
-        # a missing tool is a SKIP, never a traceback (A2)
-        return (None, EXIT_SKIP,
-                [(f"skip: clang-scan-deps not found ({csd}) - install the VS LLVM "
-                 "component, put it on PATH, or set clang_scan_deps:")])
-    if r.returncode != 0 and not r.stdout:
-        return (None, EXIT_USAGE,
-                [f"clang-scan-deps failed ({csd}): {r.stderr.strip()[-500:]}"])
+        with tempfile.TemporaryDirectory(prefix="check_arch_scan_deps_") as td:
+            tmp = os.path.join(td, "compile_commands.json")
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(scrubbed, fh)
+            try:
+                r = subprocess.run(
+                    [csd, "-compilation-database=" + tmp],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    check=False,
+                )
+            except OSError:
+                # a missing tool is a SKIP, never a traceback
+                return (
+                    None,
+                    EXIT_SKIP,
+                    [
+                        (
+                            f"skip: clang-scan-deps not found ({csd}) - install the VS "
+                            "LLVM component, put it on PATH, or set clang_scan_deps:"
+                        )
+                    ],
+                )
+    except OSError as error:
+        return None, EXIT_USAGE, [f"cannot stage the scanner database: {error}"]
+    if r.returncode != 0:
+        return (
+            None,
+            EXIT_USAGE,
+            [f"clang-scan-deps failed ({csd}): {r.stderr.strip()[-500:]}"],
+        )
     deps = parse_make_deps(r.stdout)
-    scanned = {os.path.normpath(tu) for tu in deps}
-    unscanned = sorted(t for t in tus if t not in scanned)
+    scanned = {_path_key(tu) for tu in deps}
+    unscanned = sorted(norm for key, norm in tus.items() if key not in scanned)
     if unscanned:
-        rel = [os.path.relpath(t, repo) for t in unscanned]
-        return (None, EXIT_VIOLATIONS,
-                [(f"incomplete scan: {len(unscanned)} of {len(tus)} translation units "
-                 "not scanned")] + ["  " + p for p in rel])
-    norm_to_file = {os.path.normpath(p): p for p in files}
+        return (
+            None,
+            EXIT_VIOLATIONS,
+            [
+                (
+                    f"incomplete scan: {len(unscanned)} of {len(tus)} translation "
+                    "units not scanned"
+                )
+            ]
+            + ["  " + (_repo_relative(t, repo) or t) for t in unscanned],
+        )
+    by_key = {_path_key(p): p for p in files}
+    file_mod = classify(contract, files)
+    tu_sets: list[frozenset[str]] = []
+    containing: dict[str, list[int]] = {}
     resolved_tus = 0
-    adj = {p: set() for p in files}
-    file_mod = {}
-    for p, rel in files.items():
-        file_mod[p] = contract.module_of(rel)
-    mod_edges = {}
-    ext_counts = {}
-    forbidden_hits = []
+    mod_edges: dict[tuple[str, str], int] = {}
+    ext_counts: dict[str, int] = {}
+    forbidden_hits: list[str] = []
     for tu, incs in deps.items():
-        tp = norm_to_file.get(os.path.normpath(tu))
+        project: set[str] = set()
+        outside: list[str] = []
+        for inc in incs:
+            ip = by_key.get(_path_key(inc))
+            if ip is None:
+                outside.append(inc)
+            else:
+                project.add(ip)
+        for ip in project:
+            containing.setdefault(ip, []).append(len(tu_sets))
+        tu_sets.append(frozenset(project))
+        tp = by_key.get(_path_key(tu))
         if tp is None:
             continue  # a TU outside the scan roots is not part of this contract
+        containing.setdefault(tp, []).append(len(tu_sets) - 1)
         resolved_tus += 1
         a = file_mod[tp]
-        for inc in sorted(incs):
-            ip = norm_to_file.get(os.path.normpath(inc))
-            if ip is None:
-                rel = os.path.relpath(inc, repo).replace(os.sep, "/") \
-                    if inc.startswith(repo) else inc.replace("\\", "/")
-                first = rel.split("/")[0]
-                if first in contract.external:
-                    ext_counts[first] = ext_counts.get(first, 0) + 1
-                elif any(rel.startswith(x) for x in contract.forbidden):
-                    forbidden_hits.append(f"{os.path.relpath(tp, repo)}: must not include "
-                                          f"{rel} (forbidden dependency)")
-                continue
+        for inc in sorted(outside):
+            rel = _repo_relative(inc, repo) or inc
+            first = rel.split("/")[0]
+            if first in contract.external:
+                ext_counts[first] = ext_counts.get(first, 0) + 1
+            elif any(rel.startswith(x) for x in contract.forbidden):
+                forbidden_hits.append(
+                    f"{files[tp]}: must not include {rel} (forbidden dependency)"
+                )
+        for ip in sorted(project):
             if ip == tp:
                 continue
-            adj[tp].add(ip)
             b = file_mod[ip]
             if a is not None and b is not None and a != b:
                 mod_edges[(a, b)] = mod_edges.get((a, b), 0) + 1
     # a degraded graph is never green: the database knows TUs, none of them
-    # resolved into the scanned roots (A1 - e.g. a relative repo root or a
+    # resolved into the scanned roots (e.g. a relative repo root or a
     # path-form mismatch between the database and the scan)
     if tus and resolved_tus == 0:
-        return (None, EXIT_USAGE,
-                [(f"blind scan-deps graph: the database lists {len(tus)} translation "
-                 "units but none resolve into the scanned roots - a degraded run is "
-                 "never green (check the database's paths)")])
-    return ((adj, file_mod, mod_edges, ext_counts, forbidden_hits, []), 0, [])
+        return (
+            None,
+            EXIT_USAGE,
+            [
+                (
+                    f"blind scan-deps graph: the database lists {len(tus)} translation "
+                    "units but none resolve into the scanned roots - a degraded run is "
+                    "never green (check the database's paths)"
+                )
+            ],
+        )
+    # A flattened TU list cannot reveal header edges or header-only cycles.
+    try:
+        direct = build_graph(contract, repo, files, _Observed(tu_sets, containing))
+    except ContractError as error:
+        return None, EXIT_USAGE, [f"direct include graph refused: {error}"]
+    direct_adj, _, direct_edges, direct_ext, direct_forbidden, unresolved = direct
+    for edge, count in direct_edges.items():
+        mod_edges[edge] = max(mod_edges.get(edge, 0), count)
+    for key, count in direct_ext.items():
+        ext_counts[key] = max(ext_counts.get(key, 0), count)
+    forbidden_hits += direct_forbidden
+    return (
+        (direct_adj, file_mod, mod_edges, ext_counts, forbidden_hits, unresolved),
+        0,
+        [],
+    )
 
 
 def check_nesting(contract):
@@ -803,12 +1164,14 @@ def check_nesting(contract):
     out = []
     for a, b in sorted(contract.edges):
         if b.startswith(a + "/"):
-            out.append(f"NESTING LAW: {a} must not depend on its child module {b} - "
-                       "the deeper module uses its ancestors, never the reverse")
+            out.append(
+                f"NESTING LAW: {a} must not depend on its child module {b} - "
+                "the deeper module uses its ancestors, never the reverse"
+            )
     return out
 
 
-def compute_smells(contract, repo, files, file_mod, mod_edges, file_lines):
+def compute_smells(contract, files, file_mod, mod_edges, file_lines):
     """The refactoring-catalog proxies (refactoring.guru), deterministic over
     the measured module graph. -> [{"kind", "subject", "note"}]: queue items
     for the review cadence, NEVER findings - the thresholds are judgment,
@@ -822,14 +1185,14 @@ def compute_smells(contract, repo, files, file_mod, mod_edges, file_lines):
     volume rule is NOT here - it is a standing rule of its own
     (check_header_size), valid in both kinds."""
     lim = contract.smell_limits
-    targets = {}
-    sources = {}
+    targets: dict[str, set[str]] = {}
+    sources: dict[str, set[str]] = {}
     for a, b in mod_edges:
         targets.setdefault(a, set()).add(b)
         sources.setdefault(b, set()).add(a)
     mods = sorted({m for m in file_mod.values() if m is not None})
-    smells = []
-    done = set()
+    smells: list[dict[str, str]] = []
+    done: set[str] = set()
     is_library = contract.kind == "library"
     # exempt = the topmost occupied layer (entry points hang there by design);
     # in library mode EVERY module is exempt from fan-in-based smells - zero
@@ -844,14 +1207,28 @@ def compute_smells(contract, repo, files, file_mod, mod_edges, file_lines):
         if not fin and not fout:
             if is_library:
                 continue
-            smells.append({"kind": "island module", "subject": m,
-                           "note": "no consumers, no dependencies "
-                                   "(Speculative Generality / Dead Code proxy)"})
+            smells.append(
+                {
+                    "kind": "island module",
+                    "subject": m,
+                    "note": "no consumers, no dependencies "
+                    "(Speculative Generality / Dead Code proxy)",
+                }
+            )
             done.add(m)
-        elif not fin and not is_library and top_layer \
-                and contract.layer_of.get(m) != top_layer:
-            smells.append({"kind": "orphan module", "subject": m,
-                           "note": "no consumer (Lazy Class / Dead Code proxy)"})
+        elif (
+            not fin
+            and not is_library
+            and top_layer
+            and contract.layer_of.get(m) != top_layer
+        ):
+            smells.append(
+                {
+                    "kind": "orphan module",
+                    "subject": m,
+                    "note": "no consumer (Lazy Class / Dead Code proxy)",
+                }
+            )
             done.add(m)
     for m in mods:
         if m in done:
@@ -862,28 +1239,45 @@ def compute_smells(contract, repo, files, file_mod, mod_edges, file_lines):
             in_w = sum(n for (a, b), n in mod_edges.items() if a == s and b == m)
             out_w = sum(n for (a, b), n in mod_edges.items() if a == m and b == t)
             if s != t and in_w >= lim["mutual"] and out_w >= lim["mutual"]:
-                smells.append({"kind": "pass-through module", "subject": m,
-                               "note": f"all of it flows {s} -> {m} -> {t} "
-                                       "(Middle Man proxy)"})
+                smells.append(
+                    {
+                        "kind": "pass-through module",
+                        "subject": m,
+                        "note": f"all of it flows {s} -> {m} -> {t} (Middle Man proxy)",
+                    }
+                )
     for a, b in sorted(mod_edges):
-        if a < b and mod_edges[(a, b)] >= lim["mutual"] \
-                and mod_edges.get((b, a), 0) >= lim["mutual"]:
-            smells.append({"kind": "mutual pair", "subject": f"{a} <-> {b}",
-                           "note": f"x{mod_edges[(a, b)]} each way "
-                                   "(Inappropriate Intimacy proxy)"})
+        if (
+            a < b
+            and mod_edges[(a, b)] >= lim["mutual"]
+            and mod_edges.get((b, a), 0) >= lim["mutual"]
+        ):
+            smells.append(
+                {
+                    "kind": "mutual pair",
+                    "subject": f"{a} <-> {b}",
+                    "note": f"x{mod_edges[(a, b)]} each way "
+                    "(Inappropriate Intimacy proxy)",
+                }
+            )
     for m in mods:
         fi, fo = len(sources.get(m, set())), len(targets.get(m, set()))
         if fi >= lim["fan"] or fo >= lim["fan"]:
-            smells.append({"kind": "hub module", "subject": m,
-                           "note": f"fan-in {fi}, fan-out {fo} "
-                                   "(Shotgun Surgery / Divergent Change proxy)"})
+            smells.append(
+                {
+                    "kind": "hub module",
+                    "subject": m,
+                    "note": f"fan-in {fi}, fan-out {fo} "
+                    "(Shotgun Surgery / Divergent Change proxy)",
+                }
+            )
     if not is_library:
         # large MODULE, application only: total volume in one module is
         # bloat; for a library it is a fact (the STL argument). The per-FILE
         # rule is a standing rule of its own (check_header_size), valid in
         # both kinds.
-        mod_files = {}
-        mod_lines = {}
+        mod_files: dict[str, int] = {}
+        mod_lines: dict[str, int] = {}
         for p in files:
             m = file_mod.get(p)
             if m is None:
@@ -891,10 +1285,15 @@ def compute_smells(contract, repo, files, file_mod, mod_edges, file_lines):
             mod_files[m] = mod_files.get(m, 0) + 1
             mod_lines[m] = mod_lines.get(m, 0) + file_lines.get(p, 0)
         for m in mods:
-            f, nl = mod_files.get(m, 0), mod_lines.get(m, 0)
-            if f >= lim["files"] or nl >= lim["lines"]:
-                smells.append({"kind": "large module", "subject": m,
-                               "note": f"{f} files, {nl} lines (Large Class proxy)"})
+            f, l = mod_files.get(m, 0), mod_lines.get(m, 0)
+            if f >= lim["files"] or l >= lim["lines"]:
+                smells.append(
+                    {
+                        "kind": "large module",
+                        "subject": m,
+                        "note": f"{f} files, {l} lines (Large Class proxy)",
+                    }
+                )
     return smells
 
 
@@ -906,8 +1305,10 @@ def check_header_size(contract, files, file_lines):
     out = []
     for p in sorted(files, key=lambda k: files[k]):
         if file_lines.get(p, 0) >= contract.smell_limits["lines"]:
-            out.append(f"HEADER SIZE: {files[p]} ({file_lines[p]} lines; "
-                       f"limit {contract.smell_limits['lines']})")
+            out.append(
+                f"HEADER SIZE: {files[p]} ({file_lines[p]} lines; "
+                f"limit {contract.smell_limits['lines']})"
+            )
     return out
 
 
@@ -922,7 +1323,8 @@ def check_edges(contract, files, file_mod, mod_edges):
         for p in sorted(files, key=lambda k: files[k]):
             if file_mod[p] is None:
                 violations.append(
-                    f"unclassified module: {files[p]} (matches no declared module)")
+                    f"unclassified module: {files[p]} (matches no declared module)"
+                )
     for (a, b), n in sorted(mod_edges.items()):
         if a is None or b is None:
             continue  # unclassified sides are flagged per policy above
@@ -931,8 +1333,10 @@ def check_edges(contract, files, file_mod, mod_edges):
         la, lb = contract.layer_of.get(a), contract.layer_of.get(b)
         if la and la == lb and contract.within_layer in ("allow", "warn"):
             if contract.within_layer == "warn":
-                warnings.append(f"{a} must not include {b} (x{n}; edge not declared, "
-                                f"within layer {la})")
+                warnings.append(
+                    f"{a} must not include {b} (x{n}; edge not declared, "
+                    f"within layer {la})"
+                )
             continue
         violations.append(f"{a} must not include {b} (x{n}; edge not declared)")
     return violations, warnings
@@ -945,8 +1349,10 @@ def check_stack(contract):
     for a, b in sorted(contract.edges):
         la, lb = contract.layer_of.get(a), contract.layer_of.get(b)
         if la and lb and contract.rank[lb] > contract.rank[la]:
-            out.append(f"{a} (layer {la}) must not depend on {b} (layer {lb}) - "
-                       "the layer stack flows one way")
+            out.append(
+                f"{a} (layer {la}) must not depend on {b} (layer {lb}) - "
+                "the layer stack flows one way"
+            )
     return out
 
 
@@ -960,8 +1366,12 @@ def check_cycles(contract, files, adj):
 
 
 def check_namespaces(contract, files, file_mod):
-    ns_re = re.compile(r"^\s*namespace\s+(" + re.escape(contract.ns_root)
-                       + r"(?:::[A-Za-z_]\w*)*)\s*\{", re.MULTILINE)
+    ns_re = re.compile(
+        r"^\s*namespace\s+("
+        + re.escape(contract.ns_root)
+        + r"(?:::[A-Za-z_]\w*)*)\s*\{",
+        re.MULTILINE,
+    )
     out = []
     for p in sorted(files, key=lambda k: files[k]):
         mod = file_mod[p]
@@ -970,8 +1380,11 @@ def check_namespaces(contract, files, file_mod):
         if mod == contract.ns_module:
             expected = contract.ns_root
         elif mod.startswith(contract.ns_module + "/"):
-            expected = contract.ns_root + "::" + mod[len(contract.ns_module) + 1:].replace(
-                "/", "::")
+            expected = (
+                contract.ns_root
+                + "::"
+                + mod[len(contract.ns_module) + 1 :].replace("/", "::")
+            )
         else:
             expected = contract.ns_root + "::" + mod.replace("/", "::")
         with open(p, encoding="utf-8", errors="replace") as fh:
@@ -985,30 +1398,36 @@ def check_namespaces(contract, files, file_mod):
 
 def check_diagram(contract, text):
     """The drift gate: the marked block section must equal the generated one."""
-    a = text.find(DIAGRAM_BEGIN)
-    b = text.find(DIAGRAM_END)
-    if a < 0 or b < 0:
+    span = _diagram_span(text)
+    if span is None:
         return []  # no marked diagram = visualization not maintained by the tool
-    shown = text[a + len(DIAGRAM_BEGIN):b].strip().replace("\r\n", "\n")
+    a, b = span
+    shown = text[a + len(DIAGRAM_BEGIN) : b].strip().replace("\r\n", "\n")
     want = contract.marked_diagram().strip()
     if shown != want:
-        return [("DIAGRAM DRIFT: the diagram section is stale "
-                "(run check_arch.py --diagram)")]
+        return [
+            (
+                "DIAGRAM DRIFT: the diagram section is stale "
+                "(run check_arch.py --diagram)"
+            )
+        ]
     return []
 
 
 def write_diagram(doc_path, contract, text):
-    a = text.find(DIAGRAM_BEGIN)
-    b = text.find(DIAGRAM_END)
-    if a < 0 or b < 0:
+    span = _diagram_span(text)
+    if span is None:
         return False
+    a, b = span
     section = contract.marked_diagram()
     # keep the document's own line-ending habit: a generated LF-only section
     # inside a CRLF working tree would leave the file mixed (the joiners too)
-    nl = "\r\n" if text.count("\r\n") > (text.count("\n") - text.count("\r\n")) else "\n"
+    nl = (
+        "\r\n" if text.count("\r\n") > (text.count("\n") - text.count("\r\n")) else "\n"
+    )
     if nl != "\n":
         section = section.replace("\n", "\r\n")
-    text = (text[:a + len(DIAGRAM_BEGIN)] + nl + section + nl + text[b:])
+    text = text[: a + len(DIAGRAM_BEGIN)] + nl + section + nl + text[b:]
     with open(doc_path, "w", encoding="utf-8", newline="") as fh:
         fh.write(text)
     return True
@@ -1060,29 +1479,23 @@ def scc(nodes, adj):
 
 # ---------------------------------------------------------------- derive ---
 def derive_scan(repo, roots, extensions, excludes):
-    files = {}
-    for root in roots:
-        base = os.path.normpath(os.path.join(repo, root))
-        if not os.path.isdir(base):
-            continue
-        for dirpath, dirnames, filenames in os.walk(base):
-            dirnames[:] = sorted(
-                d for d in dirnames
-                if d not in VENDOR_DIRS
-                and not any(x in os.path.join(dirpath, d) for x in excludes))
-            for name in sorted(filenames):
-                if os.path.splitext(name)[1] in extensions:
-                    p = os.path.normpath(os.path.join(dirpath, name))
-                    files[p] = os.path.relpath(p, repo).replace(os.sep, "/")
-    return files
+    """-> (files, quarantined): the derive scan prunes the excludes and the
+    vendored / non-source names (VENDOR_DIRS); `quarantined` lists the
+    vendored names it met, so the draft's `exclude:` prunes them as well."""
+    files, pruned = _walk_sources(
+        repo, roots, extensions, [*excludes, *sorted(VENDOR_DIRS)]
+    )
+    quarantined = sorted({rel.rsplit("/", 1)[-1] for rel in pruned} & VENDOR_DIRS)
+    return files, quarantined
 
 
 def topo_leaf_first(units, mod_edges):
     """(order, cyclic leftover): dependencies first (Kahn, alpha tie-break)."""
-    deps = {u: set() for u in units}
+    deps: dict[str, set[str]] = {u: set() for u in units}
     for a, b in mod_edges:
         deps.setdefault(a, set()).add(b)
-    order, remaining = [], set(units)
+    order: list[str] = []
+    remaining = set(units)
     while remaining:
         ready = sorted(u for u in remaining if not (deps.get(u, set()) & remaining))
         if not ready:
@@ -1095,27 +1508,43 @@ def topo_leaf_first(units, mod_edges):
 
 def derive(repo, roots, extensions, excludes):
     """ANALYZE: the modules as they are + the layers as they measure + the
-    dependencies as they are -> a draft ARCHITECTURE.md."""
-    files = derive_scan(repo, roots, extensions, excludes)
-    warnings = []
+    dependencies as they are -> a draft ARCHITECTURE.md. The draft resolves
+    includes with the check's own resolver and excludes what the scan
+    pruned, so the unedited draft passes the check on the same tree
+    (cycles aside - they are reported for fixing first)."""
+    roots = [_norm_root(r) for r in roots]
+    files, quarantined = derive_scan(repo, roots, extensions, excludes)
+    warnings: list[str] = []
     if not files:
         return [], [f"no sources under {roots} - nothing to derive"]
-    key_of = {}
-    rootless = 0
+    exclude = list(dict.fromkeys([*excludes, *quarantined]))
+    key_of: dict[str, str] = {}
+    outside = 0
     for p, rel in files.items():
-        root = next((r for r in roots if rel.startswith(r + "/")), None)
+        root = next((r for r in roots if r == "." or rel.startswith(r + "/")), None)
         if root is None:
-            rootless += 1
+            outside += 1
             continue
-        sub = os.path.dirname(rel[len(root) + 1:]).replace("\\", "/")
-        key_of[p] = sub if sub != "" else root.split("/")[-1]
-    if rootless:
-        warnings.append(f"{rootless} file(s) sit outside the scan roots - not derived")
-    units = sorted({k for k in key_of.values() if k})
+        sub = posixpath.dirname(rel if root == "." else rel[len(root) + 1 :])
+        if sub:
+            key_of[p] = sub
+        elif root != ".":
+            key_of[p] = root  # a root-level file: the root itself is the module
+        else:
+            outside += 1  # a file directly in the repository root
+    if outside:
+        warnings.append(
+            f"{outside} file(s) sit outside every module directory - not derived"
+        )
+    units = sorted(set(key_of.values()))
+    # first segments that hold scanned sources are project directories - an
+    # include into one is never external, even when it does not resolve
+    project_dirs = {k.split("/")[0] for k in units}
+    resolver = Contract("```arch\nscan: " + ", ".join(roots) + "\n```\n", "derive")
     mod_edges = set()
     ext = set()
     unresolved = 0
-    unresolved_samples = []
+    unresolved_samples: list[str] = []
     for p, rel in files.items():
         a = key_of.get(p)
         if a is None:
@@ -1124,19 +1553,15 @@ def derive(repo, roots, extensions, excludes):
             text = fh.read()
         for m in INCLUDE_RE.finditer(text):
             kind, inc = m.group(1), m.group(2)
-            t = None
-            if kind == '"':
-                cand = os.path.normpath(os.path.join(os.path.dirname(p), inc))
-                t = cand if cand in files else None
-            if t is None:
-                for root in roots:
-                    cand = os.path.normpath(os.path.join(repo, root, inc))
-                    if cand in files:
-                        t = cand
-                        break
+            t = resolve(resolver, repo, inc, kind, p, files)
             if t is None:
                 first = inc.split("/")[0]
-                if "/" in inc and not inc.startswith((".", "..")) and first not in roots:
+                if (
+                    "/" in inc
+                    and not inc.startswith(".")
+                    and first not in roots
+                    and first not in project_dirs
+                ):
                     ext.add(first)
                 elif kind == '"':
                     unresolved += 1
@@ -1144,32 +1569,53 @@ def derive(repo, roots, extensions, excludes):
                         unresolved_samples.append(f'{rel}: "{inc}"')
                 continue
             b = key_of.get(t)
-            if a is not None and b is not None and a != b:
+            if b is not None and a != b:
                 mod_edges.add((a, b))
     # the layer proposal: one layer per first path segment, stacked by the
     # measured segment-level dependency order (bottom-up)
     segs = sorted({u.split("/")[0] for u in units})
-    seg_edges = sorted({(a.split("/")[0], b.split("/")[0])
-                        for a, b in mod_edges if a.split("/")[0] != b.split("/")[0]})
+    seg_edges = sorted(
+        {
+            (a.split("/")[0], b.split("/")[0])
+            for a, b in mod_edges
+            if a.split("/")[0] != b.split("/")[0]
+        }
+    )
     stack, cyclic_layers = topo_leaf_first(segs, seg_edges)
     full_stack = stack + cyclic_layers
     if cyclic_layers:
-        warnings.append("layer cycle among " + ", ".join(cyclic_layers)
-                        + " - fix the cycle first; the stack stops at the cycle")
+        warnings.append(
+            "layer cycle among "
+            + ", ".join(cyclic_layers)
+            + " - fix the cycle first; the stack stops at the cycle"
+        )
     order, cyclic = topo_leaf_first(units, sorted(mod_edges))
     if cyclic:
-        warnings.append("cycle among " + ", ".join(cyclic)
-                        + " - fix the cycle first; the edges are still emitted, "
-                          "the order stops at the cycle")
+        warnings.append(
+            "cycle among "
+            + ", ".join(cyclic)
+            + " - fix the cycle first; the edges are still emitted, "
+            "the order stops at the cycle"
+        )
 
     arch = []
-    knobs = [("scan", ", ".join(roots)), ("extensions", ", ".join(extensions)),
-             ("exclude", ", ".join(DEFAULT_EXCLUDES)), ("unclassified", "error")]
+    knobs = [
+        ("scan", ", ".join(roots)),
+        ("extensions", ", ".join(extensions)),
+        ("exclude", ", ".join(exclude)),
+        ("unclassified", "error"),
+    ]
     if ext:
         knobs.append(("external", ", ".join(sorted(ext))))
-    knobs += [("forbidden", ""), ("quotes_relative", "true"), ("repo_fallback", "false"),
-              ("cycles", "true"), ("namespace_root", ""), ("namespace_module", ""),
-              ("namespace_require", "")]
+    knobs += [
+        ("forbidden", ""),
+        ("quotes_relative", "true"),
+        ("repo_fallback", "false"),
+        ("cycles", "true"),
+        ("namespace_root", ""),
+        ("namespace_module", ""),
+        ("namespace_require", ""),
+    ]
     for k, v in knobs:
         arch.append(f"{k}: {v}".rstrip())
     arch.append("")
@@ -1182,16 +1628,22 @@ def derive(repo, roots, extensions, excludes):
     for a, b in sorted(mod_edges):
         arch.append(f"allow {a} -> {b}")
 
-    out = ["# Architecture", "",
-           "<!-- GENERATED by check_arch.py --derive - the MEASURED architecture.",
-           "     REVIEW AND TIGHTEN: every `allow` edge below is what the code does",
-           "     TODAY; delete the edges that should not exist and reshape the",
-           "     layer stack, then keep this file as the checked-in contract.",
-           "     ALSO CONSIDER: scope `scan:` to the shipped sources - test and tool",
-           "     trees are consumers by construction and usually stay out of the",
-           "     contract; prune the `external:` list (system headers leak in as",
-           "     noise, e.g. <sys/stat.h>-style prefixes). -->",
-           "", "## The machine contract", "", "```arch"]
+    out = [
+        "# Architecture",
+        "",
+        "<!-- GENERATED by check_arch.py --derive - the MEASURED architecture.",
+        "     REVIEW AND TIGHTEN: every `allow` edge below is what the code does",
+        "     TODAY; delete the edges that should not exist and reshape the",
+        "     layer stack, then keep this file as the checked-in contract.",
+        "     ALSO CONSIDER: scope `scan:` to the shipped sources - test and tool",
+        "     trees are consumers by construction and usually stay out of the",
+        "     contract; prune the `external:` list (system headers leak in as",
+        "     noise, e.g. <sys/stat.h>-style prefixes). -->",
+        "",
+        "## The machine contract",
+        "",
+        "```arch",
+    ]
     out.extend(arch)
     out.append("```")
     out.append("")
@@ -1206,13 +1658,18 @@ def derive(repo, roots, extensions, excludes):
     out.append("## The diagram")
     out.append("")
     out.append(DIAGRAM_BEGIN)
-    out.append(Contract("# Architecture\n\n```arch\n" + "\n".join(arch) + "\n```\n",
-                        "draft").marked_diagram())
+    out.append(
+        Contract(
+            "# Architecture\n\n```arch\n" + "\n".join(arch) + "\n```\n", "draft"
+        ).marked_diagram()
+    )
     out.append(DIAGRAM_END)
     out.append("")
     if unresolved:
-        warnings.append(f"{unresolved} quoted include(s) did not resolve - re-check "
-                        "after adoption; first: " + " | ".join(unresolved_samples))
+        warnings.append(
+            f"{unresolved} quoted include(s) did not resolve - re-check "
+            "after adoption; first: " + " | ".join(unresolved_samples)
+        )
     return out, warnings
 
 
@@ -1220,26 +1677,60 @@ def derive(repo, roots, extensions, excludes):
 def collect(repo, doc_path, report=False):
     """The CHECK step: the code against the contract.
     -> (exit code, human lines, machine summary)."""
+    resolved = None
     try:
         resolved, text = load_contract_text(repo, doc_path)
         contract = Contract(text, resolved)
+        _diagram_span(text)  # malformed diagram markers refuse the run
+        files = scan_files(contract, repo)
     except ContractError as e:
-        return EXIT_USAGE, [f"contract error: {e}"], {
-            "code": EXIT_USAGE, "error": str(e), "violations": None}
-    files = scan_files(contract, repo)
+        return (
+            EXIT_USAGE,
+            [f"contract error: {e}"],
+            {
+                "schema": 1,
+                "code": EXIT_USAGE,
+                "doc": resolved,
+                "error": str(e),
+                "violations": None,
+            },
+        )
     if not files:
         msg = f"skip: no sources under {contract.roots} (contract {resolved})"
-        return EXIT_SKIP, [msg], {"code": EXIT_SKIP, "doc": resolved, "files": 0,
-                                  "violations": None, "error": msg}
+        return (
+            EXIT_SKIP,
+            [msg],
+            {
+                "schema": 1,
+                "code": EXIT_SKIP,
+                "doc": resolved,
+                "files": 0,
+                "violations": None,
+                "error": msg,
+            },
+        )
     if contract.graph == "scan-deps":
         graph, gcode, glines = build_graph_scan_deps(contract, repo, files)
         if graph is None:
-            return gcode, glines, {"code": gcode, "doc": resolved,
-                                   "violations": glines, "error": glines[0]}
+            return (
+                gcode,
+                glines,
+                {
+                    "schema": 1,
+                    "code": gcode,
+                    "doc": resolved,
+                    "files": len(files),
+                    # only an incomplete scan is a finding; a refusal or a
+                    # skip never evaluated the rules
+                    "violations": glines if gcode == EXIT_VIOLATIONS else None,
+                    "error": glines[0],
+                },
+            )
         adj, file_mod, mod_edges, ext_counts, forbidden_hits, unresolved = graph
     else:
         adj, file_mod, mod_edges, ext_counts, forbidden_hits, unresolved = build_graph(
-            contract, repo, files)
+            contract, repo, files
+        )
     violations = list(forbidden_hits)
     violations += check_stack(contract)
     edge_violations, warnings = check_edges(contract, files, file_mod, mod_edges)
@@ -1253,18 +1744,18 @@ def collect(repo, doc_path, report=False):
     if contract.unresolved_policy == "error" and unresolved:
         violations += [f"unresolved include: {u}" for u in unresolved]
     violations += check_diagram(contract, text)
-    smells = []
-    file_lines = {}
-    if contract.smells != "off" or contract.header_size != "report":
-        for p in files:
-            with open(p, encoding="utf-8", errors="replace") as fh:
-                file_lines[p] = sum(1 for _ in fh)
+    smells: list[dict[str, str]] = []
+    # the header-size rule is standing: line counts are always measured
+    file_lines: dict[str, int] = {}
+    for p in files:
+        with open(p, encoding="utf-8", errors="replace") as fh:
+            file_lines[p] = sum(1 for _ in fh)
     if contract.smells != "off":
-        smells = compute_smells(contract, repo, files, file_mod, mod_edges,
-                                file_lines)
+        smells = compute_smells(contract, files, file_mod, mod_edges, file_lines)
         if contract.smells == "warn":
-            warnings += [f"SMELL {s['kind']}: {s['subject']} ({s['note']})"
-                         for s in smells]
+            warnings += [
+                f"SMELL {s['kind']}: {s['subject']} ({s['note']})" for s in smells
+            ]
     header_findings = check_header_size(contract, files, file_lines)
     if contract.header_size == "warn":
         warnings += header_findings
@@ -1272,13 +1763,20 @@ def collect(repo, doc_path, report=False):
         violations += header_findings
 
     summary = {
-        "schema": 1, "code": None, "doc": resolved, "graph": contract.graph,
+        "schema": 1,
+        "code": None,
+        "doc": resolved,
+        "graph": contract.graph,
         "files": len(files),
-        "modules": sorted(contract.modules), "layer_stack": list(contract.stack),
+        "modules": sorted(contract.modules),
+        "layer_stack": list(contract.stack),
         "declared_edges": [list(e) for e in sorted(contract.edges)],
         "measured_edges": [[a, b, n] for (a, b), n in sorted(mod_edges.items())],
-        "external": ext_counts, "violations": violations, "warnings": warnings,
-        "smells": smells, "large_headers": header_findings,
+        "external": ext_counts,
+        "violations": violations,
+        "warnings": warnings,
+        "smells": smells,
+        "large_headers": header_findings,
         "clean": not violations,
     }
     lines = []
@@ -1286,29 +1784,35 @@ def collect(repo, doc_path, report=False):
         if contract.stack:
             lines.append("layer stack (bottom-up): " + " <- ".join(contract.stack))
             for lay in contract.stack:
-                members = sorted(m for m in contract.modules
-                                 if contract.layer_of.get(m) == lay)
+                members = sorted(
+                    m for m in contract.modules if contract.layer_of.get(m) == lay
+                )
                 if members:
                     lines.append(f"  {lay}: " + ", ".join(members))
             floating = sorted(m for m in contract.modules if m not in contract.layer_of)
             if floating:
                 lines.append("  (unlayered): " + ", ".join(floating))
-        lines.append("declared edges: "
-                     + ", ".join(f"{a}->{b}" for a, b in sorted(contract.edges)))
+        lines.append(
+            "declared edges: "
+            + ", ".join(f"{a}->{b}" for a, b in sorted(contract.edges))
+        )
         lines.append("measured module edges:")
         for (a, b), n in sorted(mod_edges.items()):
             ok = "" if (a, b) in contract.edges else "  NOT DECLARED"
             lines.append(f"  {a} -> {b}  x{n}{ok}")
         if ext_counts:
-            lines.append("external (allowed, reported): "
-                         + ", ".join(f"{k} x{v}" for k, v in sorted(ext_counts.items())))
+            lines.append(
+                "external (allowed, reported): "
+                + ", ".join(f"{k} x{v}" for k, v in sorted(ext_counts.items()))
+            )
         if unresolved and contract.unresolved_policy != "error":
             lines.append("unresolved quoted includes (info only):")
             for u in unresolved[:10]:
                 lines.append("  " + u)
         if contract.smells != "off":
-            lines.append(f"refactoring smells ({len(smells)}; report-only, "
-                         "never findings):")
+            lines.append(
+                f"refactoring smells ({len(smells)}; report-only, never findings):"
+            )
             for s in smells:
                 lines.append(f"  {s['kind']}: {s['subject']} ({s['note']})")
         if contract.header_size == "report" and header_findings:
@@ -1319,17 +1823,22 @@ def collect(repo, doc_path, report=False):
         lines.append("warning: " + w)
     if violations:
         summary["code"] = EXIT_VIOLATIONS
-        return (EXIT_VIOLATIONS,
-                lines + [f"{len(violations)} architecture violation(s):"]
-                + ["  " + v for v in violations], summary)
-    tails = []
+        return (
+            EXIT_VIOLATIONS,
+            lines
+            + [f"{len(violations)} architecture violation(s):"]
+            + ["  " + v for v in violations],
+            summary,
+        )
+    # name only what this run actually checked
+    checked = [f"{len(files)} files", f"{len(mod_edges)} distinct module edges"]
+    if contract.cycles:
+        checked.append("no cycles")
     if contract.stack:
-        tails.append("layer stack holds")
+        checked.append("layer stack holds")
     if contract.ns_root:
-        tails.append("namespaces mapped")
-    tail = (", " + ", ".join(tails)) if tails else ""
-    lines.append(f"architecture clean ({len(files)} files, "
-                 f"{len(mod_edges)} distinct module edges, no cycles{tail})")
+        checked.append("namespaces mapped")
+    lines.append(f"architecture clean ({', '.join(checked)})")
     summary["code"] = EXIT_OK
     return EXIT_OK, lines, summary
 
@@ -1357,8 +1866,17 @@ def selftest():
     def diagram_of(body):
         """The document with a marked (generated) diagram drill-down."""
         c = Contract(contract(body), "doc")
-        return ("# Architecture\n\n" + DIAGRAM_BEGIN + "\n" + c.marked_diagram()
-                + "\n" + DIAGRAM_END + "\n\n```arch\n" + body.strip() + "\n```\n")
+        return (
+            "# Architecture\n\n"
+            + DIAGRAM_BEGIN
+            + "\n"
+            + c.marked_diagram()
+            + "\n"
+            + DIAGRAM_END
+            + "\n\n```arch\n"
+            + body.strip()
+            + "\n```\n"
+        )
 
     def run(files, doc, report=False):
         with tempfile.TemporaryDirectory(prefix="check_arch_self_") as td:
@@ -1372,213 +1890,379 @@ def selftest():
         nonlocal ok
         good = got == want
         ok = ok and good
-        print(f"selftest {name}: {'PASS' if good else f'FAIL (got {got}, want {want})'}")
+        print(
+            f"selftest {name}: {'PASS' if good else f'FAIL (got {got}, want {want})'}"
+        )
 
     KNOBS = "scan: src\n"
     # 1 declared edges are legal; the chain passes
-    b1 = KNOBS + """
+    b1 = (
+        KNOBS
+        + """
 module base
 module mid
 module top
 allow mid -> base
 allow top -> mid
 """
-    files1 = {"src/base/a.h": "#pragma once\n",
-              "src/mid/m.h": '#include "base/a.h"\n',
-              "src/top/t.h": '#include "mid/m.h"\n'}
+    )
+    files1 = {
+        "src/base/a.h": "#pragma once\n",
+        "src/mid/m.h": '#include "base/a.h"\n',
+        "src/top/t.h": '#include "mid/m.h"\n',
+    }
     e, out = run(files1, contract(b1))
     expect("declared chain clean", (e, [v for v in out if "must" in v]), (0, []))
 
     # 2 default deny: an undeclared edge fires
     b2 = KNOBS + "module base\nmodule top\n"
-    files2 = {"src/base/a.h": "#pragma once\n",
-              "src/top/t.h": '#include "base/a.h"\n'}
+    files2 = {"src/base/a.h": "#pragma once\n", "src/top/t.h": '#include "base/a.h"\n'}
     e, out = run(files2, contract(b2))
-    expect("undeclared edge fires (default deny)",
-           (e, any("top must not include base" in v for v in out)), (1, True))
+    expect(
+        "undeclared edge fires (default deny)",
+        (e, any("top must not include base" in v for v in out)),
+        (1, True),
+    )
 
     # 3 longest-prefix module mapping + upward refusal
     b3 = KNOBS + "module proj\nmodule proj/sub\nallow proj/sub -> proj\n"
-    files3 = {"src/proj/root.h": '#include "proj/sub/s.h"\n',
-              "src/proj/sub/s.h": "#pragma once\n"}
+    files3 = {
+        "src/proj/root.h": '#include "proj/sub/s.h"\n',
+        "src/proj/sub/s.h": "#pragma once\n",
+    }
     e, out = run(files3, contract(b3))
-    expect("longest-prefix mapping + upward refusal",
-           (e, any("proj must not include proj/sub" in v for v in out)), (1, True))
+    expect(
+        "longest-prefix mapping + upward refusal",
+        (e, any("proj must not include proj/sub" in v for v in out)),
+        (1, True),
+    )
 
     # 4 the layer stack: downward declared edges hold, upward ones violate
-    b4 = (KNOBS + "layer base\nlayer mid\nlayer top\n"
-          "module base/x in base\nmodule mid/y in mid\nmodule top/z in top\n"
-          "allow top/z -> mid/y\nallow mid/y -> base/x\n")
-    files4 = {"src/base/x/x.h": "#pragma once\n",
-              "src/mid/y/y.h": '#include "base/x/x.h"\n',
-              "src/top/z/z.h": '#include "mid/y/y.h"\n'}
+    b4 = (
+        KNOBS + "layer base\nlayer mid\nlayer top\n"
+        "module base/x in base\nmodule mid/y in mid\nmodule top/z in top\n"
+        "allow top/z -> mid/y\nallow mid/y -> base/x\n"
+    )
+    files4 = {
+        "src/base/x/x.h": "#pragma once\n",
+        "src/mid/y/y.h": '#include "base/x/x.h"\n',
+        "src/top/z/z.h": '#include "mid/y/y.h"\n',
+    }
     e, out = run(files4, contract(b4))
-    expect("stacked layers: downward edges hold",
-           (e, [v for v in out if "layer" in v and "must" in v]), (0, []))
-    b4bad = (KNOBS + "layer base\nlayer mid\nlayer top\n"
-             "module base/x in base\nmodule mid/y in mid\nmodule top/z in top\n"
-             "allow mid/y -> base/x\nallow base/x -> mid/y\n")
+    expect(
+        "stacked layers: downward edges hold",
+        (e, [v for v in out if "layer" in v and "must" in v]),
+        (0, []),
+    )
+    b4bad = (
+        KNOBS + "layer base\nlayer mid\nlayer top\n"
+        "module base/x in base\nmodule mid/y in mid\nmodule top/z in top\n"
+        "allow mid/y -> base/x\nallow base/x -> mid/y\n"
+    )
     e, out = run(files4, contract(b4bad))
-    expect("stacked layers: an UPWARD declared edge violates the stack",
-           (e, any("base/x (layer base) must not depend on mid/y (layer mid)" in v
-                   for v in out)), (1, True))
+    expect(
+        "stacked layers: an UPWARD declared edge violates the stack",
+        (
+            e,
+            any(
+                "base/x (layer base) must not depend on mid/y (layer mid)" in v
+                for v in out
+            ),
+        ),
+        (1, True),
+    )
     b4typo = KNOBS + "layer base\nmodule x in middle\n"
     e, out = run({}, contract(b4typo))
-    expect("layer typo = contract error",
-           (e, any("undeclared layer" in v for v in out)), (2, True))
+    expect(
+        "layer typo = contract error",
+        (e, any("undeclared layer" in v for v in out)),
+        (2, True),
+    )
 
     # 5 unclassified policy
     b5 = KNOBS + "module known\n"
-    e, out = run({"src/known/k.h": "#pragma once\n", "src/stray/s.h": "#pragma once\n"},
-                 contract(b5 + "unclassified: error\n"))
-    expect("unclassified=error flags the stray file",
-           (e, any("unclassified module: src/stray/s.h" in v for v in out)), (1, True))
-    e, out = run({"src/known/k.h": "#pragma once\n", "src/stray/s.h": "#pragma once\n"},
-                 contract(b5 + "unclassified: ignore\n"))
-    expect("unclassified=ignore stays silent",
-           (e, [v for v in out if "unclassified" in v]), (0, []))
+    e, out = run(
+        {"src/known/k.h": "#pragma once\n", "src/stray/s.h": "#pragma once\n"},
+        contract(b5 + "unclassified: error\n"),
+    )
+    expect(
+        "unclassified=error flags the stray file",
+        (e, any("unclassified module: src/stray/s.h" in v for v in out)),
+        (1, True),
+    )
+    e, out = run(
+        {"src/known/k.h": "#pragma once\n", "src/stray/s.h": "#pragma once\n"},
+        contract(b5 + "unclassified: ignore\n"),
+    )
+    expect(
+        "unclassified=ignore stays silent",
+        (e, [v for v in out if "unclassified" in v]),
+        (0, []),
+    )
 
     # 6 cycles: file-level SCC
-    e, out = run({"src/known/a.h": '#include "known/b.h"\n',
-                  "src/known/b.h": '#include "known/a.h"\n'}, contract(b5))
-    expect("cycle detected", (e, any("include cycle:" in v and "a.h" in v for v in out)),
-           (1, True))
+    e, out = run(
+        {
+            "src/known/a.h": '#include "known/b.h"\n',
+            "src/known/b.h": '#include "known/a.h"\n',
+        },
+        contract(b5),
+    )
+    expect(
+        "cycle detected",
+        (e, any("include cycle:" in v and "a.h" in v for v in out)),
+        (1, True),
+    )
 
     # 7 resolution: rooted via scan roots, quoted-relative, repo fallback
-    b7 = ("scan: src, include\nrepo_fallback: true\n"
-          "module proj\nmodule proj/sub\nallow proj -> proj/sub\n")
-    files7 = {"src/proj/rf.h": '#include "proj/sub/s.h"\n',
-              "include/proj/rf2.h": '#include "proj/sub/s.h"\n',
-              "src/proj/sub/s.h": "#pragma once\n"}
+    b7 = (
+        "scan: src, include\nrepo_fallback: true\n"
+        "module proj\nmodule proj/sub\nallow proj -> proj/sub\n"
+    )
+    files7 = {
+        "src/proj/rf.h": '#include "proj/sub/s.h"\n',
+        "include/proj/rf2.h": '#include "proj/sub/s.h"\n',
+        "src/proj/sub/s.h": "#pragma once\n",
+    }
     e, out = run(files7, contract(b7))
-    expect("resolution: rooted via scan roots + repo fallback",
-           (e, [v for v in out if "must" in v]), (0, []))
+    expect(
+        "resolution: rooted via scan roots + repo fallback",
+        (e, [v for v in out if "must" in v]),
+        (0, []),
+    )
 
     # 8 external reported, forbidden violates
-    b8 = ("scan: src\nexternal: other\nforbidden: renderer\nmodule lib\n")
-    e, out = run({"src/lib/l.h": '#include <other/x.h>\n#include "renderer/r.h"\n'
-                  "#include <system.h>\n"}, contract(b8))
-    expect("forbidden fires, external allowed",
-           (e, any('must not include "renderer/r.h"' in v for v in out)), (1, True))
+    b8 = "scan: src\nexternal: other\nforbidden: renderer\nmodule lib\n"
+    e, out = run(
+        {
+            "src/lib/l.h": '#include <other/x.h>\n#include "renderer/r.h"\n'
+            "#include <system.h>\n"
+        },
+        contract(b8),
+    )
+    expect(
+        "forbidden fires, external allowed",
+        (e, any('must not include "renderer/r.h"' in v for v in out)),
+        (1, True),
+    )
 
     # 9 the namespace gate
-    b9 = (KNOBS + "namespace_root: proj\nnamespace_module: proj\nnamespace_require: .hpp\n"
-          "module proj\nmodule proj/sub\nallow proj -> proj/sub\n")
-    ns_files = {"src/proj/Root.hpp": "namespace proj {\nint f();\n}\n",
-                "src/proj/sub/S.hpp": "namespace proj::sub::Deep {\nint g();\n}\n",
-                "src/proj/impl.cpp": "namespace proj::sub {\nint g() { return 0; }\n}\n",
-                "src/proj/plain.cpp": "int helper() { return 1; }\n"}
+    b9 = (
+        KNOBS
+        + "namespace_root: proj\nnamespace_module: proj\nnamespace_require: .hpp\n"
+        "module proj\nmodule proj/sub\nallow proj -> proj/sub\n"
+    )
+    ns_files = {
+        "src/proj/Root.hpp": "namespace proj {\nint f();\n}\n",
+        "src/proj/sub/S.hpp": "namespace proj::sub::Deep {\nint g();\n}\n",
+        "src/proj/impl.cpp": "namespace proj::sub {\nint g() { return 0; }\n}\n",
+        "src/proj/plain.cpp": "int helper() { return 1; }\n",
+    }
     e, out = run(ns_files, contract(b9))
-    expect("namespace gate: own namespaces pass",
-           (e, [v for v in out if "never opens" in v]), (0, []))
+    expect(
+        "namespace gate: own namespaces pass",
+        (e, [v for v in out if "never opens" in v]),
+        (0, []),
+    )
     ns_bad = dict(ns_files)
     ns_bad["src/proj/sub/S.hpp"] = "int g();\n"
     e, out = run(ns_bad, contract(b9))
-    expect("namespace gate: header without its namespace fires",
-           (e, any("src/proj/sub/S.hpp: never opens namespace proj::sub" in v for v in out)),
-           (1, True))
+    expect(
+        "namespace gate: header without its namespace fires",
+        (
+            e,
+            any(
+                "src/proj/sub/S.hpp: never opens namespace proj::sub" in v for v in out
+            ),
+        ),
+        (1, True),
+    )
     ns_bad2 = dict(ns_files)
-    ns_bad2["src/proj/sub/impl.cpp"] = "namespace proj::other {\nint g() { return 0; }\n}\n"
+    ns_bad2["src/proj/sub/impl.cpp"] = (
+        "namespace proj::other {\nint g() { return 0; }\n}\n"
+    )
     e, out = run(ns_bad2, contract(b9))
-    expect("namespace gate: cpp opening a foreign namespace fires",
-           (e, any("src/proj/sub/impl.cpp: never opens namespace proj::sub" in v for v in out)),
-           (1, True))
+    expect(
+        "namespace gate: cpp opening a foreign namespace fires",
+        (
+            e,
+            any(
+                "src/proj/sub/impl.cpp: never opens namespace proj::sub" in v
+                for v in out
+            ),
+        ),
+        (1, True),
+    )
     # the forward-declaration split: a header in a foreign (non-root) namespace
     # still fires; a cpp opening ONLY a fully foreign namespace is exempt
     ns_bad3 = dict(ns_files)
     ns_bad3["src/proj/sub/S.hpp"] = "namespace completely_foreign {\nint g();\n}\n"
     e, out = run(ns_bad3, contract(b9))
-    expect("namespace gate: header in a foreign namespace still fires",
-           (e, any("src/proj/sub/S.hpp: never opens namespace proj::sub" in v for v in out)),
-           (1, True))
+    expect(
+        "namespace gate: header in a foreign namespace still fires",
+        (
+            e,
+            any(
+                "src/proj/sub/S.hpp: never opens namespace proj::sub" in v for v in out
+            ),
+        ),
+        (1, True),
+    )
     ns_ok2 = dict(ns_files)
-    ns_ok2["src/proj/plain2.cpp"] = ("namespace completely_foreign {\n"
-                                     "int h() { return 2; }\n}\n")
+    ns_ok2["src/proj/plain2.cpp"] = (
+        "namespace completely_foreign {\nint h() { return 2; }\n}\n"
+    )
     e, out = run(ns_ok2, contract(b9))
-    expect("namespace gate: cpp in a fully foreign namespace only is exempt",
-           (e, [v for v in out if "never opens" in v]), (0, []))
+    expect(
+        "namespace gate: cpp in a fully foreign namespace only is exempt",
+        (e, [v for v in out if "never opens" in v]),
+        (0, []),
+    )
 
     # 10 the diagram drift gate + the block layout shape
     e, out = run(files4, diagram_of(b4))
-    expect("fresh generated diagram passes the drift gate",
-           (e, [v for v in out if "DRIFT" in v]), (0, []))
+    expect(
+        "fresh generated diagram passes the drift gate",
+        (e, [v for v in out if "DRIFT" in v]),
+        (0, []),
+    )
     stale = diagram_of(b4).replace("block-beta", "block-beta\n    %% stale")
     e, out = run(files4, stale)
-    expect("stale diagram fires", (e, any("DIAGRAM DRIFT" in v for v in out)), (1, True))
+    expect(
+        "stale diagram fires", (e, any("DIAGRAM DRIFT" in v for v in out)), (1, True)
+    )
     d = Contract(contract(b4), "doc").marked_diagram()
-    expect("diagrams: the drill-down (stack + per layer), pull spans, slack",
-           "### the layers" in d and 'top["top"]:2' in d and 'mid["mid"]:2' in d
-           and 'base["base"]' in d and "space" in d
-           and '### layer base - the modules' in d and 'base_x["base/x"]' in d
-           and 'top_z["top/z"]:2' in d, True)
+    expect(
+        "diagrams: the drill-down (stack + per layer), pull spans, slack",
+        "### the layers" in d
+        and 'top["top"]:2' in d
+        and 'mid["mid"]:2' in d
+        and 'base["base"]' in d
+        and "space" in d
+        and "### layer base - the modules" in d
+        and 'base_x["base/x"]' in d
+        and 'top_z["top/z"]:2' in d,
+        True,
+    )
 
     # 10b the drill-down into nested containers
-    b10 = (KNOBS + "layer base\nmodule proj in base\nmodule proj/sub in base\n"
-           "allow proj/sub -> proj\n")
+    b10 = (
+        KNOBS + "layer base\nmodule proj in base\nmodule proj/sub in base\n"
+        "allow proj/sub -> proj\n"
+    )
     d10 = Contract(contract(b10), "doc").marked_diagram()
-    expect("drill-down: container module resolves into its own diagram",
-           "### layer base - the modules" in d10
-           and "### proj - the nested modules" in d10
-           and 'proj_sub["proj/sub"]' in d10, True)
+    expect(
+        "drill-down: container module resolves into its own diagram",
+        "### layer base - the modules" in d10
+        and "### proj - the nested modules" in d10
+        and 'proj_sub["proj/sub"]' in d10,
+        True,
+    )
 
     # 11 contract errors are loud (exit 2)
     e, out = run(files1, contract(b1 + "allow mid -> typo\n"))
-    expect("edge to an undeclared module = contract error",
-           (e, any("contract error" in v for v in out)), (2, True))
+    expect(
+        "edge to an undeclared module = contract error",
+        (e, any("contract error" in v for v in out)),
+        (2, True),
+    )
     e, out = run(files1, "# Architecture\n\nno arch block here\n")
-    expect("missing arch block = contract error",
-           (e, any("no ```arch block" in v for v in out)), (2, True))
+    expect(
+        "missing arch block = contract error",
+        (e, any("no ```arch block" in v for v in out)),
+        (2, True),
+    )
 
     # 12 derive: measured contract + layer proposal; a cycle is reported
     with tempfile.TemporaryDirectory(prefix="check_arch_deriv_") as td:
-        write(td, {"src/leaf/l.h": "#pragma once\n",
-                   "src/mid/m.h": '#include "leaf/l.h"\n',
-                   "src/top/t.h": '#include "mid/m.h"\n'})
+        write(
+            td,
+            {
+                "src/leaf/l.h": "#pragma once\n",
+                "src/mid/m.h": '#include "leaf/l.h"\n',
+                "src/top/t.h": '#include "mid/m.h"\n',
+            },
+        )
         lines, warns = derive(td, ["src"], [".h"], DEFAULT_EXCLUDES)
         text = "\n".join(lines)
-        expect("derive: layers + modules + edges in the draft",
-               "layer leaf" in text and "module mid in mid" in text
-               and "allow mid -> leaf" in text and "allow top -> mid" in text, True)
+        expect(
+            "derive: layers + modules + edges in the draft",
+            "layer leaf" in text
+            and "module mid in mid" in text
+            and "allow mid -> leaf" in text
+            and "allow top -> mid" in text,
+            True,
+        )
         expect("derive: no warnings on a clean DAG", warns, [])
         write(td, {"src/leaf/l.h": '#include "top/t.h"\n'})
         lines, warns = derive(td, ["src"], [".h"], DEFAULT_EXCLUDES)
         expect("derive: cycle reported", any("cycle" in w for w in warns), True)
 
     # 12b the quoted resolution chains (the F1 chains)
-    b12 = ("scan: src\nquotes_resolve: root\n"
-           "module proj\nmodule proj/sub\nallow proj -> proj/sub\n")
-    files12 = {"src/proj/sub/s.h": "#pragma once\n",
-               "src/proj/r.h": '#include "src/proj/sub/s.h"\n'}
+    b12 = (
+        "scan: src\nquotes_resolve: root\n"
+        "module proj\nmodule proj/sub\nallow proj -> proj/sub\n"
+    )
+    files12 = {
+        "src/proj/sub/s.h": "#pragma once\n",
+        "src/proj/r.h": '#include "src/proj/sub/s.h"\n',
+    }
     e, out = run(files12, contract(b12))
-    expect("quotes_resolve: root-relative chain",
-           (e, [v for v in out if "must" in v]), (0, []))
-    b12m = ("scan: src\nquotes_resolve: includer-then-root\n"
-            "module proj\nmodule proj/sub\nallow proj -> proj/sub\n")
-    files12m = {"src/proj/sub/s.h": "#pragma once\n",
-                "src/proj/a.h": '#include "sub/s.h"\n',
-                "src/proj/b.h": '#include "src/proj/sub/s.h"\n'}
+    expect(
+        "quotes_resolve: root-relative chain",
+        (e, [v for v in out if "must" in v]),
+        (0, []),
+    )
+    b12m = (
+        "scan: src\nquotes_resolve: includer-then-root\n"
+        "module proj\nmodule proj/sub\nallow proj -> proj/sub\n"
+    )
+    files12m = {
+        "src/proj/sub/s.h": "#pragma once\n",
+        "src/proj/a.h": '#include "sub/s.h"\n',
+        "src/proj/b.h": '#include "src/proj/sub/s.h"\n',
+    }
     e, out = run(files12m, contract(b12m))
-    expect("quotes_resolve: the mixed includer-then-root chain",
-           (e, [v for v in out if "must" in v]), (0, []))
+    expect(
+        "quotes_resolve: the mixed includer-then-root chain",
+        (e, [v for v in out if "must" in v]),
+        (0, []),
+    )
 
     # 12c within_layer: the same-layer policy for undeclared sibling edges
     b12c = "scan: src\nlayer same\nmodule same/a in same\nmodule same/b in same\n"
-    files12c = {"src/same/a/x.h": "#pragma once\n",
-                "src/same/b/y.h": '#include "same/a/x.h"\n'}
+    files12c = {
+        "src/same/a/x.h": "#pragma once\n",
+        "src/same/b/y.h": '#include "same/a/x.h"\n',
+    }
     e, out = run(files12c, contract(b12c))
-    expect("within_layer deny (default): sideways edge fires",
-           (e, any("same/b must not include same/a" in v for v in out)), (1, True))
+    expect(
+        "within_layer deny (default): sideways edge fires",
+        (e, any("same/b must not include same/a" in v for v in out)),
+        (1, True),
+    )
     e, out = run(files12c, contract(b12c + "within_layer: warn\n"))
-    expect("within_layer warn: reported, not failing",
-           (e, any("within layer same" in v for v in out)), (0, True))
+    expect(
+        "within_layer warn: reported, not failing",
+        (e, any("within layer same" in v for v in out)),
+        (0, True),
+    )
     e, out = run(files12c, contract(b12c + "within_layer: allow\n"))
-    expect("within_layer allow: silent",
-           (e, [v for v in out if "must not include" in v]), (0, []))
+    expect(
+        "within_layer allow: silent",
+        (e, [v for v in out if "must not include" in v]),
+        (0, []),
+    )
 
     # 12d derive quarantines vendor dirs (F2)
     with tempfile.TemporaryDirectory(prefix="check_arch_vendor_") as td:
-        write(td, {"src/mid/m.h": "#pragma once\n",
-                   "third_party/imgui/i.h": "#pragma once\n"})
+        write(
+            td,
+            {
+                "src/mid/m.h": "#pragma once\n",
+                "third_party/imgui/i.h": "#pragma once\n",
+            },
+        )
         expect("auto-detect skips vendor dirs", detect_roots(td), ["src"])
 
     # 12e a CRLF document keeps its habit through --diagram (A3)
@@ -1588,16 +2272,25 @@ allow top -> mid
         with open(p, "w", encoding="utf-8", newline="") as fh:
             fh.write(doc_text)
         c5 = Contract(contract(b5), "doc")
-        assert write_diagram(p, c5, doc_text)
-        with open(p, "rb") as fh:
-            data = fh.read()
-        expect("CRLF doc stays CRLF through --diagram",
-               data.count(b"\r\n") > 10 and data.count(b"\n") == data.count(b"\r\n"),
-               True)
+        expect(
+            "--diagram rewrites the marked section",
+            write_diagram(p, c5, doc_text),
+            True,
+        )
+        with open(p, "rb") as bfh:
+            data = bfh.read()
+        expect(
+            "CRLF doc stays CRLF through --diagram",
+            data.count(b"\r\n") > 10 and data.count(b"\n") == data.count(b"\r\n"),
+            True,
+        )
         with open(p, encoding="utf-8", newline="") as fh:
             reread = fh.read()
-        expect("CRLF doc passes the drift gate after the rewrite",
-               check_diagram(c5, reread) == [], True)
+        expect(
+            "CRLF doc passes the drift gate after the rewrite",
+            check_diagram(c5, reread) == [],
+            True,
+        )
 
     # 12f the scan-deps operational contract (A1/A2): a blind graph is loud,
     # a missing tool is a skip - proven with a fake clang-scan-deps
@@ -1610,149 +2303,708 @@ allow top -> mid
             with open(tu, "w") as fh:
                 fh.write("int x;\n")
             fake = os.path.join(outer, "fake-csd.cmd")
+            # the make format escapes blanks; a TEMP path may contain them
+            mk = tu.replace(" ", "\\ ")
             with open(fake, "w") as fh:
-                fh.write('@echo off\r\necho ' + tu + ': \\\r\necho   ' + tu + '\r\n')
-            db_text = json.dumps([{"directory": outer, "command": "cl /c x.cpp",
-                                   "file": tu}])
-            sd = ("scan: src\ngraph: scan-deps\ndb: compile_commands.json\n"
-                  "clang_scan_deps: " + fake + "\nmodule src\n")
-            e, out = run({"src/a.cpp": "int x;\n",
-                          "compile_commands.json": db_text}, contract(sd))
-            expect("blind scan-deps graph is refused (exit 2), never green",
-                   (e, any("blind scan-deps graph" in v for v in out)), (2, True))
-            missing = ("scan: src\ngraph: scan-deps\ndb: compile_commands.json\n"
-                       "clang_scan_deps: " + os.path.join(outer, "no-such-tool.exe")
-                       + "\nmodule src\n")
-            e, out = run({"src/a.cpp": "int x;\n",
-                          "compile_commands.json": db_text}, contract(missing))
-            expect("missing clang-scan-deps is a skip (exit 77), no traceback",
-                   (e, any("clang-scan-deps not found" in v for v in out)), (77, True))
+                fh.write("@echo off\r\necho " + mk + ": \\\r\necho   " + mk + "\r\n")
+            db_text = json.dumps(
+                [{"directory": outer, "command": "cl /c x.cpp", "file": tu}]
+            )
+            sd = (
+                "scan: src\ngraph: scan-deps\ndb: compile_commands.json\n"
+                "clang_scan_deps: " + fake + "\nmodule src\n"
+            )
+            e, out = run(
+                {"src/a.cpp": "int x;\n", "compile_commands.json": db_text},
+                contract(sd),
+            )
+            expect(
+                "blind scan-deps graph is refused (exit 2), never green",
+                (e, any("blind scan-deps graph" in v for v in out)),
+                (2, True),
+            )
+            missing = (
+                "scan: src\ngraph: scan-deps\ndb: compile_commands.json\n"
+                "clang_scan_deps: "
+                + os.path.join(outer, "no-such-tool.exe")
+                + "\nmodule src\n"
+            )
+            e, out = run(
+                {"src/a.cpp": "int x;\n", "compile_commands.json": db_text},
+                contract(missing),
+            )
+            expect(
+                "missing clang-scan-deps is a skip (exit 77), no traceback",
+                (e, any("clang-scan-deps not found" in v for v in out)),
+                (77, True),
+            )
         finally:
             shutil.rmtree(outer, ignore_errors=True)
 
+    # Direct header relationships remain visible behind a flattened compiler inventory.
+    from unittest.mock import patch
+
+    def scan_deps_control(cycle=False, declare=False, scanner_code=0, resource=False):
+        with tempfile.TemporaryDirectory(prefix="check_arch_headers_") as td:
+            tu = os.path.join(td, "src", "app", "main.cpp")
+            first = os.path.join(td, "src", "shared", "first.h")
+            last = os.path.join(td, "src", "model", "last.h")
+            files = {
+                "src/app/main.cpp": '#include "shared/first.h"\n',
+                "src/shared/first.h": '#pragma once\n#include "model/last.h"\n',
+                "src/model/last.h": "#pragma once\n"
+                + ('#include "shared/first.h"\n' if cycle else ""),
+                "compile_commands.json": json.dumps(
+                    [{"directory": td, "command": "c++ -c main.cpp", "file": tu}]
+                ),
+            }
+            if resource:
+                files["src/app/icon.rc"] = "1 ICON icon.ico\n"
+                files["compile_commands.json"] = json.dumps(
+                    [
+                        {"directory": td, "command": "c++ -c main.cpp", "file": tu},
+                        {
+                            "directory": td,
+                            "command": "rc /fo icon.res icon.rc",
+                            "file": os.path.join(td, "src", "app", "icon.rc"),
+                        },
+                    ]
+                )
+            body = (
+                "scan: src\ngraph: scan-deps\ndb: compile_commands.json\n"
+                "clang_scan_deps: synthetic-scanner\n"
+                "module src/app\nmodule src/shared\nmodule src/model\n"
+                "allow src/app -> src/shared\nallow src/app -> src/model\n"
+            )
+            if declare:
+                body += "allow src/shared -> src/model\n"
+            if cycle:
+                body += "allow src/model -> src/shared\n"
+            write(td, files)
+            document = os.path.join(td, "ARCHITECTURE.md")
+            write(td, {"ARCHITECTURE.md": contract(body)})
+            mk = [p.replace(" ", "\\ ") for p in (tu, first, last)]
+            stdout = mk[0] + ": \\\n  " + " \\\n  ".join(mk) + "\n"
+            response = subprocess.CompletedProcess(
+                [], scanner_code, stdout, "scanner error"
+            )
+
+            def scanner(argv, **_kwargs):
+                database = argv[1].split("=", 1)[1]
+                with open(database, encoding="utf-8") as fh:
+                    commands = json.load(fh)
+                if any(command["file"].endswith(".rc") for command in commands):
+                    return subprocess.CompletedProcess(
+                        [], 1, stdout, "error: resource command is not C/C++"
+                    )
+                return response
+
+            with (
+                patch.dict(os.environ, {"TEMP": td}),
+                patch("subprocess.run", side_effect=scanner),
+            ):
+                return run_check(td, document)
+
+    e, out = scan_deps_control()
+    expect(
+        "scan-deps refuses undeclared header-module edge",
+        (e, any("src/shared must not include src/model" in v for v in out)),
+        (1, True),
+    )
+    e, out = scan_deps_control(cycle=True, declare=True)
+    expect(
+        "scan-deps detects a guarded header-only cycle",
+        (e, any("include cycle:" in v for v in out)),
+        (1, True),
+    )
+    e, out = scan_deps_control(declare=True)
+    expect("scan-deps accepts the declared acyclic alternative", e, 0)
+    e, out = scan_deps_control(declare=True, resource=True)
+    expect("scan-deps excludes resource commands without dropping C/C++ coverage", e, 0)
+    e, out = scan_deps_control(declare=True, scanner_code=1)
+    expect(
+        "scan-deps refuses a failed scanner with complete-looking stdout",
+        (e, any("clang-scan-deps failed" in v for v in out)),
+        (2, True),
+    )
+
     # 12g smells: orphan + island (report tier)
-    b12g = ("scan: src\nlayer base\nlayer mid\nlayer top\n"
-            "module base/a in base\nmodule base/b in base\nmodule base/c in base\n"
-            "module mid/m in mid\nmodule top/t in top\n"
-            "allow mid/m -> base/a\nallow top/t -> mid/m\n"
-            "allow base/b -> base/a\n")
-    files12g = {"src/base/a/x.h": "#pragma once\n",
-                "src/base/b/y.h": '#include "base/a/x.h"\n',
-                "src/base/c/z.h": "#pragma once\n",
-                "src/mid/m/m.h": '#include "base/a/x.h"\n',
-                "src/top/t/t.h": '#include "mid/m/m.h"\n'}
+    b12g = (
+        "scan: src\nlayer base\nlayer mid\nlayer top\n"
+        "module base/a in base\nmodule base/b in base\nmodule base/c in base\n"
+        "module mid/m in mid\nmodule top/t in top\n"
+        "allow mid/m -> base/a\nallow top/t -> mid/m\n"
+        "allow base/b -> base/a\n"
+    )
+    files12g = {
+        "src/base/a/x.h": "#pragma once\n",
+        "src/base/b/y.h": '#include "base/a/x.h"\n',
+        "src/base/c/z.h": "#pragma once\n",
+        "src/mid/m/m.h": '#include "base/a/x.h"\n',
+        "src/top/t/t.h": '#include "mid/m/m.h"\n',
+    }
     e, out = run(files12g, contract(b12g), report=True)
     joined = "\n".join(out)
-    expect("smells: orphan + island detected",
-           ("orphan module: base/b" in joined
-            and "island module: base/c" in joined), True)
+    expect(
+        "smells: orphan + island detected",
+        ("orphan module: base/b" in joined and "island module: base/c" in joined),
+        True,
+    )
 
     # 12h smells: pass-through + hub + large (and the smell_limits knob)
-    b12h = ("scan: src\nlayer same\n"
-            "module same/a in same\nmodule same/p in same\nmodule same/b in same\n"
-            "module same/root in same\n"
-            "module same/s1 in same\nmodule same/s2 in same\n"
-            "module same/s3 in same\nmodule same/s4 in same\n"
-            "module same/s5 in same\nmodule same/s6 in same\n"
-            "module same/s7 in same\nmodule same/s8 in same\n"
-            "module same/big in same\n"
-            "smell_limits: files=2\n"
-            "allow same/b -> same/p\nallow same/p -> same/a\n"
-            + "".join(f"allow same/root -> same/s{i}\n" for i in range(1, 9)))
-    files12h = {"src/same/a/a.h": "#pragma once\n",
-                "src/same/root/r.h": ('#include "same/s1/s1.h"\n'
-                                      '#include "same/s2/s2.h"\n'
-                                      '#include "same/s3/s3.h"\n'
-                                      '#include "same/s4/s4.h"\n'
-                                      '#include "same/s5/s5.h"\n'
-                                      '#include "same/s6/s6.h"\n'
-                                      '#include "same/s7/s7.h"\n'
-                                      '#include "same/s8/s8.h"\n'),
-                "src/same/p/p1.h": '#include "same/a/a.h"\n',
-                "src/same/p/p2.h": '#include "same/a/a.h"\n',
-                "src/same/p/p3.h": '#include "same/a/a.h"\n',
-                "src/same/b/b.h": ('#include "same/p/p1.h"\n'
-                                   '#include "same/p/p2.h"\n'
-                                   '#include "same/p/p3.h"\n'),
-                "src/same/big/f1.h": "#pragma once\n",
-                "src/same/big/f2.h": "#pragma once\n"}
-    files12h.update({f"src/same/s{i}/s{i}.h": "#pragma once\n"
-                     for i in range(1, 9)})
+    b12h = (
+        "scan: src\nlayer same\n"
+        "module same/a in same\nmodule same/p in same\nmodule same/b in same\n"
+        "module same/root in same\n"
+        "module same/s1 in same\nmodule same/s2 in same\n"
+        "module same/s3 in same\nmodule same/s4 in same\n"
+        "module same/s5 in same\nmodule same/s6 in same\n"
+        "module same/s7 in same\nmodule same/s8 in same\n"
+        "module same/big in same\n"
+        "smell_limits: files=2\n"
+        "allow same/b -> same/p\nallow same/p -> same/a\n"
+        + "".join(f"allow same/root -> same/s{i}\n" for i in range(1, 9))
+    )
+    files12h = {
+        "src/same/a/a.h": "#pragma once\n",
+        "src/same/root/r.h": (
+            '#include "same/s1/s1.h"\n'
+            '#include "same/s2/s2.h"\n'
+            '#include "same/s3/s3.h"\n'
+            '#include "same/s4/s4.h"\n'
+            '#include "same/s5/s5.h"\n'
+            '#include "same/s6/s6.h"\n'
+            '#include "same/s7/s7.h"\n'
+            '#include "same/s8/s8.h"\n'
+        ),
+        "src/same/p/p1.h": '#include "same/a/a.h"\n',
+        "src/same/p/p2.h": '#include "same/a/a.h"\n',
+        "src/same/p/p3.h": '#include "same/a/a.h"\n',
+        "src/same/b/b.h": (
+            '#include "same/p/p1.h"\n#include "same/p/p2.h"\n#include "same/p/p3.h"\n'
+        ),
+        "src/same/big/f1.h": "#pragma once\n",
+        "src/same/big/f2.h": "#pragma once\n",
+    }
+    files12h.update({f"src/same/s{i}/s{i}.h": "#pragma once\n" for i in range(1, 9)})
     e, out = run(files12h, contract(b12h), report=True)
     joined = "\n".join(out)
-    expect("smells: pass-through + hub + large detected",
-           ("pass-through module: same/p" in joined
+    expect(
+        "smells: pass-through + hub + large detected",
+        (
+            "pass-through module: same/p" in joined
             and "hub module: same/root" in joined
-            and "large module: same/big" in joined), True)
+            and "large module: same/big" in joined
+        ),
+        True,
+    )
 
     # 12i smells: mutual pair; off is silent; warn prints without failing
-    b12i = ("scan: src\nlayer same\n"
-            "module same/p in same\nmodule same/q in same\n"
-            "allow same/p -> same/q\nallow same/q -> same/p\n")
-    files12i = {"src/same/p/p.h": ('#include "same/q/q1.h"\n'
-                                   '#include "same/q/q2.h"\n'
-                                   '#include "same/q/q3.h"\n'),
-                "src/same/q/q.h": ('#include "same/p/p1.h"\n'
-                                   '#include "same/p/p2.h"\n'
-                                   '#include "same/p/p3.h"\n'),
-                "src/same/q/q1.h": "#pragma once\n",
-                "src/same/q/q2.h": "#pragma once\n",
-                "src/same/q/q3.h": "#pragma once\n",
-                "src/same/p/p1.h": "#pragma once\n",
-                "src/same/p/p2.h": "#pragma once\n",
-                "src/same/p/p3.h": "#pragma once\n"}
+    b12i = (
+        "scan: src\nlayer same\n"
+        "module same/p in same\nmodule same/q in same\n"
+        "allow same/p -> same/q\nallow same/q -> same/p\n"
+    )
+    files12i = {
+        "src/same/p/p.h": (
+            '#include "same/q/q1.h"\n#include "same/q/q2.h"\n#include "same/q/q3.h"\n'
+        ),
+        "src/same/q/q.h": (
+            '#include "same/p/p1.h"\n#include "same/p/p2.h"\n#include "same/p/p3.h"\n'
+        ),
+        "src/same/q/q1.h": "#pragma once\n",
+        "src/same/q/q2.h": "#pragma once\n",
+        "src/same/q/q3.h": "#pragma once\n",
+        "src/same/p/p1.h": "#pragma once\n",
+        "src/same/p/p2.h": "#pragma once\n",
+        "src/same/p/p3.h": "#pragma once\n",
+    }
     e, out = run(files12i, contract(b12i), report=True)
-    expect("smells: mutual pair detected",
-           "mutual pair: same/p <-> same/q" in "\n".join(out), True)
+    expect(
+        "smells: mutual pair detected",
+        "mutual pair: same/p <-> same/q" in "\n".join(out),
+        True,
+    )
     e, out = run(files12i, contract(b12i + "smells: off\n"), report=True)
     expect("smells off: silent", "mutual pair" in "\n".join(out), False)
     e, out = run(files12i, contract(b12i + "smells: warn\n"))
-    expect("smells warn: SMELL warning lines, exit still 0",
-           (e, any(v.startswith("warning: SMELL mutual pair") for v in out)),
-           (0, True))
+    expect(
+        "smells warn: SMELL warning lines, exit still 0",
+        (e, any(v.startswith("warning: SMELL mutual pair") for v in out)),
+        (0, True),
+    )
 
     # 12j kind: library - zero fan-in means public API, not dead code; and
     # volume is judged per FILE, not per module (the STL argument)
     e, out = run(files12g, contract(b12g + "kind: library\n"), report=True)
-    expect("kind library: fan-in smells suppressed",
-           ("orphan module" in "\n".join(out)
-            or "island module" in "\n".join(out)), False)
+    expect(
+        "kind library: fan-in smells suppressed",
+        ("orphan module" in "\n".join(out) or "island module" in "\n".join(out)),
+        False,
+    )
     e, out = run(files12g, contract(b12g + "kind: plugin\n"))
-    expect("kind: invalid value is a contract error",
-           (e, any("kind: application|library expected" in v for v in out)),
-           (2, True))
-    b12j = ("scan: src\nkind: library\nsmell_limits: lines=5\n"
-            "module same/big\n")
-    files12j = {"src/same/big/1.h": "#pragma once\nint a;\nint b;\nint c;\nint d;\nint e;\nint f;\n",
-                "src/same/big/2.h": "#pragma once\n"}
+    expect(
+        "kind: invalid value is a contract error",
+        (e, any("kind: application|library expected" in v for v in out)),
+        (2, True),
+    )
+    b12j = "scan: src\nkind: library\nsmell_limits: lines=5\nmodule same/big\n"
+    files12j = {
+        "src/same/big/1.h": "#pragma once\nint a;\nint b;\nint c;\nint d;\nint e;\nint f;\n",
+        "src/same/big/2.h": "#pragma once\n",
+    }
     e, out = run(files12j, contract(b12j), report=True)
     joined = "\n".join(out)
-    expect("kind library: large HEADER (per file) still reported",
-           "HEADER SIZE: src/same/big/1.h" in joined, True)
-    expect("kind library: large module suppressed",
-           "large module" in joined, False)
+    expect(
+        "kind library: large HEADER (per file) still reported",
+        "HEADER SIZE: src/same/big/1.h" in joined,
+        True,
+    )
+    expect("kind library: large module suppressed", "large module" in joined, False)
     e, out = run(files12j, contract(b12j + "smells: off\n"))
-    expect("header-size rule: standing, independent of smells",
-           any("HEADER SIZE: src/same/big/1.h" in v for v in out), True)
+    expect(
+        "header-size rule: standing, independent of smells",
+        any("HEADER SIZE: src/same/big/1.h" in v for v in out),
+        True,
+    )
     b12k = "scan: src\nsmell_limits: lines=5\nmodule big\n"
-    files12k = {"src/big/1.h": "#pragma once\nint a;\nint b;\nint c;\nint d;\nint e;\nint f;\n",
-                "src/big/2.h": "#pragma once\n"}
+    files12k = {
+        "src/big/1.h": "#pragma once\nint a;\nint b;\nint c;\nint d;\nint e;\nint f;\n",
+        "src/big/2.h": "#pragma once\n",
+    }
     e, out = run(files12k, contract(b12k), report=True)
     joined = "\n".join(out)
-    expect("application: large module AND large header both reported",
-           ("large module: big" in joined
-            and "HEADER SIZE: src/big/1.h" in joined), True)
+    expect(
+        "application: large module AND large header both reported",
+        ("large module: big" in joined and "HEADER SIZE: src/big/1.h" in joined),
+        True,
+    )
     e, out = run(files12k, contract(b12k + "header_size: error\n"))
-    expect("header_size error: the standing rule can be a hard gate",
-           (e, any("HEADER SIZE:" in v for v in out)), (1, True))
+    expect(
+        "header_size error: the standing rule can be a hard gate",
+        (e, any("HEADER SIZE:" in v for v in out)),
+        (1, True),
+    )
 
     # 13 exit-code contract
     e, _ = run({"src/known/k.h": "#pragma once\n"}, contract(b5))
     expect("exit 0 on a clean tree", e, 0)
     e, _ = run({"src/stray/s.h": "#pragma once\n"}, contract(b5))
     expect("exit 1 on findings", e, 1)
-    e, _ = run({}, contract(b5))
-    expect("exit 77 on nothing to scan", e, 77)
+    e, _ = run({"src/README.txt": "no sources here\n"}, contract(b5))
+    expect("exit 77 on nothing to scan (the root exists, no sources)", e, 77)
+
+    # 14 the 1.5.0 pins: a gate never loses sources in silence, resolves the
+    # same way on every run, and both graph modes classify alike
+    import contextlib
+    import io
+
+    # 14a exclude: whole names, globs and repo-relative paths - never a
+    # substring, never the checkout location
+    with tempfile.TemporaryDirectory(prefix="check_arch_build_") as td:
+        repo14 = os.path.join(td, "build", "checkout")
+        write(
+            repo14,
+            {
+                "src/core/a.h": "#pragma once\n",
+                "src/app/b.h": '#include "core/a.h"\n',
+                "ARCHITECTURE.md": contract("scan: src\nmodule core\nmodule app\n"),
+            },
+        )
+        e, out = run_check(repo14, os.path.join(repo14, "ARCHITECTURE.md"))
+    expect(
+        "exclude: a checkout below a 'build' directory hides nothing",
+        (e, any("app must not include core" in v for v in out)),
+        (1, True),
+    )
+    e, out = run(
+        {
+            "src/core/a.h": "#pragma once\n",
+            "src/rebuild_queue/q.h": '#include "core/a.h"\n',
+            "src/generated/g.h": '#include "core/a.h"\n',
+            "src/core/legacy/old.h": '#include "rebuild_queue/q.h"\n',
+        },
+        contract(
+            "scan: src\nexclude: build, gen*, src/core/legacy\n"
+            "module core\nmodule rebuild_queue\nmodule generated\n"
+        ),
+    )
+    expect(
+        "exclude: names, globs and paths prune exactly - never substrings",
+        (e, [v.strip() for v in out if "must not include" in v]),
+        (1, ["rebuild_queue must not include core (x1; edge not declared)"]),
+    )
+
+    # 14b a scan root that does not exist is a contract error, never a skip
+    e, out = run(
+        {"src/core/a.h": "#pragma once\n", "include/app/b.h": '#include "core/a.h"\n'},
+        contract("scan: src, incldue\nmodule core\nmodule app\n"),
+    )
+    expect(
+        "a scan root that does not exist is a contract error",
+        (e, any("do not exist" in v for v in out)),
+        (2, True),
+    )
+
+    # 14c rooted includes: every root holding the first segment, declaration
+    # order - the same verdict under every hash seed
+    with tempfile.TemporaryDirectory(prefix="check_arch_seed_") as td:
+        write(
+            td,
+            {
+                "include/core/api.h": "#pragma once\n",
+                "src/core/impl.h": "#pragma once\n",
+                "src/app/main.cpp": "#include <core/impl.h>\n",
+                "ARCHITECTURE.md": contract(
+                    "scan: include, src\nmodule core\nmodule app\n"
+                ),
+            },
+        )
+        verdicts = set()
+        for seed in range(8):
+            proc = subprocess.run(
+                [sys.executable, os.path.abspath(__file__), "--repo", td],
+                env={**os.environ, "PYTHONHASHSEED": str(seed)},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            verdicts.add((proc.returncode, "app must not include core" in proc.stdout))
+    expect("rooted includes resolve alike under 8 hash seeds", verdicts, {(1, True)})
+
+    # 14d a quoted include whose rooted candidate is missing falls through
+    e, out = run(
+        {
+            "src/detail/x.h": "#pragma once\n",
+            "src/app/main.cpp": '#include "detail/util.h"\n',
+            "src/app/detail/util.h": "#pragma once\n",
+        },
+        contract("scan: src\nmodule detail\nmodule app\nmodule app/detail\n"),
+    )
+    expect(
+        "quoted include falls through to the quote chain",
+        (e, any("app must not include app/detail" in v for v in out)),
+        (1, True),
+    )
+
+    # 14e scan-deps over a synthetic scanner: one make rule, the TU first
+    def scan_deps_run(files, body, deps, form="command", database=None, upper=False):
+        seen = {}
+        with tempfile.TemporaryDirectory(prefix="check_arch_sd_") as td:
+            tu = os.path.join(td, *deps[0].split("/"))
+            if database is None:
+                if form == "arguments":
+                    item = {
+                        "directory": td,
+                        "arguments": ["c++", "-fmodules-ts", "-c", tu],
+                        "file": tu,
+                    }
+                else:
+                    item = {
+                        "directory": td,
+                        "command": "c++ -fmodules-ts -c main.cpp",
+                        "file": tu,
+                    }
+                database = json.dumps([item])
+            paths = [os.path.join(td, *d.split("/")) for d in deps]
+            mk = [(p.upper() if upper else p).replace(" ", "\\ ") for p in paths]
+            stdout = "main.o: \\\n  " + " \\\n  ".join(mk) + "\n"
+
+            def scanner(argv, **_kwargs):
+                with open(argv[1].split("=", 1)[1], encoding="utf-8") as fh:
+                    seen["db"] = json.load(fh)
+                return subprocess.CompletedProcess(argv, 0, stdout, "")
+
+            sd_knobs = (
+                "graph: scan-deps\ndb: compile_commands.json\n"
+                "clang_scan_deps: synthetic-scanner\n"
+            )
+            write(
+                td,
+                {
+                    **files,
+                    "compile_commands.json": database,
+                    "ARCHITECTURE.md": contract(body + sd_knobs),
+                },
+            )
+            with patch("subprocess.run", side_effect=scanner):
+                e, out = run_check(td, os.path.join(td, "ARCHITECTURE.md"))
+        return e, out, seen.get("db") or [{}]
+
+    files_sd = {
+        "src/app/main.cpp": '#include "shared/first.h"\n',
+        "src/shared/first.h": '#pragma once\n#include "model/last.h"\n',
+        "src/model/last.h": "#pragma once\n",
+    }
+    body_sd = (
+        "scan: src\nmodule app\nmodule shared\nmodule model\n"
+        "allow app -> shared\nallow app -> model\nallow shared -> model\n"
+    )
+    deps_sd = ["src/app/main.cpp", "src/shared/first.h", "src/model/last.h"]
+    e, out, db = scan_deps_run(files_sd, body_sd, deps_sd)
+    expect(
+        "scan-deps: root-stripped module names classify like the regex mode",
+        (
+            e,
+            [v for v in out if "unclassified" in v],
+            "-fmodules-ts" in db[0]["command"],
+        ),
+        (0, [], False),
+    )
+    e, out, db = scan_deps_run(files_sd, body_sd, deps_sd, form="arguments")
+    expect(
+        "scan-deps: arguments-form entries are scrubbed in their own form",
+        (e, "command" in db[0], "-fmodules-ts" in db[0].get("arguments", [])),
+        (0, False, False),
+    )
+    e, out, _ = scan_deps_run(
+        {**files_sd, "gen/config.h": "#pragma once\n"},
+        body_sd + "forbidden: gen\n",
+        [*deps_sd, "gen/config.h"],
+    )
+    expect(
+        "scan-deps: an in-repo compiler-observed path matches forbidden",
+        (
+            e,
+            any(
+                "src/app/main.cpp: must not include gen/config.h (forbidden" in v
+                for v in out
+            ),
+        ),
+        (1, True),
+    )
+    if os.name == "nt":
+        e, out, _ = scan_deps_run(files_sd, body_sd, deps_sd, upper=True)
+        expect("scan-deps: the scanner's path case does not blind the graph", e, 0)
+    files_obs = dict(files_sd)
+    files_obs["src/shared/first.h"] = '#pragma once\n#include "last.h"\n'
+    body_obs = (
+        "scan: src\nmodule app\nmodule shared\nmodule model\nmodule extra\n"
+        "allow app -> shared\nallow app -> model\nallow app -> extra\n"
+    )
+    e, out, _ = scan_deps_run(files_obs, body_obs, deps_sd)
+    expect(
+        "scan-deps: a bare include binds through the compiler-observed files",
+        (e, any("shared must not include model" in v for v in out)),
+        (1, True),
+    )
+    e, out, _ = scan_deps_run(
+        {**files_obs, "src/extra/last.h": "#pragma once\n"},
+        body_obs,
+        [*deps_sd, "src/extra/last.h"],
+    )
+    expect(
+        "scan-deps: an ambiguous observed include refuses the check",
+        (e, any("ambiguous project include" in v for v in out)),
+        (2, True),
+    )
+    for name, database, needle in (
+        ("an unreadable", "{not json", "compile database unreadable"),
+        ("a malformed", '{"file": 1}', "compile database malformed"),
+    ):
+        e, out, _ = scan_deps_run(files_sd, body_sd, deps_sd, database=database)
+        expect(
+            f"scan-deps: {name} compile database is refused, no traceback",
+            (e, any(needle in v for v in out)),
+            (2, True),
+        )
+
+    # 14f the make-deps parser: continuations, escapes, shared lines, rules
+    make_cases = [
+        ("/b/a.o: /s/a.cpp /s/a.h \\\n  /s/b.h\n", {"/s/a.cpp": {"/s/a.h", "/s/b.h"}}),
+        (
+            "main.obj: C:\\My\\ Repo\\src\\main.cpp \\\n  C:\\My\\ Repo\\src\\a.h\n",
+            {"C:/My Repo/src/main.cpp": {"C:/My Repo/src/a.h"}},
+        ),
+        (
+            "x.o: \\\n /s/x.cpp \\\n /s/x.h\ny.o: /s/y.cpp /s/y\\#1.h /s/$$z.h\n",
+            {"/s/x.cpp": {"/s/x.h"}, "/s/y.cpp": {"/s/y#1.h", "/s/$z.h"}},
+        ),
+        (
+            (
+                "CMakeFiles\\g.dir\\v.cpp.obj: \\\n  C:\\R\\src\\v.cpp \\\n"
+                "  C:\\Program\\ Files\\ (x86)\\Windows\\ Kits\\10\\stddef.h\n"
+            ),
+            {"C:/R/src/v.cpp": {"C:/Program Files (x86)/Windows Kits/10/stddef.h"}},
+        ),
+        # a path component that starts with a blank: 2k+1 backslashes -> k
+        ("a.o: /s/a.cpp /s/dir\\\\\\ x.h\n", {"/s/a.cpp": {"/s/dir/ x.h"}}),
+    ]
+    expect(
+        "make-deps parser: continuations, escapes, shared lines, rules",
+        [parse_make_deps(text) for text, _ in make_cases],
+        [want for _, want in make_cases],
+    )
+
+    # 14g truthful output: the clean line names only what was checked, and
+    # the header-size report tier works with the smells off
+    e, out = run(
+        {
+            "src/known/a.h": '#include "known/b.h"\n',
+            "src/known/b.h": '#include "known/a.h"\n',
+        },
+        contract(b5 + "cycles: false\n"),
+    )
+    expect(
+        "cycles: false - the clean line claims no cycle check",
+        (e, any("no cycles" in v for v in out)),
+        (0, False),
+    )
+    e, out = run(
+        files12k, contract(b12k + "smells: off\nheader_size: report\n"), report=True
+    )
+    expect(
+        "header_size report: listed with the smells off",
+        (e, any("HEADER SIZE: src/big/1.h" in v for v in out)),
+        (0, True),
+    )
+
+    # 14h derive never writes an empty draft; its draft passes its own check
+    with tempfile.TemporaryDirectory(prefix="check_arch_nodraft_") as td:
+        os.makedirs(os.path.join(td, "empty"))
+        draft = os.path.join(td, "draft.md")
+        with open(draft, "w", encoding="utf-8") as fh:
+            fh.write("KEEP\n")
+        sink = io.StringIO()
+        with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+            empty = main(["--repo", td, "--derive", "--scan", "empty", "--out", draft])
+            absent = main(
+                ["--repo", td, "--derive", "--scan", "absent", "--out", draft]
+            )
+        with open(draft, encoding="utf-8") as fh:
+            kept = fh.read()
+    expect(
+        "derive: nothing to derive never overwrites a draft",
+        (empty, absent, kept),
+        (77, 2, "KEEP\n"),
+    )
+    with tempfile.TemporaryDirectory(prefix="check_arch_roundtrip_") as td:
+        write(
+            td,
+            {
+                "src/core/a.h": "#pragma once\n",
+                "src/core/io/b.h": '#include "core/a.h"\n',
+                "src/app/main.cpp": (
+                    '#include "core/io/b.h"\n#include "third_party/lib/x.h"\n'
+                    "#include <core/gone.h>\n"
+                ),
+                "src/third_party/lib/x.h": "#pragma once\n",
+                "code/lib/util.h": "#pragma once\n",
+                "code/lib/sub/s.h": '#include "../util.h"\n',
+            },
+        )
+        lines, _warns = derive(
+            td, ["src", "code/lib"], [".h", ".cpp"], DEFAULT_EXCLUDES
+        )
+        write(td, {"ARCHITECTURE.md": "\n".join(lines) + "\n"})
+        e, out = run_check(td, os.path.join(td, "ARCHITECTURE.md"))
+    knob = {
+        ln.split(":", 1)[0]: [x.strip() for x in ln.split(":", 1)[1].split(",")]
+        for ln in lines
+        if ln.startswith(("exclude:", "external:"))
+    }
+    expect(
+        "derive -> check: the unedited draft passes its own check",
+        (e, [v for v in out if "must" in v or "unclassified" in v]),
+        (0, []),
+    )
+    expect(
+        "derive: vendored dirs excluded, project dirs never external",
+        ("third_party" in knob.get("exclude", []), "core" in knob.get("external", [])),
+        (True, False),
+    )
+
+    # 14i contract typos are loud (exit 2), never silent no-ops; each case
+    # names its own message, so no other refusal can stand in for it
+    for name, body, needle in (
+        (
+            "a duplicate knob",
+            "scan: src\nscan: include\nmodule a\n",
+            "duplicate knob 'scan'",
+        ),
+        (
+            "an extension without its dot",
+            "scan: src\nextensions: hpp\nmodule a\n",
+            "extensions: each entry starts with '.'",
+        ),
+        (
+            "a namespace_root that is no C++ namespace",
+            "scan: src\nmodule a\nnamespace_root: .hpp\nnamespace_module: .hpp\n",
+            "namespace_root: a C++ namespace expected",
+        ),
+        (
+            "a namespace_module matching no module",
+            "scan: src\nmodule a\nnamespace_root: proj\nnamespace_module: proj\n",
+            "is neither a declared module nor the path prefix of one",
+        ),
+        (
+            "namespace_require without the gate",
+            "scan: src\nmodule a\nnamespace_require: .hpp\n",
+            "namespace_require needs namespace_root",
+        ),
+    ):
+        e, out = run(
+            {"src/a/x.hpp": "int x;\n", "include/a/y.hpp": "int y;\n"}, contract(body)
+        )
+        expect(
+            f"contract error: {name}",
+            (e, any("contract error" in v and needle in v for v in out)),
+            (2, True),
+        )
+
+    # 14j reversed diagram markers: refused by the check and by --diagram,
+    # the document left untouched
+    reversed_doc = (
+        "# A\n\n"
+        + DIAGRAM_END
+        + "\n\n"
+        + DIAGRAM_BEGIN
+        + "\n\n```arch\n"
+        + b5
+        + "```\n"
+    )
+    e, out = run({"src/known/k.h": "#pragma once\n"}, reversed_doc)
+    expect(
+        "reversed diagram markers are a contract error",
+        (e, any("diagram markers malformed" in v for v in out)),
+        (2, True),
+    )
+    with tempfile.TemporaryDirectory(prefix="check_arch_markers_") as td:
+        doc = os.path.join(td, "ARCHITECTURE.md")
+        with open(doc, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(reversed_doc)
+        sink = io.StringIO()
+        with contextlib.redirect_stdout(sink):
+            code = main(["--repo", td, "--doc", "ARCHITECTURE.md", "--diagram"])
+        with open(doc, encoding="utf-8", newline="") as fh:
+            after = fh.read()
+    expect(
+        "--diagram refuses reversed markers, the file untouched",
+        (code, after == reversed_doc),
+        (2, True),
+    )
+
+    # 14k --json stays JSON on a contract error
+    with tempfile.TemporaryDirectory(prefix="check_arch_json_") as td:
+        write(
+            td,
+            {
+                "src/a/x.h": "#pragma once\n",
+                "ARCHITECTURE.md": contract("scan: src\nmodule a\nallow a -> typo\n"),
+            },
+        )
+        sink = io.StringIO()
+        with contextlib.redirect_stdout(sink):
+            code = main(["--repo", td, "--json"])
+    try:
+        parsed = json.loads(sink.getvalue())
+    except ValueError:
+        parsed = {}
+    expect(
+        "--json stays JSON on a contract error",
+        (code, parsed.get("code"), parsed.get("violations", "absent")),
+        (2, 2, None),
+    )
 
     print(f"check_arch {CHECK_ARCH_VERSION} selftest:", "PASS" if ok else "FAIL")
     return 0 if ok else 2
@@ -1765,12 +3017,19 @@ def detect_roots(repo):
     roots = []
     for name in sorted(os.listdir(repo)):
         p = os.path.join(repo, name)
-        if (not os.path.isdir(p) or name.startswith(".") or name in VENDOR_DIRS
-                or any(x in name for x in DEFAULT_EXCLUDES)):
+        if (
+            not os.path.isdir(p)
+            or name.startswith(".")
+            or name in VENDOR_DIRS
+            or any(x in name for x in DEFAULT_EXCLUDES)
+        ):
             continue
-        for dp, dn, fn in os.walk(p):
-            dn[:] = [d for d in dn if d not in VENDOR_DIRS
-                     and not any(x in d for x in DEFAULT_EXCLUDES)]
+        for _dirpath, dn, fn in os.walk(p):
+            dn[:] = [
+                d
+                for d in dn
+                if d not in VENDOR_DIRS and not any(x in d for x in DEFAULT_EXCLUDES)
+            ]
             if any(os.path.splitext(f)[1] in DEFAULT_EXTS for f in fn):
                 roots.append(name.replace("\\", "/"))
                 break
@@ -1782,27 +3041,55 @@ def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="check_arch.py",
         description="the generic architecture gate (analyze, define, check; rules in "
-                    "the arch block incl. the layer stack, the diagram generated + "
-                    "drift-gated)")
-    ap.add_argument("--version", action="version",
-                    version=f"check_arch {CHECK_ARCH_VERSION}")
-    ap.add_argument("--repo", help="the repository root to check/derive "
-                                   "(default: the directory above this script)")
-    ap.add_argument("--doc", help="contract document (default: docs/ARCHITECTURE.md, "
-                                  "ARCHITECTURE.md, tools/ARCHITECTURE.md)")
-    ap.add_argument("--report", action="store_true",
-                    help="also print the stack and the measured module graph")
-    ap.add_argument("--json", action="store_true",
-                    help="machine-readable output: the check summary as JSON")
-    ap.add_argument("--diagram", action="store_true",
-                    help="regenerate the marked diagram section from the rules")
-    ap.add_argument("--derive", action="store_true",
-                    help="ANALYZE: draft an ARCHITECTURE.md from the measured graph")
-    ap.add_argument("--scan", help="derive only: comma-separated scan roots "
-                                   "(default: every top-level source dir)")
-    ap.add_argument("--out", help="derive only: write the draft to FILE (default: stdout)")
-    ap.add_argument("--selftest", action="store_true",
-                    help="offline PASS proof on synthetic fixtures")
+        "the arch block incl. the layer stack, the diagram generated + "
+        "drift-gated)",
+    )
+    ap.add_argument(
+        "--version", action="version", version=f"check_arch {CHECK_ARCH_VERSION}"
+    )
+    ap.add_argument(
+        "--repo",
+        help="the repository root to check/derive "
+        "(default: the directory above this script)",
+    )
+    ap.add_argument(
+        "--doc",
+        help="contract document; a relative path resolves against --repo "
+        "(default: docs/ARCHITECTURE.md, ARCHITECTURE.md, tools/ARCHITECTURE.md)",
+    )
+    ap.add_argument(
+        "--report",
+        action="store_true",
+        help="also print the stack and the measured module graph",
+    )
+    ap.add_argument(
+        "--json",
+        action="store_true",
+        help="machine-readable output: the check summary as JSON",
+    )
+    ap.add_argument(
+        "--diagram",
+        action="store_true",
+        help="regenerate the marked diagram section from the rules",
+    )
+    ap.add_argument(
+        "--derive",
+        action="store_true",
+        help="ANALYZE: draft an ARCHITECTURE.md from the measured graph",
+    )
+    ap.add_argument(
+        "--scan",
+        help="derive only: comma-separated scan roots "
+        "(default: every top-level source dir)",
+    )
+    ap.add_argument(
+        "--out", help="derive only: write the draft to FILE (default: stdout)"
+    )
+    ap.add_argument(
+        "--selftest",
+        action="store_true",
+        help="offline PASS proof on synthetic fixtures",
+    )
     args = ap.parse_args(argv)
 
     if args.selftest:
@@ -1814,13 +3101,21 @@ def main(argv=None):
 
     if args.derive:
         if args.scan:
-            roots = [r.strip().replace("\\", "/") for r in args.scan.split(",") if r.strip()]
+            roots = [_norm_root(r.strip()) for r in args.scan.split(",") if r.strip()]
         else:
             roots = detect_roots(repo)
         if not roots:
             print("derive: no source roots found (pass --scan DIRS)")
             return EXIT_SKIP
+        missing = [r for r in roots if not os.path.isdir(os.path.join(repo, r))]
+        if missing:
+            print(f"derive: scan root(s) {missing} do not exist under {repo}")
+            return EXIT_USAGE
         lines, warns = derive(repo, roots, DEFAULT_EXTS, DEFAULT_EXCLUDES)
+        for w in warns:
+            print("warning: " + w, file=sys.stderr)
+        if not lines:
+            return EXIT_SKIP  # nothing derived: an existing draft stays untouched
         text = "\n".join(lines) + "\n"
         if args.out:
             with open(args.out, "w", encoding="utf-8", newline="\n") as fh:
@@ -1828,19 +3123,16 @@ def main(argv=None):
             print(f"derive: draft written -> {args.out}")
         else:
             sys.stdout.write(text)
-        for w in warns:
-            print("warning: " + w, file=sys.stderr)
         return EXIT_OK
 
-    try:
-        doc_path, text = load_contract_text(repo, args.doc)
-        contract = Contract(text, doc_path)
-    except ContractError as e:
-        print(f"contract error: {e}")
-        return EXIT_USAGE
-
     if args.diagram:
-        if write_diagram(doc_path, contract, text):
+        try:
+            doc_path, text = load_contract_text(repo, args.doc)
+            written = write_diagram(doc_path, Contract(text, doc_path), text)
+        except ContractError as e:
+            print(f"contract error: {e}")
+            return EXIT_USAGE
+        if written:
             print("the diagram regenerated from the rules -> " + doc_path)
             return EXIT_OK
         print(f"{doc_path}: no {DIAGRAM_BEGIN} markers to fill")

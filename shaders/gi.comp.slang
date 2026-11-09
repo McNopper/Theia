@@ -306,6 +306,42 @@ float targetPdfEnv(float3 Le, float3 bsdfTimesCos) {
 static const uint kPairTexels0 = 254u * 254u;
 static const uint kPairTexels1 = 230u * 230u;
 
+// ── GI-ENH §6.2.2 replay stream compaction (three-kernel split) ───────────────
+// The spatial-reuse neighbor loop used to run the multi-bounce replay walks
+// (traceGiPathCandidateNoRR) inline behind divergent per-candidate branches.
+// The split: (1) `main` (emit) gates neighbours, attempts shifts (results
+// stored), and appends REPLAY jobs to a compacted GPU stream; (2) `replayMain`
+// traces the replay walks uniformly over the dense stream (no divergence);
+// (3) `combineMain` re-merges every candidate per pixel in the original order,
+// restoring the estimator sequence exactly. Determinism: replay jobs are
+// independent and keyed by (pixel, slot) — the atomic stream ORDER does not
+// enter any result, so run-to-run pixel reproducibility is preserved. The
+// merge acceptance coin moves to a dedicated per-pixel RNG stream (see
+// restirPtComplete) — statistically equivalent, unbiased.
+struct PtEmitParams {
+    float4 localG;     // xyz = local candidate estimate, w = valid flag
+    float4 gShift0;    // per-neighbour shift results (xyz = estimate, w = 1 on success)
+    float4 gShift1;
+    float4 gShift2;
+    int4   off0;       // neighbour offsets as drawn this frame (xy used)
+    int4   off1;
+    int4   off2;
+    uint4  misc;       // x = slot decisions (2 bits each: 0 skip, 1 shift, 2 replay, 3 emptyW),
+                       // y = adaptiveClamp bits, z = ptActive flag, w = reserved
+};
+
+// Slot decision encodings (misc.x, 2 bits per neighbour slot).
+static const uint kPtSlotSkip   = 0u;
+static const uint kPtSlotShift  = 1u;
+static const uint kPtSlotReplay = 2u;
+static const uint kPtSlotEmptyW = 3u;
+static const uint kPathSpatialNeighbors = 3u;
+
+[[vk::binding(27, 0)]] RWStructuredBuffer<uint>         t_replayRecords; // compacted (pixelIdx * 3 + slot) jobs
+[[vk::binding(28, 0)]] RWStructuredBuffer<uint>         t_replayCount;   // [0..2] = indirect dispatch command, [4] = record counter
+[[vk::binding(29, 0)]] RWStructuredBuffer<PtEmitParams> t_ptParams;      // per-pixel emit state
+[[vk::binding(30, 0)]] RWStructuredBuffer<float4>       t_replayResults; // per (pixel, slot) replay walk result
+
 int2 pairingOffset(uint texIdx, uint2 px) {
     const int s = (texIdx == 0u) ? 254 : ((texIdx == 1u) ? 230 : 210);
     const uint base = (texIdx == 0u) ? 0u : ((texIdx == 1u) ? kPairTexels0 : kPairTexels0 + kPairTexels1);
@@ -1985,35 +2021,41 @@ bool tryForcedNEEReconnection(SurfaceHit primary, PathReservoir neighbor, float 
     return maxComp(gShift) > 0.0;
 }
 
-float4 restirPtIndirect(SurfaceHit primary, uint2 px, float adaptiveClamp, inout RngState rng) {
-    const uint kPathLocalCandidates = 1u;   // local walks per pixel per frame
+void restirPtEmit(SurfaceHit primary, uint2 px, float adaptiveClamp, inout RngState rng) {
     const uint pixelIdx = px.y * screenWidth + px.x;
+
+    PtEmitParams emitState;
+    emitState.localG  = float4(0.0.xxx, 0.0);
+    emitState.gShift0 = float4(0.0.xxx, 0.0);
+    emitState.gShift1 = float4(0.0.xxx, 0.0);
+    emitState.gShift2 = float4(0.0.xxx, 0.0);
+    emitState.off0    = int4(0, 0, 0, 0);
+    emitState.off1    = int4(0, 0, 0, 0);
+    emitState.off2    = int4(0, 0, 0, 0);
+    emitState.misc    = uint4(0u, asuint(adaptiveClamp), 1u, 0u); // z = ptActive
 
     // ── Local candidates — stored UNMERGED for next frame's spatial reuse. ──
     PathReservoir rLocal = makeEmptyPathReservoir();
-    float3 shadeSum = 0.0.xxx; // GI-ENH §6.3: vector-valued resampling weights (RGB)
-    for (uint i = 0u; i < kPathLocalCandidates; ++i) {
-        const RngState candSeed = pathCandidateSeed(px, i);
+    {
+        const RngState candSeed = pathCandidateSeed(px, 0u);
         float3 g;
         ReconnectionCapture recL = makeEmptyReconnectionCapture();
         const bool valid = traceGiPathCandidate(primary, candSeed, adaptiveClamp, g, recL);
-        pathReservoirUpdate(rLocal, candSeed, g, valid, shadeSum, recL, rng);
-    }
-    // Unbiased weight of the local reservoir (neighbours merge with w = p̂·W·M).
-    {
+        float3 shadeScratch = 0.0.xxx; // the merge coin lives in restirPtComplete's dedicated stream now
+        pathReservoirUpdate(rLocal, candSeed, g, valid, shadeScratch, recL, rng);
+        // Unbiased weight of the local reservoir (neighbours merge with w = p̂·W·M).
         const float pHatL = restirTargetLuma(rLocal.g);
         rLocal.W = (rLocal.M > 0u && pHatL > 0.0)
             ? rLocal.w_sum / max(float(rLocal.M) * pHatL, 1.0e-10) : 0.0;
+        emitState.localG = float4(g, valid ? 1.0 : 0.0);
     }
     t_pathReservoirsCur[pixelIdx] = rLocal;
 
-    // ── Spatial reuse: merge neighbours' LOCAL reservoirs (independent candidates). ──
-    PathReservoir r = rLocal;
+    // ── Spatial reuse: gate neighbours, attempt shifts inline, emit replay jobs. ──
     if (restirDiSpatial != 0u) {
-        const uint  kPathSpatialNeighbors = 3u;
-        const float kSpatialRadius        = 32.0;
-        const float kPosThresholdRel      = 0.01;
-        const float kNormalThreshold      = 0.98;
+        const float kSpatialRadius   = 32.0;
+        const float kPosThresholdRel = 0.01;
+        const float kNormalThreshold = 0.98;
 
         const float3 curWorldPos = t_giBuffer.Load(int3(int(px.x), int(px.y), 0)).xyz;
         const float3 curViewN    = t_gbuffer.Load(int3(int(px.x), int(px.y), 0)).xyz * 2.0 - 1.0;
@@ -2023,7 +2065,7 @@ float4 restirPtIndirect(SurfaceHit primary, uint2 px, float adaptiveClamp, inout
         // Duplication map (GI2.5): skip a neighbour whose selected candidate was
         // already merged from a different neighbour (same replay token).
         uint seenHashes[4]; // 1 (own) + up to 3 neighbours
-        seenHashes[0] = r.candidateHash;
+        seenHashes[0] = rLocal.candidateHash;
         uint seenCount = 1u;
 
         for (uint n = 0u; n < kPathSpatialNeighbors; ++n) {
@@ -2034,10 +2076,14 @@ float4 restirPtIndirect(SurfaceHit primary, uint2 px, float adaptiveClamp, inout
                 const float2 rnd = (float2(randFloat(rng), randFloat(rng)) * 2.0 - 1.0) * kSpatialRadius;
                 off = int2(int(round(rnd.x)), int(round(rnd.y)));
             }
+            if (n == 0u)      emitState.off0 = int4(off.x, off.y, 0, 0);
+            else if (n == 1u) emitState.off1 = int4(off.x, off.y, 0, 0);
+            else              emitState.off2 = int4(off.x, off.y, 0, 0);
+
             const int2 nCoord = int2(int(px.x) + off.x, int(px.y) + off.y);
             if (nCoord.x < 0 || nCoord.y < 0 ||
                 nCoord.x >= int(screenWidth) || nCoord.y >= int(screenHeight)) {
-                continue;
+                continue; // decision stays kPtSlotSkip
             }
             const float3 nWorldPos = t_giBuffer.Load(int3(nCoord.x, nCoord.y, 0)).xyz;
             const float3 nViewN    = t_gbuffer.Load(int3(nCoord.x, nCoord.y, 0)).xyz * 2.0 - 1.0;
@@ -2049,7 +2095,7 @@ float4 restirPtIndirect(SurfaceHit primary, uint2 px, float adaptiveClamp, inout
             if (neighbor.W == 0.0) {
                 // Empty local reservoir (dark walk): counts as a candidate attempt
                 // but carries no sample — no replay walk needed.
-                r.M += neighbor.M;
+                emitState.misc.x |= kPtSlotEmptyW << (2u * n);
                 continue;
             }
             bool duplicate = false;
@@ -2059,8 +2105,6 @@ float4 restirPtIndirect(SurfaceHit primary, uint2 px, float adaptiveClamp, inout
             if (duplicate) continue;
             if (seenCount < 4u) seenHashes[seenCount++] = neighbor.candidateHash;
 
-            float3 gN;
-            bool vn = false;
             float3 gShift = 0.0.xxx;
             bool vShift = false;
             if (reconnectShiftEnabled != 0u) {
@@ -2082,14 +2126,177 @@ float4 restirPtIndirect(SurfaceHit primary, uint2 px, float adaptiveClamp, inout
             // No pairwise MIS averaging — the paper uses one technique per candidate.
             // Variance reduction comes from footprint criteria + k≥3 hit rate.
             if (vShift && reconnectShiftEnabled != 0u) {
-                gN = gShift;
+                emitState.misc.x |= kPtSlotShift << (2u * n);
+                if (n == 0u)      emitState.gShift0 = float4(gShift, 1.0);
+                else if (n == 1u) emitState.gShift1 = float4(gShift, 1.0);
+                else              emitState.gShift2 = float4(gShift, 1.0);
+            } else {
+                emitState.misc.x |= kPtSlotReplay << (2u * n);
+                // Compacted replay job: the walk runs uniformly in replayMain.
+                uint recordSlot = 0u;
+                InterlockedAdd(t_replayCount[4u], 1u, recordSlot);
+                t_replayRecords[recordSlot] = pixelIdx * kPathSpatialNeighbors + n;
+                const uint neededGroups = (recordSlot + 1u + 63u) >> 6u;
+                // vkCmdDispatchIndirect reads VkDispatchIndirectCommand {x, y, z}
+                // from words 0-2: group count covers the live records, y/z = 1.
+                InterlockedMax(t_replayCount[0u], neededGroups); // dispatch x
+                t_replayCount[1u] = 1u; // y (benign same-value race)
+                t_replayCount[2u] = 1u; // z
+            }
+        }
+    }
+    t_ptParams[pixelIdx] = emitState;
+}
+
+// Primary-surface reconstruction shared by the emit stage (main) and the
+// uniform replay pass: camera-ray re-trace to the recorded world position with
+// the view-space G-buffer-normal fallback (transparent pixels). Returns false
+// when the pixel has no usable primary (background, visibility miss without a
+// usable normal, non-finite material, self-emissive surface). Deterministic —
+// both stages construct identical SurfaceHits.
+bool buildPrimarySurface(uint2 px, out GiHit primaryHit, out SurfaceHit primary, out bool primaryHitValid) {
+    const int3 loadCoord = int3(int(px.x), int(px.y), 0);
+
+    const float4 giSample = t_giBuffer.Load(loadCoord);
+    // w = asfloat(instanceIdx+1): 0 means background / sky (A1b: changed from materialIdx+1).
+    const uint instIdxPlus1 = asuint(giSample.w);
+    if (instIdxPlus1 == 0u) {
+        return false; // background / non-geometry pixel (and transparent pixels keep the sentinel)
+    }
+    const uint primaryInstIdx = instIdxPlus1 - 1u;
+    // Derive the material index from the instance table — the ray-query primary hit
+    // below will use its own instIdx, but the fallback path needs this as a best-guess.
+    const uint materialIdx = instances[primaryInstIdx].materialIndex;
+    const float3 worldPos = giSample.xyz;
+
+    // Reconstruct the primary surface by re-tracing the camera ray to the recorded world
+    // position; this works for opaque AND transparent (glass) pixels alike. The view-space
+    // G-buffer normal is only needed as a fallback when the re-trace misses (e.g. the
+    // transparent pass does not write the normal G-buffer), so it is computed lazily below.
+    primaryHit = traceClosestHit(cameraPos.xyz, worldPos - cameraPos.xyz, kInf, kRayEpsilon);
+    // Trust the re-traced closest hit as the authoritative nearest surface. The rasterized
+    // G-buffer materialIdx is draw-order dependent for transparent geometry (depth-write
+    // disabled), so overlapping transparent surfaces can record the farther one; the inline
+    // ray query is order-independent and always returns the geometrically nearest surface.
+    // Matches industry practice (Q2RTX reflect_refract, PowerVR HybridTransparency, SEED
+    // "Hybrid Rendering for Real-Time Ray Tracing" RTG ch.25). The matIdxPlus1==0 sentinel
+    // check above already handles background pixels; for non-background, the re-trace wins.
+    primaryHitValid = primaryHit.hit;
+    const float3 primaryWorldPos = primaryHitValid ? primaryHit.worldPos : worldPos;
+
+    const float3 wo = normalize(cameraPos.xyz - primaryWorldPos);
+    if (primaryHitValid) {
+        primary = makeSurfaceHit(primaryHit, wo);
+    } else {
+        // Fallback: reconstruct the shading normal from the view-space G-buffer normal.
+        // viewN = mul(viewRot, N) in the forward pass (R_cpu·N = N_view, column-vector form).
+        // The inverse for an orthonormal rotation is mul(viewN, viewRot) (row-vector form;
+        // computes R_cpu^T·viewN = N_world). When the normal G-buffer is unavailable
+        // (zero, e.g. a transparent pixel against the sky), there is nothing to reconstruct
+        // here → skip the pixel.
+        const float3 viewN = t_gbuffer.Load(loadCoord).xyz * 2.0 - 1.0;
+        const float3x3 viewRot = float3x3(view[0].xyz, view[1].xyz, view[2].xyz);
+        float3 worldN = mul(viewN, viewRot);
+        if (dot(worldN, worldN) < 1.0e-8) {
+            return false;
+        }
+        worldN = normalize(worldN);
+        GpuMaterial mat = materials[materialIdx];
+        // Guard against a materialIdx that indexes uninitialized / garbage material data in
+        // the GI compute's descriptor set: a non-finite material would feed NaN/Inf straight
+        // into the BSDF eval, ahead of the downstream isfinite() guards.
+        if (!all(isfinite(mat.baseColorWeight.xyz)) || !all(isfinite(mat.emissionColorLum.xyz))) {
+            return false;
+        }
+        // Skip self-emissive primary surfaces: their radiance is the emitter itself, shown
+        // directly by the forward pass; bounced light off an emitter is negligible.
+        const float3 emission = max(mat.emissionColorLum.xyz, 0.0.xxx) * max(mat.emissionColorLum.w, 0.0);
+        if (maxComp(emission) > 0.0) {
+            return false;
+        }
+        if (dot(worldN, wo) < 0.0) {
+            worldN = -worldN;
+        }
+        const float3x3 tbn = buildTBN(worldN);
+        primary.position = primaryWorldPos;
+        primary.shadowPos = primaryWorldPos;
+        primary.normal = worldN;
+        primary.geoNormal = worldN;
+        primary.T = tbn[0];
+        primary.B = tbn[1];
+        primary.coatN = worldN;
+        primary.coatT = tbn[0];
+        primary.coatB = tbn[1];
+        primary.backface = false; // G-buffer fallback: rasterized camera-facing surface
+        primary.mat = mat;
+        primary.wo = wo;
+    }
+    return true;
+}
+
+// Kernel-3 stage (combineMain): re-merge every candidate per pixel in the
+// ORIGINAL neighbour order — shift results from the emit stage, replay results
+// from the compacted replay pass — so the estimator sequence is preserved
+// exactly. The merge acceptance coin uses a DEDICATED per-pixel RNG stream
+// (magic 0xC7): independent uniform stream, unbiased; the loop stream's draws
+// (offsets, shift internals) stay in the emit stage and are not replayed.
+float4 restirPtComplete(uint2 px) {
+    const uint pixelIdx = px.y * screenWidth + px.x;
+    const PtEmitParams emit = t_ptParams[pixelIdx];
+    const float adaptiveClamp = asfloat(emit.misc.y);
+
+    RngState mergeRng = composeRngSeed(px, frameSampleIndex, 0xC7u, rngBaseSeed);
+    PathReservoir r = makeEmptyPathReservoir();
+    float3 shadeSum = 0.0.xxx; // GI-ENH §6.3: vector-valued resampling weights (RGB)
+
+    // Local candidate: reservoir (incl. selected rec) is stored by the emit
+    // stage; the update re-runs against the dedicated stream.
+    const PathReservoir rLocal = t_pathReservoirsCur[pixelIdx];
+    pathReservoirUpdate(r, pathCandidateSeed(px, 0u), emit.localG.xyz, emit.localG.w > 0.0,
+                        shadeSum, rLocal.rec, mergeRng);
+    // Unbiased weight of the local reservoir (neighbours merge with w = p̂·W·M).
+    {
+        const float pHatL = restirTargetLuma(rLocal.g);
+        r.W = (r.M > 0u && pHatL > 0.0)
+            ? r.w_sum / max(float(r.M) * pHatL, 1.0e-10) : 0.0;
+    }
+
+    if (restirDiSpatial != 0u) {
+        const float kPosThresholdRel = 0.01;
+        const float kNormalThreshold = 0.98;
+
+        const float3 curWorldPos = t_giBuffer.Load(int3(int(px.x), int(px.y), 0)).xyz;
+        const float3 curViewN    = t_gbuffer.Load(int3(int(px.x), int(px.y), 0)).xyz * 2.0 - 1.0;
+        const float  viewDist    = length(curWorldPos - cameraPos.xyz);
+        const float  posThresh   = max(viewDist * kPosThresholdRel, 1.0e-3);
+
+        uint seenHashes[4]; // 1 (own) + up to 3 neighbours — same bookkeeping order as the emit stage
+        seenHashes[0] = rLocal.candidateHash;
+        uint seenCount = 1u;
+
+        int2 offs[3] = {emit.off0.xy, emit.off1.xy, emit.off2.xy};
+        for (uint n = 0u; n < kPathSpatialNeighbors; ++n) {
+            const uint decision = (emit.misc.x >> (2u * n)) & 3u;
+            if (decision == kPtSlotSkip) continue;
+            const int2 nCoord = int2(int(px.x) + offs[n].x, int(px.y) + offs[n].y);
+            PathReservoir neighbor = t_pathReservoirsPrev[uint(nCoord.y) * screenWidth + uint(nCoord.x)];
+            if (decision == kPtSlotEmptyW) {
+                r.M += neighbor.M;
+                continue;
+            }
+            if (seenCount < 4u) seenHashes[seenCount++] = neighbor.candidateHash;
+
+            float3 gN;
+            bool vn;
+            if (decision == kPtSlotShift) {
+                gN = (n == 0u) ? emit.gShift0.xyz : (n == 1u) ? emit.gShift1.xyz : emit.gShift2.xyz;
                 vn = true;
             } else {
-                ReconnectionCapture recNUnused = makeEmptyReconnectionCapture();
-                vn = traceGiPathCandidateNoRR(primary, pathReplaySeed(neighbor.rngKey, neighbor.rngIndex),
-                                                         adaptiveClamp, gN, recNUnused);
+                const float4 replayed = t_replayResults[pixelIdx * kPathSpatialNeighbors + n];
+                gN = replayed.xyz;
+                vn = replayed.w > 0.0;
             }
-            pathReservoirCombine(r, neighbor, gN, vn, shadeSum, rng);
+            pathReservoirCombine(r, neighbor, gN, vn, shadeSum, mergeRng);
         }
     }
 
@@ -2109,8 +2316,64 @@ float4 restirPtIndirect(SurfaceHit primary, uint2 px, float adaptiveClamp, inout
         // Hard firefly ceiling matching the DI reservoir / indirect path.
         contribution = clamp(contribution, 0.0.xxx, (adaptiveClamp * 3.0).xxx);
     }
-
     return float4(contribution, float(r.M));
+}
+
+// Kernel-2 entry (uniform replay pass over the compacted stream): every active
+// thread runs one multi-bounce replay walk — no divergent branches. Results are
+// keyed by (pixel, slot); stream order never enters a result.
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void replayMain(uint3 tid : SV_DispatchThreadID) {
+    if (tid.x >= t_replayCount[4u]) {
+        return; // guard: the indirect dispatch is group-granular over the live count
+    }
+    const uint packed = t_replayRecords[tid.x];
+    const uint pixelIdx = packed / kPathSpatialNeighbors;
+    const uint slot = packed % kPathSpatialNeighbors;
+    const uint2 px = uint2(pixelIdx % screenWidth, pixelIdx / screenWidth);
+
+    const PtEmitParams emit = t_ptParams[pixelIdx];
+    const float adaptiveClamp = asfloat(emit.misc.y);
+
+    // Rebuild this pixel's primary surface (deterministic camera-ray re-trace —
+    // identical to the emit stage's construction).
+    GiHit primaryHitUnused;
+    bool primaryHitValid = false;
+    SurfaceHit primary;
+    if (!buildPrimarySurface(px, primaryHitUnused, primary, primaryHitValid)) {
+        t_replayResults[pixelIdx * kPathSpatialNeighbors + slot] = float4(0.0.xxx, 0.0);
+        return;
+    }
+
+    const int2 offs[3] = {emit.off0.xy, emit.off1.xy, emit.off2.xy};
+    const int2 nCoord = int2(int(px.x) + offs[slot].x, int(px.y) + offs[slot].y);
+    const PathReservoir neighbor = t_pathReservoirsPrev[uint(nCoord.y) * screenWidth + uint(nCoord.x)];
+
+    float3 gN;
+    ReconnectionCapture recNUnused = makeEmptyReconnectionCapture();
+    const bool vn = traceGiPathCandidateNoRR(primary, pathReplaySeed(neighbor.rngKey, neighbor.rngIndex),
+                                             adaptiveClamp, gN, recNUnused);
+    t_replayResults[pixelIdx * kPathSpatialNeighbors + slot] = float4(gN, vn ? 1.0 : 0.0);
+}
+
+// Kernel-3 entry: per-pixel completion (combine + shade + HDR composite of the
+// path-reservoir indirect term on top of the emit stage's partial composite).
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void combineMain(uint3 tid : SV_DispatchThreadID) {
+    if (tid.x >= screenWidth || tid.y >= screenHeight) {
+        return;
+    }
+    const uint2 px = tid.xy;
+    const uint pixelIdx = px.y * screenWidth + px.x;
+    if (t_ptParams[pixelIdx].misc.z == 0u) {
+        return; // not a path-reservoir pixel (feature off / early-out in main)
+    }
+    const float4 ptResult = restirPtComplete(px);
+    // GI2.7: M in alpha — the emit stage left the DI reservoir's M in alpha;
+    // overwrite with the combined total exactly as the fused path did.
+    hdrImage[px] = float4(hdrImage[px].xyz + ptResult.xyz, hdrImage[px].w + ptResult.w);
 }
 
 [numthreads(8, 8, 1)]
@@ -2122,83 +2385,14 @@ void main(uint3 tid : SV_DispatchThreadID) {
     initializeSmsPixel(px); // all slots, including pixel zero/background, get valid frozen metadata
     const int3 loadCoord = int3(int(px.x), int(px.y), 0);
 
-    // --- Primary surface from the forward G-buffer ---
-    const float4 giSample = t_giBuffer.Load(loadCoord);
-    // w = asfloat(instanceIdx+1): 0 means background / sky (A1b: changed from materialIdx+1).
-    const uint instIdxPlus1 = asuint(giSample.w);
-    if (instIdxPlus1 == 0u) {
-        return; // background / non-geometry pixel (and transparent pixels keep the sentinel)
-    }
-    const uint primaryInstIdx = instIdxPlus1 - 1u;
-    // Derive the material index from the instance table — the ray-query primary hit
-    // below will use its own instIdx, but the fallback path needs this as a best-guess.
-    const uint materialIdx = instances[primaryInstIdx].materialIndex;
-    const float3 worldPos = giSample.xyz;
-
-    // Reconstruct the primary surface by re-tracing the camera ray to the recorded world
-    // position; this works for opaque AND transparent (glass) pixels alike. The view-space
-    // G-buffer normal is only needed as a fallback when the re-trace misses (e.g. the
-    // transparent pass does not write the normal G-buffer), so it is computed lazily below.
-    GiHit primaryHit = traceClosestHit(cameraPos.xyz, worldPos - cameraPos.xyz, kInf, kRayEpsilon);
-    // Trust the re-traced closest hit as the authoritative nearest surface. The rasterized
-    // G-buffer materialIdx is draw-order dependent for transparent geometry (depth-write
-    // disabled), so overlapping transparent surfaces can record the farther one; the inline
-    // ray query is order-independent and always returns the geometrically nearest surface.
-    // Matches industry practice (Q2RTX reflect_refract, PowerVR HybridTransparency, SEED
-    // "Hybrid Rendering for Real-Time Ray Tracing" RTG ch.25). The matIdxPlus1==0 sentinel
-    // check above already handles background pixels; for non-background, the re-trace wins.
-    const bool primaryHitValid = primaryHit.hit;
-    if (smsEnabled!=0u && !primaryHitValid) return; // no synthetic SMS/ownership domain on a visibility miss
-    const float3 primaryWorldPos = primaryHitValid ? primaryHit.worldPos : worldPos;
-
-    const float3 wo = normalize(cameraPos.xyz - primaryWorldPos);
+    // --- Primary surface (shared reconstruction with the replay pass — GI-ENH §6.2.2) ---
+    GiHit primaryHit;
+    bool primaryHitValid = false;
     SurfaceHit primary;
-    if (primaryHitValid) {
-        primary = makeSurfaceHit(primaryHit, wo);
-    } else {
-        // Fallback: reconstruct the shading normal from the view-space G-buffer normal.
-        // viewN = mul(viewRot, N) in the forward pass (R_cpu·N = N_view, column-vector form).
-        // The inverse for an orthonormal rotation is mul(viewN, viewRot) (row-vector form;
-        // computes R_cpu^T·viewN = N_world). When the normal G-buffer is unavailable
-        // (zero, e.g. a transparent pixel against the sky), there is nothing to reconstruct
-        // here → skip the pixel.
-        const float3 viewN = t_gbuffer.Load(loadCoord).xyz * 2.0 - 1.0;
-        const float3x3 viewRot = float3x3(view[0].xyz, view[1].xyz, view[2].xyz);
-        float3 worldN = mul(viewN, viewRot);
-        if (dot(worldN, worldN) < 1.0e-8) {
-            return;
-        }
-        worldN = normalize(worldN);
-        GpuMaterial mat = materials[materialIdx];
-        // Guard against a materialIdx that indexes uninitialized / garbage material data in
-        // the GI compute's descriptor set: a non-finite material would feed NaN/Inf straight
-        // into the BSDF eval, ahead of the downstream isfinite() guards.
-        if (!all(isfinite(mat.baseColorWeight.xyz)) || !all(isfinite(mat.emissionColorLum.xyz))) {
-            return;
-        }
-        // Skip self-emissive primary surfaces: their radiance is the emitter itself, shown
-        // directly by the forward pass; bounced light off an emitter is negligible.
-        const float3 emission = max(mat.emissionColorLum.xyz, 0.0.xxx) * max(mat.emissionColorLum.w, 0.0);
-        if (maxComp(emission) > 0.0) {
-            return;
-        }
-        if (dot(worldN, wo) < 0.0) {
-            worldN = -worldN;
-        }
-        const float3x3 tbn = buildTBN(worldN);
-        primary.position = primaryWorldPos;
-        primary.shadowPos = primaryWorldPos;
-        primary.normal = worldN;
-        primary.geoNormal = worldN;
-        primary.T = tbn[0];
-        primary.B = tbn[1];
-        primary.coatN = worldN;
-        primary.coatT = tbn[0];
-        primary.coatB = tbn[1];
-        primary.backface = false; // G-buffer fallback: rasterized camera-facing surface
-        primary.mat = mat;
-        primary.wo = wo;
+    if (!buildPrimarySurface(px, primaryHit, primary, primaryHitValid)) {
+        return; // background / fallback-unusable / self-emissive-fallback pixel
     }
+    if (smsEnabled!=0u && !primaryHitValid) return; // no synthetic SMS/ownership domain on a visibility miss
 
     if (primaryHitValid) produceSmsReceiver(px,primaryHit,primary);
 
@@ -2266,16 +2460,15 @@ void main(uint3 tid : SV_DispatchThreadID) {
         }
     }
 
-    // GI2 full PT: multi-bounce path reservoir owns the indirect walk. Replaces the
-    // per-sample estimateGiSample multi-bounce loop below; primary env NEE (emissive
-    // scenes) still runs per-sample via primaryEnvNeeOnly. The M channel accumulates
-    // the path reservoir's M alongside the DI reservoir's for the M-aware denoiser.
-    float3 restirPathIndirect = 0.0.xxx;
+    // GI2 full PT: multi-bounce path reservoir owns the indirect walk. GI-ENH
+    // §6.2.2: this is now the EMIT stage — neighbour gates + shift attempts run
+    // here, replay jobs go to the compacted stream, and the per-pixel completion
+    // (combine + shade + HDR composite of the PT term) runs in combineMain after
+    // the uniform replay pass. The alpha channel leaves this kernel holding the
+    // DI reservoir's M; combineMain adds the path reservoir's M.
     if (restirPtPathEnabled != 0u) {
         RngState pathSeed = composeRngSeed(px, frameSampleIndex, 0xB7u, rngBaseSeed);
-        const float4 pathResult = restirPtIndirect(primary, px, adaptiveClamp, pathSeed);
-        restirPathIndirect = pathResult.xyz;
-        restirM += pathResult.w;
+        restirPtEmit(primary, px, adaptiveClamp, pathSeed);
     }
 
     float3 sumIndirect = 0.0.xxx;
@@ -2313,5 +2506,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     const float invN = 1.0 / float(sampleCount);
     // GI2.7: M in alpha — OVERWRITE (not +=) so the forward pass's indirectWeight
     // doesn't pollute the M channel. RGB still adds to the forward pass's base color.
-    hdrImage[px] = float4(hdrImage[px].xyz + (sumIndirect + sumEnvNee) * invN + restirDirect + restirPathIndirect, restirM);
+    // GI-ENH §6.2.2: this is the PARTIAL composite — the path-reservoir indirect
+    // term and its M are added by combineMain (kept out of the alpha overwrite).
+    hdrImage[px] = float4(hdrImage[px].xyz + (sumIndirect + sumEnvNee) * invN + restirDirect, restirM);
 }
