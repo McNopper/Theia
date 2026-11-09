@@ -183,7 +183,7 @@ DEFAULT_EXTS = [".hpp", ".cpp", ".h", ".c"]
 DEFAULT_EXCLUDES = ["build", "_deps", ".git"]
 DOC_CANDIDATES = ["docs/ARCHITECTURE.md", "ARCHITECTURE.md", "tools/ARCHITECTURE.md"]
 VSWHERE = os.path.join(
-    os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+    os.environ.get("PROGRAMFILES(X86)", r"C:\Program Files (x86)"),
     "Microsoft Visual Studio",
     "Installer",
     "vswhere.exe",
@@ -318,7 +318,7 @@ class Contract:
                     f"{path}: cannot parse contract line: {raw.strip()!r}"
                 )
 
-        dupes = sorted({l for l in layers if layers.count(l) > 1})
+        dupes = sorted({layer for layer in layers if layers.count(layer) > 1})
         if dupes:
             raise ContractError(f"{path}: duplicate layer declarations {dupes}")
         self.stack = layers  # bottom-up: first = the bottom
@@ -1285,13 +1285,13 @@ def compute_smells(contract, files, file_mod, mod_edges, file_lines):
             mod_files[m] = mod_files.get(m, 0) + 1
             mod_lines[m] = mod_lines.get(m, 0) + file_lines.get(p, 0)
         for m in mods:
-            f, l = mod_files.get(m, 0), mod_lines.get(m, 0)
-            if f >= lim["files"] or l >= lim["lines"]:
+            files_n, lines_n = mod_files.get(m, 0), mod_lines.get(m, 0)
+            if files_n >= lim["files"] or lines_n >= lim["lines"]:
                 smells.append(
                     {
                         "kind": "large module",
                         "subject": m,
-                        "note": f"{f} files, {l} lines (Large Class proxy)",
+                        "note": f"{files_n} files, {lines_n} lines (Large Class proxy)",
                     }
                 )
     return smells
