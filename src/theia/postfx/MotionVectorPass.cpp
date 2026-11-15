@@ -72,9 +72,10 @@ bool MotionVectorPass::createImage() noexcept {
 }
 
 bool MotionVectorPass::createPipeline(const char* spvName) noexcept {
-    // Binding 0: GI G-buffer (sampled image — integer Load, no sampler needed)
+    // Binding 0: GI G-buffer (sampled image - integer Load, no sampler needed)
     // Binding 1: motion vector output (storage image, R32G32F)
     // Binding 2: prevInstanceTransforms (storage buffer, one float4x4 per instance)
+    // Binding 3: instanceTransforms (current frame; ANI3 - undo curT before prevT)
     const std::array bindings{
         VkDescriptorSetLayoutBinding{
             .binding = 0,
@@ -92,6 +93,13 @@ bool MotionVectorPass::createPipeline(const char* spvName) noexcept {
         },
         VkDescriptorSetLayoutBinding{
             .binding = 2,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .descriptorCount = 1,
+            .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+            .pImmutableSamplers = nullptr,
+        },
+        VkDescriptorSetLayoutBinding{
+            .binding = 3,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             .descriptorCount = 1,
             .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
@@ -168,8 +176,9 @@ void MotionVectorPass::record(VkCommandBuffer cmd, const FrameParams& params) no
     if (m_pipeline == VK_NULL_HANDLE || !m_motionVectorImage.isValid()) {
         return;
     }
-    // Guard: prev-instance-transform buffer must be valid before we can push the descriptor.
-    if (params.prevInstanceTransformBuffer == VK_NULL_HANDLE) {
+    // Guard: both instance-transform buffers must be valid before we can push the
+    // descriptors (null before the scene is loaded).
+    if (params.prevInstanceTransformBuffer == VK_NULL_HANDLE || params.instanceTransformBuffer == VK_NULL_HANDLE) {
         return;
     }
 
@@ -197,7 +206,8 @@ void MotionVectorPass::record(VkCommandBuffer cmd, const FrameParams& params) no
 
     // Push descriptors: binding 0 = giBuffer (sampled, SHADER_READ_ONLY_OPTIMAL after GiPass),
     //                   binding 1 = motion vector output (storage, GENERAL),
-    //                   binding 2 = prevInstanceTransforms (storage buffer).
+    //                   binding 2 = prevInstanceTransforms (storage buffer),
+    //                   binding 3 = instanceTransforms (current frame, ANI3).
     const VkDescriptorImageInfo giInfo{
         .sampler = VK_NULL_HANDLE,
         .imageView = m_cfg.giBufferView,
@@ -210,6 +220,11 @@ void MotionVectorPass::record(VkCommandBuffer cmd, const FrameParams& params) no
     };
     const VkDescriptorBufferInfo prevTransformInfo{
         .buffer = params.prevInstanceTransformBuffer,
+        .offset = 0,
+        .range = VK_WHOLE_SIZE,
+    };
+    const VkDescriptorBufferInfo curTransformInfo{
+        .buffer = params.instanceTransformBuffer,
         .offset = 0,
         .range = VK_WHOLE_SIZE,
     };
@@ -243,6 +258,16 @@ void MotionVectorPass::record(VkCommandBuffer cmd, const FrameParams& params) no
             .descriptorCount = 1,
             .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
             .pBufferInfo = &prevTransformInfo,
+        },
+        VkWriteDescriptorSet{
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .pNext = nullptr,
+            .dstSet = VK_NULL_HANDLE,
+            .dstBinding = 3,
+            .dstArrayElement = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &curTransformInfo,
         },
     };
 

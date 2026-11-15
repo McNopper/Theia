@@ -70,6 +70,7 @@ MotionVectorPass::FrameParams Application::buildMotionVectorParams(const sm::flo
     mvp.prevViewProj = m_prevViewProjValid ? m_prevViewProj : curViewProj;
     mvp.invCurViewProj = sm::inverse(curViewProj);
     mvp.prevInstanceTransformBuffer = m_scene->prevInstanceTransformBuffer().handle();
+    mvp.instanceTransformBuffer = m_scene->instanceTransformBuffer().handle(); // ANI3: undo curT before prevT
     return mvp;
 }
 

@@ -45,6 +45,9 @@ class MotionVectorPass {
         /// Must remain valid until record() returns.  May be VK_NULL_HANDLE on the first
         /// frame before the scene is loaded (record() is a no-op in that case).
         VkBuffer prevInstanceTransformBuffer = VK_NULL_HANDLE;
+        /// ANI3: current-frame world transforms (the buffer the mesh/GI shaders shade
+        /// with) - the shader undoes curT before applying prevT.  Same null contract.
+        VkBuffer instanceTransformBuffer = VK_NULL_HANDLE;
     };
 
     MotionVectorPass() = default;

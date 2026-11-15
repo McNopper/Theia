@@ -90,6 +90,28 @@ class Scene : public harmonia::scene::SceneBase {
     /// harmonia::scene_rt; call once per logical frame before recordFrame() and
     /// reset the accumulation when it advanced an animated scene.
     [[nodiscard]] VkResult updateTlas(const harmonia::DeviceContext& ctx, const harmonia::core::CommandPool& pool);
+
+    /// ANI3: refresh the raster/GI instance-transform GPU buffers after animation
+    /// stamping. Invoked BY updateTlas() (before it consumes the dirty flag) - do not
+    /// call it directly: two syncs between two stamps would shift PREV twice. The
+    /// CURRENT buffer receives the newly stamped transforms; the PREV buffer receives
+    /// what the CURRENT one held (the last rendered frame; the build-time rest pose on
+    /// the first sync) - the transform motion_vector.comp reprojects with. In-place
+    /// Buffer::uploadData keeps the handles stable (no descriptor/lifetime churn) and
+    /// its staging copy is queue-ordered behind this queue's prior submissions, so an
+    /// in-flight frame never observes a half-updated set. Static scenes never go dirty
+    /// -> exact no-op.
+    void syncInstanceTransforms();
+
+    /// ANI3 test receipts: CPU mirrors of the GPU transform buffers' contents
+    /// (m_synced* = CURRENT buffer, m_prevSynced* = PREV buffer).
+    [[nodiscard]] const std::vector<sm::float4x4>& syncedInstanceTransforms() const noexcept {
+        return m_syncedInstanceTransforms;
+    }
+    [[nodiscard]] const std::vector<sm::float4x4>& prevSyncedInstanceTransforms() const noexcept {
+        return m_prevSyncedInstanceTransforms;
+    }
+
     [[nodiscard]] const harmonia::core::Buffer& instanceBuffer() const noexcept { return m_instanceBuffer; }
     [[nodiscard]] const harmonia::core::Buffer& instanceBoundsBuffer() const noexcept { return m_instanceBoundsBuffer; }
     [[nodiscard]] const harmonia::core::Buffer& materialBuffer() const noexcept { return m_materialBuffer; }
@@ -197,6 +219,11 @@ class Scene : public harmonia::scene::SceneBase {
     harmonia::core::Buffer m_emissiveCdfBuffer{};
     harmonia::core::Buffer m_instanceTransformBuffer{};
     harmonia::core::Buffer m_prevInstanceTransformBuffer{};
+    /// ANI3: CPU mirrors of the two GPU transform buffers (see syncInstanceTransforms).
+    /// m_synced* starts as the build-time pose (both buffers hold it) and advances one
+    /// stamp per sync; m_prevSynced* always mirrors the PREV buffer.
+    std::vector<sm::float4x4> m_syncedInstanceTransforms;
+    std::vector<sm::float4x4> m_prevSyncedInstanceTransforms;
     harmonia::core::Buffer m_objectIdBuffer{};
     std::uint32_t m_emissiveTriangleCount = 0;
     std::uint32_t m_lightCount = 0;

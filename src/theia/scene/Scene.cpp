@@ -49,7 +49,32 @@ VkResult Scene::finishBuild(const harmonia::DeviceContext& ctx, const harmonia::
 }
 
 VkResult Scene::updateTlas(const harmonia::DeviceContext& ctx, const harmonia::core::CommandPool& pool) {
+    // ANI3: keep the raster/GI instance transforms in step with the animation stamp
+    // BEFORE the scene_rt update consumes the dirty flag (the mesh/GI shaders and the
+    // motion-vector pass read these buffers; only the TLAS knew about stamped poses).
+    syncInstanceTransforms();
     return harmonia::scene_rt::updateTlas(*this, ctx, pool, m_tlas, m_tlasAddress, m_tlasUpdateCapable, m_tlasUpdates);
+}
+
+void Scene::syncInstanceTransforms() {
+    if (!instancesDirty()) {
+        return; // nothing stamped since the last sync (static scenes never get here dirty)
+    }
+    const std::size_t instCount = std::max<std::size_t>(m_instances.size(), 1);
+    std::vector<sm::float4x4> transforms(instCount, sm::float4x4(1.0f));
+    for (std::size_t i = 0; i < m_instances.size(); ++i) {
+        transforms[i] = m_instances[i].transform.matrix();
+    }
+    // PREV <- what the CURRENT buffer held (the last rendered frame; the build-time
+    // rest pose on the first sync), CURRENT <- the newly stamped pose. Both uploads
+    // are in-place (stable handles, see syncInstanceTransforms' contract in the header).
+    if (!m_syncedInstanceTransforms.empty()) {
+        m_prevInstanceTransformBuffer.uploadData(m_syncedInstanceTransforms.data(),
+                                                 m_syncedInstanceTransforms.size() * sizeof(sm::float4x4));
+    }
+    m_instanceTransformBuffer.uploadData(transforms.data(), transforms.size() * sizeof(sm::float4x4));
+    m_prevSyncedInstanceTransforms = m_syncedInstanceTransforms;
+    m_syncedInstanceTransforms = std::move(transforms);
 }
 
 std::uint32_t Scene::addSphereMesh(const harmonia::DeviceContext& ctx,
@@ -413,6 +438,10 @@ VkResult Scene::uploadSceneBuffers(const harmonia::DeviceContext& ctx,
             m_prevInstanceTransformBuffer)) {
         return r;
     }
+    // ANI3: seed the sync mirrors - both GPU buffers hold the build-time pose, so the
+    // first sync pushes this pose into PREV and the first stamped pose into CURRENT.
+    m_syncedInstanceTransforms = instanceTransforms;
+    m_prevSyncedInstanceTransforms = std::move(instanceTransforms);
     std::vector<std::uint32_t> objectIds(instCount, 0u);
     for (std::uint32_t i = 0; i < static_cast<std::uint32_t>(m_instances.size()); ++i) {
         objectIds[i] = i;

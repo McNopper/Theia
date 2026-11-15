@@ -145,3 +145,43 @@ TEST_F(RtFixture, SceneAnim_StaticSceneRebuilds) {
     ASSERT_EQ(scene.updateTlas(ctx, commandPool()), VK_SUCCESS);
     EXPECT_EQ(scene.tlas(), handle1);
 }
+
+// ANI3: updateTlas() also syncs the raster/GI instance-transform buffers - CURRENT
+// receives the newly stamped pose, PREV the previously rendered one (the motion-vector
+// contract). Static/no-stamp updates must not shift the mirrors.
+TEST_F(RtFixture, SceneAnim_InstanceTransformSync) {
+    auto& ctx = deviceCtx();
+    Scene scene;
+    std::filesystem::path dir;
+    ASSERT_TRUE(loadAnimatedScene(scene, ctx, commandPool(), dir));
+    ASSERT_EQ(scene.build(ctx, commandPool()), VK_SUCCESS);
+
+    // Build seed: both GPU buffers (and their CPU mirrors) hold the rest pose.
+    const sm::float4x4 restPose = scene.instances()[0].transform.matrix();
+    ASSERT_EQ(scene.syncedInstanceTransforms().size(), 1U);
+    EXPECT_EQ(scene.syncedInstanceTransforms()[0], restPose);
+    EXPECT_EQ(scene.prevSyncedInstanceTransforms()[0], restPose);
+
+    // No stamp -> sync is an exact no-op (mirrors untouched).
+    ASSERT_EQ(scene.updateTlas(ctx, commandPool()), VK_SUCCESS);
+    EXPECT_EQ(scene.syncedInstanceTransforms()[0], restPose);
+    EXPECT_EQ(scene.prevSyncedInstanceTransforms()[0], restPose);
+
+    // First stamp (t = 1 s -> x = 4): CURRENT = stamped pose, PREV = last rendered
+    // frame's pose (the build rest pose).
+    scene.setAnimationTime(1.0F);
+    ASSERT_EQ(scene.updateTlas(ctx, commandPool()), VK_SUCCESS);
+    EXPECT_EQ(scene.syncedInstanceTransforms()[0], scene.instances()[0].transform.matrix());
+    EXPECT_EQ(scene.prevSyncedInstanceTransforms()[0], restPose);
+    const sm::float4x4 poseT1 = scene.instances()[0].transform.matrix();
+
+    // Second stamp (t = 0.5 s): PREV follows the last RENDERED frame (t = 1 pose),
+    // CURRENT gets the new stamp - this pair is what motion_vector.comp reprojects with.
+    scene.setAnimationTime(0.5F);
+    ASSERT_EQ(scene.updateTlas(ctx, commandPool()), VK_SUCCESS);
+    EXPECT_EQ(scene.syncedInstanceTransforms()[0], scene.instances()[0].transform.matrix());
+    EXPECT_EQ(scene.prevSyncedInstanceTransforms()[0], poseT1);
+    EXPECT_NE(scene.syncedInstanceTransforms()[0], poseT1) << "the stamp must advance the pose";
+
+    std::filesystem::remove_all(dir);
+}
