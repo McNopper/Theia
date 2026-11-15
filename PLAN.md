@@ -256,10 +256,6 @@ with warp count and pays at production resolution.
   **engagement gate PASS** (0.945 / SSIM 0.983369 / hist 0.999939 @ matched 128f);
   estimator-pure stability **bit-identical**; `--validation` clean with the cache on.
 - **GI-SMS** (caustics/SDS), **DN3** (converging denoiser — the à-trous replacement),
-  **DN1** (real-time neural denoising slot — **open, no adoptable candidate**: the former
-  RaNAD candidate was adjudicated no-go 2026-11-08 and struck from the pipeline 2026-11-09;
-  researched landscape in Harmonia §5.2 — FSR Ray Regeneration adjudicated out, I3D 2025
-  tracked paper-tier pending weights release; DN8/NRD the non-neural fallback),
   **C11** (ReSTIR SSS — brings Theia's realtime SSS onto the shared random-walk model
   Hyperion already runs → SSS parity), **C9/C12** (BSDF)
   — all tracked in `Harmonia/PLAN.md`. The removed PERF4/PERF5 items (tombstones in Harmonia PLAN section 5.1); what shipped stays shipped - PassTimer, the reconstructGiHitFromQuery salvage, and the calibrated gates (Baseline v0.8.0).
@@ -333,8 +329,8 @@ low-spp reference).
 - **Convergence-to-Hyperion litmus:** a technique is acceptable on the converging path only
   if its contribution → 0 as samples/frames → ∞, OR it lives in a real-time-only layer
   (denoise, TAA, culling) bypassed in reference/accumulation mode. Irreducible bias is
-  rejected from the converging path (presentation-only at most). Neural GI proxies are
-  rejected outright (see Harmonia/PLAN.md *Research triage*).
+  rejected from the converging path (presentation-only at most). Neural/AI techniques are permanently excluded (owner decision 2026-11-15, no revisit -
+  Harmonia section 8 guardrails).
 - Shared-BSDF contracts defined by Harmonia apply here verbatim (`Harmonia/PLAN.md`
   guardrails): dielectric sidedness (raw outward `GiHit.geoNormal`), the Chiang 2019
   terminator factor at every NEE/continuation site (Theia-side: `gi.comp.slang:899,1017`,
