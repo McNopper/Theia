@@ -111,6 +111,27 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx,
         m_radCacheBuf = std::move(*buf);
     }
 
+    // GI-PG S1: per-pixel selected-path chain buffer (binding 32). Sized from the
+    // configured extent; S1 default-off means it idles until S2/S3 enable the tier
+    // (S3 may revisit laziness — the paper-class 1080p footprint is ~1 GB).
+    {
+        const VkDeviceSize pgChainBytes = static_cast<VkDeviceSize>(cfg.width) * static_cast<VkDeviceSize>(cfg.height) *
+                                          static_cast<VkDeviceSize>(kPgChainSlots) * 16u;
+        auto buf =
+            harmonia::core::Buffer::create(ctx,
+                                           pgChainBytes,
+                                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                               VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                           VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                           "theia.gi.pgChains");
+        if (!buf) {
+            harmonia::core::Logger::error("GiPass: failed to create path-guiding chain buffer: VkResult {}",
+                                          static_cast<int>(buf.error()));
+            return false;
+        }
+        m_pgChainBuf = std::move(*buf);
+    }
+
     m_reservoirPingPong = 0;
     m_reservoirsCleared = false;
     m_pathReservoirPingPong = 0;
@@ -188,6 +209,7 @@ void GiPass::shutdown() {
     m_pathReservoirsCleared = false;
     m_pathReservoirPingPong = 0;
     m_radCacheBuf = {};
+    m_pgChainBuf = {};
     m_replayRecordsBuf[0] = {};
     m_replayRecordsBuf[1] = {};
     m_replayCountBuf[0] = {};
@@ -215,7 +237,7 @@ void GiPass::shutdown() {
 }
 
 bool GiPass::createDescriptors() {
-    const std::array<VkDescriptorSetLayoutBinding, 32> bindings{{
+    const std::array<VkDescriptorSetLayoutBinding, 33> bindings{{
         {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // TLAS
         {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // hdr (RW)
         {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // giBuffer
@@ -264,11 +286,13 @@ bool GiPass::createDescriptors() {
                                                                                           // results (RW)
         {31, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI-NRC world-space
                                                                                           // radiance cache (RW)
+        {32, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI-PG S1 per-pixel
+                                                                                          // selected-path chains (RW)
     }};
 
     // MOD1: no UPDATE_AFTER_BIND — incompatible with DESCRIPTOR_BUFFER layouts.
     constexpr VkDescriptorBindingFlags kTextureFlags = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
-    const std::array<VkDescriptorBindingFlags, 32> bindingFlags{
+    const std::array<VkDescriptorBindingFlags, 33> bindingFlags{
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, kTextureFlags, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
@@ -397,6 +421,10 @@ void GiPass::updateDescriptors(const FrameParams& params) {
         if (m_radCacheBuf.isValid()) {
             w.writeStorageBufferHandle(*m_ctx, 31, m_radCacheBuf);
         }
+        // GI-PG S1: per-pixel selected-path chain buffer (frame-independent, all slots).
+        if (m_pgChainBuf.isValid()) {
+            w.writeStorageBufferHandle(*m_ctx, 32, m_pgChainBuf);
+        }
 
         // Bindless textures (binding 13) — write when scene changes.
         if (texturesDirty) {
@@ -488,13 +516,15 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
     // GI2 full PT: same for the path reservoir buffers. GI-NRC: same for the
     // radiance-cache table (stamp 0 = empty record).
     if (!m_reservoirsCleared && m_reservoirBuf[0].isValid() && m_reservoirBuf[1].isValid() &&
-        m_pathReservoirBuf[0].isValid() && m_pathReservoirBuf[1].isValid() && m_radCacheBuf.isValid()) {
+        m_pathReservoirBuf[0].isValid() && m_pathReservoirBuf[1].isValid() && m_radCacheBuf.isValid() &&
+        m_pgChainBuf.isValid()) {
         vkCmdFillBuffer(cmd, m_reservoirBuf[0].handle(), 0, VK_WHOLE_SIZE, 0u);
         vkCmdFillBuffer(cmd, m_reservoirBuf[1].handle(), 0, VK_WHOLE_SIZE, 0u);
         vkCmdFillBuffer(cmd, m_pathReservoirBuf[0].handle(), 0, VK_WHOLE_SIZE, 0u);
         vkCmdFillBuffer(cmd, m_pathReservoirBuf[1].handle(), 0, VK_WHOLE_SIZE, 0u);
         vkCmdFillBuffer(cmd, m_radCacheBuf.handle(), 0, VK_WHOLE_SIZE, 0u);
-        const std::array<VkBufferMemoryBarrier2, 5> fillBarriers{{
+        vkCmdFillBuffer(cmd, m_pgChainBuf.handle(), 0, VK_WHOLE_SIZE, 0u);
+        const std::array<VkBufferMemoryBarrier2, 6> fillBarriers{{
             {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
              .srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT,
              .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
@@ -543,6 +573,16 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
              .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
              .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
              .buffer = m_radCacheBuf.handle(),
+             .offset = 0,
+             .size = VK_WHOLE_SIZE},
+            {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+             .srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT,
+             .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+             .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+             .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
+             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+             .buffer = m_pgChainBuf.handle(),
              .offset = 0,
              .size = VK_WHOLE_SIZE},
         }};
@@ -661,6 +701,7 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         .smsEnabled = m_smsFrameActive ? 1U : 0U,
         .materialLodEnabled = params.materialLodEnabled ? 1u : 0u,
         .radianceCacheEnabled = params.radianceCacheEnabled ? 1u : 0u,
+        .pathGuidingEnabled = params.pathGuidingEnabled ? 1u : 0u,
     };
 
     const bool replayCompaction = (pc.restirPtPathEnabled != 0u) && m_replayCountBuf[0].isValid() &&

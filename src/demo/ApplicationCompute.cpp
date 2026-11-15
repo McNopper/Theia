@@ -52,6 +52,9 @@ GiPass::FrameParams Application::buildGiFrameParams(const sm::float4x4& view,
     const bool rcSceneOk = m_scene != nullptr && !m_scene->hasAnimation();
     gp.radianceCacheEnabled =
         rcSceneOk && (m_forceRadianceCache >= 0 ? (m_forceRadianceCache != 0) : !m_pureEstimatorCapture);
+    // GI-PG S1: chain capture only (no image effect — S2/S3 add the reader + guided
+    // sampling). Default OFF everywhere; THEIA_PATH_GUIDING=1 forces it on.
+    gp.pathGuidingEnabled = m_pathGuidingForced;
     return gp;
 }
 

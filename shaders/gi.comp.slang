@@ -63,6 +63,8 @@ cbuffer GiPC {
                                           // 0 = estimator-pure capture — full material everywhere
     uint     radianceCacheEnabled;        // GI-NRC: 1 = world-space radiance-cache tier active
                                           // (interactive); 0 = estimator-pure capture
+    uint     pathGuidingEnabled;          // GI-PG S1: 1 = candidate-walk chain capture active
+                                          // (splat source for S2); default OFF until S3
 };
 
 // ── A4: ReSTIR DI reservoir type ──────────────────────────────────────────────
@@ -342,6 +344,19 @@ struct RadCacheRecord {
     uint   stamp;
 };
 [[vk::binding(31, 0)]] RWStructuredBuffer<RadCacheRecord> t_radCache;
+
+// ── GI-PG S1 (ReSTIR PG path guiding): per-pixel selected-path chain storage ───
+// Splat source for S2's spatial-hash + vMF fit. Flat float4 layout (no struct
+// stride ambiguity): per pixel, base = pixelIdx * kPgChainSlots;
+//   [base]                = float4(count, 0, 0, 0)      (count <= kPgChainDepth)
+//   [base + 1 + 3*i]      = float4(pos.xyz, asfloat(materialIdx))
+//   [base + 2 + 3*i]      = dir.xyz (incident/continuation direction at vertex i)
+//   [base + 3 + 3*i]      = normal.xyz (shading normal)
+// Written ONLY by the initial-candidate walk (traceGiPathCandidate) while
+// pathGuidingEnabled (S1 default OFF — behavior-off until S3).
+static const uint kPgChainDepth = 10u;              // chain cap (scenes run <= 9 bounces)
+static const uint kPgChainSlots = 1u + 3u * kPgChainDepth; // 31 x 16 B = 496 B/pixel
+[[vk::binding(32, 0)]] RWStructuredBuffer<float4>   t_pgChains;
 
 float cgnsNeighborScale(float queryDist) {
     return max(1.0e-8, sqrt(kCgnsSolidAngle / kPi) * queryDist);
@@ -1223,7 +1238,10 @@ float4 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
 
 bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp, bool includePrimaryEnvNee,
                           out float3 outIndirect, out float3 outEnvNee,
-                          bool captureRe, bool disableRR, out ReconnectionCapture outRec) {
+                          bool captureRe, bool disableRR, out ReconnectionCapture outRec,
+                          // GI-PG S1: candidate-only chain capture for the splat stage (S2).
+                          // Defaults keep every other caller (legacy/replay) untouched.
+                          bool chainCapture = false, uint2 chainPx = uint2(0, 0)) {
     outIndirect = 0.0.xxx;
     outEnvNee = 0.0.xxx;
     outRec = makeEmptyReconnectionCapture();
@@ -1418,6 +1436,10 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
     // receiver / reflection caster), mirroring the A3(a) and PERF8 exemptions; SMS
     // contributions that do land in the cache are ordinary lighting (EMA-stable).
     const bool radCacheActive = radianceCacheEnabled != 0u;
+    // GI-PG S1: chain capture state (candidate walk only — caller decides via
+    // chainCapture). Pixel base for the flat float4 chain buffer.
+    const uint pgPixelBase = (chainPx.y * uint(screenWidth) + chainPx.x) * kPgChainSlots;
+    uint pgCount = 0u;
     if (materialLodEnabled != 0u) {
         const float primDist = max(length(primary.position - cameraPos.xyz), 1e-4);
         coneRadius = primDist * (2.0 * tanHalfFovY) / float(max(screenHeight, 1u));
@@ -1602,6 +1624,18 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
             snapThr[snapCount] = state.throughput;
             ++snapCount;
         }
+        // ── GI-PG S1 chain push: vertex slot = 1 + 3*i (pos+materialIdx, dir, normal).
+        // The continuation dir is written after integrate (state.nextDirection); a
+        // pass-through pops the slot (no real interaction — same discipline as GI-NRC).
+        bool pgPushed = false;
+        if (chainCapture && pgCount < kPgChainDepth) {
+            const uint slot = pgPixelBase + 1u + 3u * pgCount;
+            t_pgChains[slot] = float4(surf.position, asfloat(h.materialIdx));
+            t_pgChains[slot + 1u] = float4(0.0, 0.0, 0.0, 0.0); // dir: written post-integrate (0 = terminal vertex)
+            t_pgChains[slot + 2u] = float4(surf.normal, 0.0);
+            ++pgCount;
+            pgPushed = true;
+        }
         state.depth = bounce + primaryCharge;
         integrateSurface(tracer, surf,
             emissiveTriangleCount, emissiveTriangles, emissiveCdf,
@@ -1685,7 +1719,15 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
             if (radCacheActive && snapCount > 0u) {
                 --snapCount; // no surface interaction happened - nothing to fill
             }
+            if (pgPushed) {
+                --pgCount; // same: a pass-through is not a chain vertex
+            }
             continue; // null interaction: same ray, same bounce index
+        }
+        // GI-PG S1: write the continuation (incident) direction of the vertex just
+        // integrated — the quantity S2's vMF density estimation clusters.
+        if (pgPushed) {
+            t_pgChains[pgPixelBase + 2u + 3u * (pgCount - 1u)] = float4(state.nextDirection, 0.0);
         }
         ++bounce;
 
@@ -1725,6 +1767,12 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
             upd.stamp = frameSampleIndex + 1u;
             t_radCache[snapCell[s]] = upd;
         }
+    }
+
+    // ── GI-PG S1: publish the chain length (count <= kPgChainDepth; slots beyond it
+    // are stale-but-unread — S2 bounds every read by this header). ──
+    if (chainCapture) {
+        t_pgChains[pgPixelBase] = float4(float(pgCount), 0.0, 0.0, 0.0);
     }
 
     float3 indirectPrimaryEnvNee = primaryEnvNee * exposure;
@@ -1776,9 +1824,11 @@ bool estimateGiSample(SurfaceHit primary, RngState seed, float adaptiveClamp,
 /// estimateGiSample's envNee channel (emissive scenes) or the DI reservoir
 /// (IBL-only scenes), so the path reservoir never double-counts it.
 bool traceGiPathCandidate(SurfaceHit primary, RngState seed, float adaptiveClamp, out float3 outG,
-                          out ReconnectionCapture outRec) {
+                          out ReconnectionCapture outRec, bool chainCapture = false,
+                          uint2 chainPx = uint2(0, 0)) {
     float3 envNeeUnused;
-    return estimateGiSampleCore(primary, seed, adaptiveClamp, false, outG, envNeeUnused, true, false, outRec);
+    return estimateGiSampleCore(primary, seed, adaptiveClamp, false, outG, envNeeUnused, true, false, outRec,
+                                chainCapture, chainPx);
 }
 
 /// GI-ENH §6.2.4: replay variant — disables Russian roulette to avoid killing valid
@@ -2359,7 +2409,11 @@ void restirPtEmit(SurfaceHit primary, uint2 px, float adaptiveClamp, inout RngSt
         const RngState candSeed = pathCandidateSeed(px, 0u);
         float3 g;
         ReconnectionCapture recL = makeEmptyReconnectionCapture();
-        const bool valid = traceGiPathCandidate(primary, candSeed, adaptiveClamp, g, recL);
+        // GI-PG S1: the initial-candidate walk also records its vertex chain
+        // (pos/materialIdx, incident dir, normal) into the per-pixel splat buffer
+        // while pathGuidingEnabled (default OFF until S3; no image effect in S1).
+        const bool valid =
+            traceGiPathCandidate(primary, candSeed, adaptiveClamp, g, recL, pathGuidingEnabled != 0u, px);
         float3 shadeScratch = 0.0.xxx; // the merge coin lives in restirPtComplete's dedicated stream now
         pathReservoirUpdate(rLocal, candSeed, g, valid, shadeScratch, recL, rng);
         // Unbiased weight of the local reservoir (neighbours merge with w = p̂·W·M).

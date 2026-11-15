@@ -142,6 +142,11 @@ class GiPass {
         /// Also forced off for animated scenes (world-static table); SMS frames use the
         /// per-surface smsPhysicalEvent exclusion instead of a blanket gate.
         bool radianceCacheEnabled = true;
+        /// GI-PG S1: candidate-walk chain capture into the per-pixel splat buffer.
+        /// S1 default OFF (behavior-off: nothing reads the buffer until S2's splat/fit
+        /// passes exist); THEIA_PATH_GUIDING=1 forces it for plumbing tests; S3 flips
+        /// the default ON once guided sampling lands.
+        bool pathGuidingEnabled = false;
     };
 
     GiPass() = default;
@@ -211,10 +216,12 @@ class GiPass {
                                                 ///< 0 = estimator-pure capture (full material everywhere)
         std::uint32_t radianceCacheEnabled = 1; ///< GI-NRC: 1 = world-space radiance-cache tier
                                                 ///< active (interactive); 0 = estimator-pure capture
+        std::uint32_t pathGuidingEnabled = 0;   ///< GI-PG S1: 1 = candidate chain capture (plumbing;
+                                                ///< S1 default 0 = behavior-off until S3)
     };
     // Layout guard: must equal the Slang `GiPC` struct exactly (2×float4x4 + float4
-    // + 25 scalars = 144 + 100 = 244). Stays within the existing 256-byte device budget.
-    static_assert(sizeof(GiPushConstants) == 244);
+    // + 26 scalars = 144 + 104 = 248). Stays within the existing 256-byte device budget.
+    static_assert(sizeof(GiPushConstants) == 248);
 
     [[nodiscard]] bool createDescriptors();
     [[nodiscard]] bool createPipelineLayout();
@@ -292,13 +299,22 @@ class GiPass {
     /// GI-NRC: world-space radiance-cache table (binding 31, 2 MiB, persistent
     /// across frames — zero-filled once with the reservoir one-time clear).
     harmonia::core::Buffer m_radCacheBuf{};
+    /// GI-PG S1: per-pixel selected-path chains (binding 32, 496 B/pixel; sized from
+    /// the configured extent — small at receipt resolutions, paper-class at 1080p).
+    harmonia::core::Buffer m_pgChainBuf{};
     /// GI-CG: the former Gaussian pairing maps (binding 22) were removed 2026-11-15 —
     /// the CGNS compatibility score supersedes their neighbor-selection role.
 
-    // ── GI-NRC: world-space radiance-cache table (binding 31) ─────────────────
+    // ── GI-PG: world-space radiance-cache table (binding 31) ─────────────────
     // MUST match the shader's kRadCacheSlots (gi.comp.slang): 2^17 hashed world-cell
     // records x {float3 rgb, uint stamp} = 2 MiB, persistent across frames.
     static constexpr std::uint32_t kRadCacheSlots = 1u << 17;
+
+    // ── GI-PG S1: per-pixel selected-path chain buffer (binding 32) ───────────
+    // MUST match the shader's kPgChainSlots (gi.comp.slang): header float4 + 3 float4
+    // per vertex x kPgChainDepth(10) = 31 slots = 496 B/pixel (the paper's own
+    // ~102.8 MB/bounce class at 1080p; trivial at 320p receipts).
+    static constexpr std::uint32_t kPgChainSlots = 31u;
 
     // ── GI-ENH §6.2.2 replay stream compaction (bindings 27-30) ──────────────
     // Three-kernel split: emit (main) → uniform replay (replayMain) → combine

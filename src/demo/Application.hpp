@@ -175,6 +175,9 @@ class Application final : public harmonia::app::App,
     /// GI-NRC (radiance cache): -1 = auto (interactive on / estimator-pure capture off,
     /// also off for animated scenes), 0/1 = forced by THEIA_RADIANCE_CACHE (A/B harness).
     int m_forceRadianceCache = -1;
+    /// GI-PG: THEIA_PATH_GUIDING=1 forces the chain-capture/guiding tier. S1 default
+    /// OFF everywhere (behavior-off plumbing; S3 flips the auto default ON).
+    bool m_pathGuidingForced = false;
     std::uint32_t m_sceneMaxDepth = 3u;
 
     /// Previous frame's row-major view-projection matrix for motion vector computation.

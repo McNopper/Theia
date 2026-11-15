@@ -316,7 +316,9 @@ path. Both paths share one task-shader entry point (`gid.x = 0..visibleCount-1`)
   (GI-ENH (a) reconnection shift off — replay-only, for A/B measurement), `THEIA_MATERIAL_LOD=0|1`
   (PERF8 material-LOD tier force-off/-on; default = interactive ON, estimator-pure capture OFF),
   `THEIA_RADIANCE_CACHE=0|1` (GI-NRC world-space radiance-cache force-off/-on; default =
-  interactive ON, capture OFF, animated scenes always OFF), `THEIA_SHIFT_MASK=<n>` (GI-ENH (a) shift MODE, mirroring the reference's `kShiftStrategy`):
+  interactive ON, capture OFF, animated scenes always OFF), `THEIA_PATH_GUIDING=1`
+  (GI-PG path guiding — S1 currently wires candidate-walk chain capture only; default OFF
+  until S3 lands guided sampling), `THEIA_SHIFT_MASK=<n>` (GI-ENH (a) shift MODE, mirroring the reference's `kShiftStrategy`):
   0 = RandomReplay (no shift), 1 = Reconnection, 2 = Hybrid, 3 = Hybrid (bit1 wins).
   1 = Reconnection: x_k at the first secondary hit, UNCONDITIONAL (reference:
   `!useHybridShift && path.length == 1`). 2/3 = Hybrid: x_k at the FIRST pair satisfying
