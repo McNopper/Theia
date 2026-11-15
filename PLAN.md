@@ -66,7 +66,7 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
   suite needs a GPU).
 - **Next:** the PERF4/PERF5 arc is **removed 2026-11-15** (measured does-not-serve Theia real-time; tombstones + triggers in Harmonia PLAN section 5.1; the design/stage record stays in git - Baseline v0.8.0).
   Theia's live items: **GI-ENH** remaining (paper-faithful hybrid-shift gaps —
-  prefix-replay invertibility, k≥4, sampled-lobe alpha; §"ReSTIR-PT refinements") and the
+  prefix-replay invertibility closed 2026-11-15, k≥4, sampled-lobe alpha; §"ReSTIR-PT refinements") and the
   shared-estimator adopters as they land in `Harmonia/PLAN.md` (C11, C12 wire into
   the shared passes).
 ## How to continue
