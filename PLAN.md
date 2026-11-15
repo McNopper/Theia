@@ -157,13 +157,27 @@ Multi-frame captures are run-to-run pixel-reproducible. **§6.2.2 replay stream
 compaction landed (2026-11-09)** — see below. Remaining:
 
 - **Hybrid shift, remaining (paper-faithful gaps - read `DQLin/ReSTIR_PT` before touching):**
-- *Prefix-replay invertibility.* The paper: "Shift invertibility is checked when connecting
-  from y_{k-1} to x_k." The CONNECTION-time half is implemented (near-field rejection on the
-  shifted edge, gated on Hybrid exactly as `computeShiftedIntegrandReconnection` does).
-  The PREFIX half is NOT: the reference's `handleHit` sets `invertible = false` on
-  non-invertible prefixes (NEE-bounce / diffuse-assignment cases) and
-  `invalidateAndTerminateReplayPath` zeroes `L`/`thp`. That needs the prefix-replay
-  generalisation below, and is the prime suspect for the residual -0.5% mean shift under k=3.
+- *Prefix-replay invertibility.* **CLOSED 2026-11-15 — full reference read, one check
+  ported, two cases adjudicated.** Reference read complete (DQLin/ReSTIR_PT `Shift.slang`
+  + `PathTracer.slang` handleHit 1196-1258, `invalidateAndTerminateReplayPath`,
+  `PathState.isLastVertexClassifiedAsRough` semantics). Outcomes: (1) **implemented** —
+  the PREFIX-side distance condition: `tryReconnectionShiftK3` rejects hop edges inside
+  d_min (0.1) before the Jacobian — the prefix counterpart of the existing connection-edge
+  reject, symmetric with the capture-side `h.dist >= kDMin` pair gate (the reference
+  evaluates `isFarField` per replay vertex and gates connect-eligibility on it).
+  (2) **N/A by architecture** — the reference's NEE-bounce prefix case cannot occur
+  here: this estimator's path edges are BSDF-sampled exclusively (NEE is a shadow-ray
+  term in `integrateSurface`), so no prefix edge carries NEE provenance.
+  (3) **deliberately not ported, recorded** — the diffuse-assignment condition
+  (reference line 1210): every literal mapping nullifies adaptive-k given our capture
+  gates, which the paper demonstrably retains; porting it blind would regress quality
+  under a green gate. Unblock: the Enhanced paper's own formulation (the 2022 Falcor
+  PathState lifecycle is ambiguous on this flag). The reference's invalid-value guards
+  (`isJacobianInvalid`/`isfinite`) were already present in our tail.
+  **Receipts:** module suite 60/60; dragon_teapot before/after **bit-identical**
+  (mean_diff 0.000, SSIM 1.000000, ictec_dE 0) — no regression; the row's own
+  "k=3 is barely hit on the test scenes" note explains why the new guard shows no
+  delta here (the *Exercising k=3* bullet owns that coverage).
 - *k >= 4*: the reference's `rcVertexLength` is adaptive over the whole path; ours is capped
   at the second surface because only the k=2 (no replay) and k=3 (one-hop) shift bodies exist.
 - *alpha from sampled lobes*: the paper uses "a from the path's sampled lobes"; we use the

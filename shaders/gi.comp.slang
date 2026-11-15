@@ -1759,6 +1759,22 @@ bool tryReconnectionShiftK3(SurfaceHit primary, PathReservoir neighbor, float ad
     if (rec.kLevel < 2u || (rec.flags & 0x3Fu) != 0x3Fu || rec.opacityXk < 1.0) {
         return false;
     }
+    // Prefix-replay invertibility, reference read (DQLin/ReSTIR_PT PathTracer.slang
+    // handleHit 1196-1258 + invalidateAndTerminateReplayPath; Shift.slang):
+    //  - NEE-bounce prefix case: N/A BY ARCHITECTURE - this estimator's path edges
+    //    are BSDF-sampled exclusively (the hop capture stores `dir`/`nextDirection`
+    //    BSDF samples; NEE is a separate shadow-ray term in integrateSurface), so
+    //    no prefix edge can carry NEE provenance to invalidate.
+    //  - delta-edge case: covered by the roughness gates (capture pairRough >= 0.2,
+    //    rough2 >= 0.2 below, x_k capture-time roughness).
+    //  - distance-condition case: implemented as the hop-edge far-field reject
+    //    below (the prefix counterpart of the connection-edge distXk reject).
+    //  - diffuse-assignment condition (reference line 1210): NOT ported - its
+    //    literal readings nullify adaptive-k entirely (given our capture gates),
+    //    which the paper demonstrably retains; mapping needs the Enhanced paper's
+    //    own formulation (recorded in Theia/PLAN.md gap 1). The reference's
+    //    invalid-value guards (isJacobianInvalid / isfinite) are already present
+    //    at the tail (reconnectionJacobianValid + isfinite + positivity).
     // Opacity-gate mixture at MY primary (same convention as k=2).
     const float primaryOpacity = saturate(primary.mat.opacityFlagsPad.x);
     if (randFloat(rng) < (1.0 - primaryOpacity)) {
@@ -1778,6 +1794,19 @@ bool tryReconnectionShiftK3(SurfaceHit primary, PathReservoir neighbor, float ad
     // Eligibility at x'_2: non-delta edge, no medium, roughness guard.
     const float rough2 = saturate(surf2.mat.specularRoughAnisoIor.x);
     if (rough2 < 0.2) {
+        return false;
+    }
+
+    // ── Prefix-side distance condition (the PREFIX half the reference checks per
+    // replay vertex: PathTracer.slang `isFarField = |origin - prevOrigin| >=
+    // nearFieldDistance` + the connect-eligibility gate `DistanceCondition &&
+    // !isFarField -> cannot connect`). The CONNECTION edge already rejects
+    // near-field below (distXk); the HOP edge must too — symmetric with the
+    // capture-side gate (`h.dist >= kDMin`, hybrid pair selection) and with the
+    // 1/dist^2 Jacobian term (geomGTargetHop) that a sub-dMin hop would blow up.
+    // Reject (not clamp) → the unbiased replay fallback, as every other gate here.
+    const float distHop2Max = dot(h2.worldPos - primary.position, h2.worldPos - primary.position);
+    if (distHop2Max < 0.1F * 0.1F) {   // d_min = nearFieldDistance (Params.slang), squared
         return false;
     }
 
@@ -1893,7 +1922,7 @@ bool tryReconnectionShiftK3(SurfaceHit primary, PathReservoir neighbor, float ad
     // G-target terms computed at shift time (destination cosine / dist², same measure).
     // Technique split as in k=2: the k = d (NEE) terms take jacEnd, the continuation past
     // x_k takes jacCont carrying p^y_k(ω_k)/p^x_k(ω_k) (paper Eq. 2, k = d ⇒ p^x_k ≡ 1).
-    const float distHop2 = max(dot(h2.worldPos - primary.position, h2.worldPos - primary.position), 1.0e-12);
+    const float distHop2 = max(distHop2Max, 1.0e-12);
     const float geomGTargetHop = max(dot(h2.shadingNormal, -hopDir), 0.0) / distHop2;
     const float geomGTargetEdge = max(dot(surfK.normal, woK), 0.0) / max(distXk * distXk, 1.0e-12);
     const float jacEndDenom = rec.pdfEdgeIn * rec.geomGHop1Source * rec.pdfInK * rec.geomGInKSource;
