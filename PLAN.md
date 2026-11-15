@@ -84,7 +84,7 @@ unaffected - SMS reservoirs are a different mechanism and are the published
 method. Follow-ups are recorded at the top of this plan; new SMS work starts
 from the follow-up list, never from re-litigating the qualified estimator.
 
-**Non-SMS active items** live in the Roadmap below (ANI3 and CH-T1) and in the family plans (`Harmonia/PLAN.md` is the estimator
+**Non-SMS active items** live in the Roadmap below (ANI3) and in the family plans (`Harmonia/PLAN.md` is the estimator
 authority).
 ### Roadmap
 
@@ -115,7 +115,7 @@ ViewAccumulationGate, and the reconstructGiHitFromQuery salvage.
       Method Object for `ForwardRenderer.cpp` (1342 lines) and `demo/Application.cpp` (1089 lines). Verdict first: split only where a seam is real; otherwise record accepted.
       Per-file bloat queue (`header_size`): DRAINED — `ForwardRenderer.cpp` split into
       `ForwardRenderer.cpp` (867) + `ForwardRendererPipelines.cpp` (499); `demo/Application.cpp`
-      into `Application.cpp` (839) + `ApplicationCompute.cpp` (273). `header_size: error` promoted. | — | **in progress** |
+      into `Application.cpp` (839) + `ApplicationCompute.cpp` (273). `header_size: error` promoted. **Review CLOSED 2026-11-15 - verdicts re-verified against the current tree:** the seven-module split stands (camera 128 / cull 812 / depth 390 / gi 1600 / pipelines 919 / postfx 834 / renderer 929 lines; gi grew with GI-ENH); the file splits stand at their evolved sizes (`pipelines/ForwardRendererPipelines.cpp` 919, `ForwardRenderer.cpp` 399, `Application.cpp` 791 + `ApplicationCompute.cpp` 193 - counts moved since the first record, structure intact); AR1 verified live (`harmonia/scene_rt` + the `Scene::createTriangleMesh`/`finishBuild` hooks - also the PERF3 substrate); T-03 verified (`harmonia::core::imageBarrier` consumed 4x in `ApplicationCompute.cpp`); T-04 verified (`Scene::uploadBuffer` adapter at `Scene.cpp:287`). The rig-extraction **REJECT** and the `theia/pipelines` TU-split **ACCEPT** verdicts stand; the arch engine's `demo`/`gi`/`renderer` large-module + orphan findings remain the documented **report-only** signals (contract: smells never fail a run). | - | **done** |
 
 Executed (file level): theia/renderer (23 files / 5093 lines) split into seven
 focused modules - renderer core (795), pipelines (933), cull (945), gi (975), postfx (913),
