@@ -220,8 +220,13 @@ with warp count and pays at production resolution.
   ForwardRendererPipelines (opaque/transparent/sky) + 6 compute (GiPass, GpuCullPass,
   LightCuller, Hi-Z, motion vectors, TAA); also speeds `.spv` hot-reload) —
   Harmonia covers the capability; Theia consumes.
-- **ANI2** (per-frame TLAS refit; machinery shipped 2026-11-09, Theia wiring open — **ANI1 is done upstream in Aether**,
-  `SceneAnimator::evaluate`), **ANI6** (animated parity gate; needs ANI7) - tracked in `Harmonia/PLAN.md`.
+- **ANI2** (per-frame TLAS refit — **done 2026-11-15, Theia half**: the 3-line
+  consumption of the shipped machinery — `finishBuild` with
+  `allowUpdate = hasAnimation()`, `Scene::updateTlas`, the per-frame tick
+  (`frameIndex / animationFps`) + `resetAccumulation()` in `Application::record`;
+  receipts `tests/module/test_scene_anim.cpp`, module suite 60/60. TAA /
+  motion-vector correctness for animated instances is **ANI3**, not ANI2;
+  **ANI1** was done upstream in Aether), **ANI6** (animated parity gate; needs ANI7) - tracked in `Harmonia/PLAN.md`.
 - **NH2** is **dropped** (the architecture directive settled compounding loader-side in
   Aether — NH1 **landed**; renderers consume the flat world-resolved list). Remaining
   hierarchy work (instanced-subtree buffer sharing) is a perf concern, not a feature —

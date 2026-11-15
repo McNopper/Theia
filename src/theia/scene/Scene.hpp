@@ -82,6 +82,14 @@ class Scene : public harmonia::scene::SceneBase {
 
     [[nodiscard]] VkAccelerationStructureKHR tlas() const noexcept { return m_tlas.handle(); }
     [[nodiscard]] VkDeviceAddress tlasAddress() const noexcept { return m_tlasAddress; }
+
+    /// ANI2 (PERF3 follow-through): apply a stamped-frame TLAS update — refit when
+    /// the TLAS was built update-capable (animated scenes), full rebuild otherwise
+    /// and periodically. No-op unless instance transforms changed since the last
+    /// update (SceneBase dirty flag). The shared refit-vs-rebuild policy lives in
+    /// harmonia::scene_rt; call once per logical frame before recordFrame() and
+    /// reset the accumulation when it advanced an animated scene.
+    [[nodiscard]] VkResult updateTlas(const harmonia::DeviceContext& ctx, const harmonia::core::CommandPool& pool);
     [[nodiscard]] const harmonia::core::Buffer& instanceBuffer() const noexcept { return m_instanceBuffer; }
     [[nodiscard]] const harmonia::core::Buffer& instanceBoundsBuffer() const noexcept { return m_instanceBoundsBuffer; }
     [[nodiscard]] const harmonia::core::Buffer& materialBuffer() const noexcept { return m_materialBuffer; }
@@ -142,6 +150,10 @@ class Scene : public harmonia::scene::SceneBase {
 
     harmonia::rt::AccelerationStructure m_tlas{};
     VkDeviceAddress m_tlasAddress{};
+    /// ANI2: whether the TLAS was built with allowUpdate (animated scenes) — the
+    /// shared scene_rt update policy needs this to pick refit vs rebuild.
+    bool m_tlasUpdateCapable = false;
+    std::uint32_t m_tlasUpdates = 0;
 
     std::uint32_t instanceMask(std::size_t instanceIndex) const override;
 

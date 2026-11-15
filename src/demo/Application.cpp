@@ -378,6 +378,22 @@ void Application::record(VkCommandBuffer cmd, const harmonia::app::RenderTarget&
     // arm the slot this frame's timestamp hooks write into (PassTimer::beginFrame).
     m_passTimer.beginFrame(frameIndex() % 2U);
 
+    // ANI2 (PERF3 follow-through): drive the shared TLAS update for animated
+    // scenes. Deterministic tick clock (Aether ANI2): seconds = frameIndex / fps,
+    // so the same logical frame always renders the same scene state. The update
+    // refits in place (periodic full rebuild) via the harmonia::scene_rt policy —
+    // host one-shot submissions, ordered before this frame's work. Motion
+    // invalidates the accumulation history (the offscreen path ignores the epoch
+    // by contract — animated sequence rendering is ANI7); TAA/motion-vector
+    // correctness for animated instances is ANI3 (tracked separately).
+    if (m_scene->hasAnimation()) {
+        m_scene->setAnimationTime(static_cast<float>(static_cast<double>(frameIndex()) / m_scene->animationFps()));
+        if (const VkResult r = m_scene->updateTlas(deviceContext(), commandPool()); r != VK_SUCCESS) {
+            harmonia::core::Logger::error("TLAS update failed: VkResult {}", static_cast<std::int32_t>(r));
+        }
+        resetAccumulation();
+    }
+
     m_renderer->setRngState(frameIndex(), config().rngSeed, config().deterministicReplay);
 
     const CameraMatrices cam = computeCameraMatrices(target);

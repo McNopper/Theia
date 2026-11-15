@@ -41,7 +41,15 @@ std::unique_ptr<harmonia::scene::Geometry> Scene::createTriangleMesh(const harmo
 }
 
 VkResult Scene::finishBuild(const harmonia::DeviceContext& ctx, const harmonia::core::CommandPool& pool) {
-    return harmonia::scene_rt::buildTlas(*this, ctx, pool, m_tlas, m_tlasAddress);
+    // ANI2 (PERF3): animated scenes build their TLAS update-capable so the
+    // per-frame path can refit in place; static scenes keep the plain build.
+    m_tlasUpdateCapable = hasAnimation();
+    return harmonia::scene_rt::buildTlas(
+        *this, ctx, pool, m_tlas, m_tlasAddress, harmonia::rt::TlasBuildOptions{.allowUpdate = m_tlasUpdateCapable});
+}
+
+VkResult Scene::updateTlas(const harmonia::DeviceContext& ctx, const harmonia::core::CommandPool& pool) {
+    return harmonia::scene_rt::updateTlas(*this, ctx, pool, m_tlas, m_tlasAddress, m_tlasUpdateCapable, m_tlasUpdates);
 }
 
 std::uint32_t Scene::addSphereMesh(const harmonia::DeviceContext& ctx,
