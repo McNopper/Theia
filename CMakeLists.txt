@@ -256,6 +256,8 @@ set(THEIA_ENTRY_SHADERS
     gi.comp.slang
     gi.comp.slang:replayMain
     gi.comp.slang:combineMain
+    pg_fit.comp.slang:splatMain
+    pg_fit.comp.slang:fitMain
     sms_sample.slang
     sms_prior_build.slang
     sms_resolve.slang

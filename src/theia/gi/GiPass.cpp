@@ -132,6 +132,45 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx,
         m_pgChainBuf = std::move(*buf);
     }
 
+    // GI-PG S2: guiding-grid buffers (bindings live on the pg layout, not the 33-binding
+    // gi layout). cells = kPgSlots x 6 float4 (4 muKappa + pi + valid) = 96 B/slot
+    // (~50 MB at 2^19); stats = kPgSlots x 20 ints (4 lobes x int4 + count + pad)
+    // = 80 B/slot (~42 MB), cleared per frame while guiding is active.
+    {
+        const VkDeviceSize cellsBytes =
+            static_cast<VkDeviceSize>(kPgSlots) * static_cast<VkDeviceSize>(kPgCellFloat4) * 16u;
+        auto buf =
+            harmonia::core::Buffer::create(ctx,
+                                           cellsBytes,
+                                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                               VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                           VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                           "theia.gi.pgCells");
+        if (!buf) {
+            harmonia::core::Logger::error("GiPass: failed to create path-guiding cells buffer: VkResult {}",
+                                          static_cast<int>(buf.error()));
+            return false;
+        }
+        m_pgCellsBuf = std::move(*buf);
+    }
+    {
+        const VkDeviceSize statsBytes =
+            static_cast<VkDeviceSize>(kPgSlots) * static_cast<VkDeviceSize>(kPgStatInts) * 4u;
+        auto buf =
+            harmonia::core::Buffer::create(ctx,
+                                           statsBytes,
+                                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                               VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                           VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                           "theia.gi.pgStats");
+        if (!buf) {
+            harmonia::core::Logger::error("GiPass: failed to create path-guiding stats buffer: VkResult {}",
+                                          static_cast<int>(buf.error()));
+            return false;
+        }
+        m_pgStatsBuf = std::move(*buf);
+    }
+
     m_reservoirPingPong = 0;
     m_reservoirsCleared = false;
     m_pathReservoirPingPong = 0;
@@ -152,6 +191,10 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx,
         return false;
     }
     if (!createComputePipeline("gi.comp.combineMain.spv", "combineMain", "theia.gi.combine", m_combinePipeline)) {
+        return false;
+    }
+    // GI-PG S2: splat (EM E-step) + fit (M-step) over the guiding grid.
+    if (!createPgPass()) {
         return false;
     }
     // Replay-compaction buffers (bindings 27-30; see GiPass.hpp). The compaction
@@ -210,6 +253,8 @@ void GiPass::shutdown() {
     m_pathReservoirPingPong = 0;
     m_radCacheBuf = {};
     m_pgChainBuf = {};
+    m_pgCellsBuf = {};
+    m_pgStatsBuf = {};
     m_replayRecordsBuf[0] = {};
     m_replayRecordsBuf[1] = {};
     m_replayCountBuf[0] = {};
@@ -227,6 +272,12 @@ void GiPass::shutdown() {
         w.shutdown(); // MOD1: replaces pool + sets
     }
     m_setLayout.reset();
+    // GI-PG S2 teardown (writer before its set layout, mirroring the gi set above).
+    m_pgSplatPipeline.reset();
+    m_pgFitPipeline.reset();
+    m_pgPipelineLayout.reset();
+    m_pgWriter.shutdown();
+    m_pgSetLayout.reset();
     m_boundScene = nullptr;
     m_texturesBoundFor = nullptr;
     m_boundEnvMapView = VK_NULL_HANDLE;
@@ -383,6 +434,90 @@ bool GiPass::createComputePipeline(const char* spv,
     return true;
 }
 
+bool GiPass::createPgPass() {
+    // GI-PG S2: an isolated 3-binding descriptor-buffer layout (chains/cells/stats +
+    // a 32-byte push constant) — the guiding grid's buffers are init-time static, so
+    // one writer with one set written once is enough (LightCuller pattern).
+    const std::array<VkDescriptorSetLayoutBinding, 3> bindings{{
+        {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // chains (RO)
+        {1, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // cells (RW)
+        {2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // stats (RW)
+    }};
+    const VkDescriptorSetLayoutCreateInfo setInfo{
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .pNext = nullptr,
+        .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_DESCRIPTOR_BUFFER_BIT_EXT,
+        .bindingCount = static_cast<std::uint32_t>(bindings.size()),
+        .pBindings = bindings.data(),
+    };
+    VkDescriptorSetLayout pgSetLayout{};
+    if (vkCreateDescriptorSetLayout(m_ctx->device, &setInfo, nullptr, &pgSetLayout) != VK_SUCCESS) {
+        harmonia::core::Logger::error("GiPass: failed to create PG descriptor set layout");
+        return false;
+    }
+    m_pgSetLayout = harmonia::core::UniqueDescriptorSetLayout{m_ctx->device, pgSetLayout};
+
+    const VkPushConstantRange pgRange{
+        .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+        .offset = 0,
+        .size = sizeof(PgPushConstants),
+    };
+    const VkPipelineLayoutCreateInfo layoutInfo{
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = m_pgSetLayout.ptr(),
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &pgRange,
+    };
+    VkPipelineLayout pgPipelineLayout{};
+    if (vkCreatePipelineLayout(m_ctx->device, &layoutInfo, nullptr, &pgPipelineLayout) != VK_SUCCESS) {
+        harmonia::core::Logger::error("GiPass: failed to create PG pipeline layout");
+        return false;
+    }
+    m_pgPipelineLayout = harmonia::core::UniquePipelineLayout{m_ctx->device, pgPipelineLayout};
+
+    if (!m_pgWriter.init(
+            *m_ctx, pgSetLayout, static_cast<std::uint32_t>(bindings.size()), "theia.gi.pg.descriptorBuffer")) {
+        harmonia::core::Logger::error("GiPass: failed to create PG descriptor buffer");
+        return false;
+    }
+    m_pgWriter.writeStorageBufferHandle(*m_ctx, 0, m_pgChainBuf);
+    m_pgWriter.writeStorageBufferHandle(*m_ctx, 1, m_pgCellsBuf);
+    m_pgWriter.writeStorageBufferHandle(*m_ctx, 2, m_pgStatsBuf);
+
+    auto createPgPipeline = [&](const char* spv, const char* cacheName, harmonia::core::UniquePipeline& out) {
+        auto module = harmonia::core::createShaderModule(m_ctx->device, shaderPath(spv));
+        if (!module) {
+            harmonia::core::Logger::error("GiPass: cannot load PG shader: {}", spv);
+            return false;
+        }
+        const VkComputePipelineCreateInfo pipeInfo{
+            .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+            .flags = VK_PIPELINE_CREATE_DESCRIPTOR_BUFFER_BIT_EXT,
+            .stage = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                      .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+                      .module = *module,
+                      .pName = "main"}, // slangc per-entry spv: entry emitted as "main"
+            .layout = m_pgPipelineLayout,
+        };
+        auto pipelineResult = harmonia::core::PipelineBinaryCache::computePipeline(*m_ctx, pipeInfo, cacheName);
+        vkDestroyShaderModule(m_ctx->device, *module, nullptr);
+        if (!pipelineResult) {
+            harmonia::core::Logger::error("GiPass: failed to create PG pipeline {} (spv {})", cacheName, spv);
+            return false;
+        }
+        out = harmonia::core::UniquePipeline{m_ctx->device, *pipelineResult};
+        return true;
+    };
+    if (!createPgPipeline("pg_fit.comp.splatMain.spv", "theia.pg.splat", m_pgSplatPipeline)) {
+        return false;
+    }
+    if (!createPgPipeline("pg_fit.comp.fitMain.spv", "theia.pg.fit", m_pgFitPipeline)) {
+        return false;
+    }
+    return true;
+}
+
 void GiPass::updateDescriptors(const FrameParams& params) {
     const Scene* scene = params.scene;
 
@@ -517,14 +652,18 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
     // radiance-cache table (stamp 0 = empty record).
     if (!m_reservoirsCleared && m_reservoirBuf[0].isValid() && m_reservoirBuf[1].isValid() &&
         m_pathReservoirBuf[0].isValid() && m_pathReservoirBuf[1].isValid() && m_radCacheBuf.isValid() &&
-        m_pgChainBuf.isValid()) {
+        m_pgChainBuf.isValid() && m_pgCellsBuf.isValid() && m_pgStatsBuf.isValid()) {
         vkCmdFillBuffer(cmd, m_reservoirBuf[0].handle(), 0, VK_WHOLE_SIZE, 0u);
         vkCmdFillBuffer(cmd, m_reservoirBuf[1].handle(), 0, VK_WHOLE_SIZE, 0u);
         vkCmdFillBuffer(cmd, m_pathReservoirBuf[0].handle(), 0, VK_WHOLE_SIZE, 0u);
         vkCmdFillBuffer(cmd, m_pathReservoirBuf[1].handle(), 0, VK_WHOLE_SIZE, 0u);
         vkCmdFillBuffer(cmd, m_radCacheBuf.handle(), 0, VK_WHOLE_SIZE, 0u);
         vkCmdFillBuffer(cmd, m_pgChainBuf.handle(), 0, VK_WHOLE_SIZE, 0u);
-        const std::array<VkBufferMemoryBarrier2, 6> fillBarriers{{
+        // GI-PG S2: cells start zeroed (pi = 0 / kappa = 0 -> the E-step's uniform
+        // bootstrap) and stats start empty (also re-filled per frame while guiding).
+        vkCmdFillBuffer(cmd, m_pgCellsBuf.handle(), 0, VK_WHOLE_SIZE, 0u);
+        vkCmdFillBuffer(cmd, m_pgStatsBuf.handle(), 0, VK_WHOLE_SIZE, 0u);
+        const std::array<VkBufferMemoryBarrier2, 8> fillBarriers{{
             {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
              .srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT,
              .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
@@ -585,6 +724,26 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
              .buffer = m_pgChainBuf.handle(),
              .offset = 0,
              .size = VK_WHOLE_SIZE},
+            {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+             .srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT,
+             .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+             .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+             .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
+             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+             .buffer = m_pgCellsBuf.handle(),
+             .offset = 0,
+             .size = VK_WHOLE_SIZE},
+            {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+             .srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT,
+             .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+             .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+             .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
+             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+             .buffer = m_pgStatsBuf.handle(),
+             .offset = 0,
+             .size = VK_WHOLE_SIZE},
         }};
         const VkDependencyInfo fillDep{
             .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
@@ -615,11 +774,14 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
                                           .offset = 0,
                                           .size = VK_WHOLE_SIZE};
         };
-        const std::array<VkBufferMemoryBarrier2, 4> pingPongBarriers{{
+        const std::array<VkBufferMemoryBarrier2, 5> pingPongBarriers{{
             pingPongBarrier(m_reservoirBuf[0].handle()),
             pingPongBarrier(m_reservoirBuf[1].handle()),
             pingPongBarrier(m_pathReservoirBuf[0].handle()),
             pingPongBarrier(m_pathReservoirBuf[1].handle()),
+            // GI-PG S2: previous frame's M-step params -> this frame's E-step reads
+            // (splat) and, in S3, the candidate walks' guiding lookups.
+            pingPongBarrier(m_pgCellsBuf.handle()),
         }};
         const VkDependencyInfo pingPongDep{
             .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
@@ -730,6 +892,30 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         vkCmdPipelineBarrier2(cmd, &resetDep);
     }
 
+    // GI-PG S2: per-frame E-step statistic reset (chains arrive from THIS frame's
+    // emit below; the fill barrier's CLEAR->COMPUTE covers the later atomic adds).
+    if (pc.pathGuidingEnabled != 0u && m_pgStatsBuf.isValid()) {
+        vkCmdFillBuffer(cmd, m_pgStatsBuf.handle(), 0, VK_WHOLE_SIZE, 0u);
+        const VkBufferMemoryBarrier2 pgStatsReset{
+            .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+            .srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT,
+            .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .buffer = m_pgStatsBuf.handle(),
+            .offset = 0,
+            .size = VK_WHOLE_SIZE,
+        };
+        const VkDependencyInfo pgStatsDep{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                                          .memoryBarrierCount = 0,
+                                          .pMemoryBarriers = nullptr,
+                                          .bufferMemoryBarrierCount = 1,
+                                          .pBufferMemoryBarriers = &pgStatsReset};
+        vkCmdPipelineBarrier2(cmd, &pgStatsDep);
+    }
+
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipeline);
     // MOD1: bind the descriptor buffer for the active slot (replaces vkCmdBindDescriptorSets).
     m_descWriters[m_activeSlot].bind(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout);
@@ -807,6 +993,77 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
 
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_combinePipeline);
         vkCmdDispatch(cmd, gx, gy, 1);
+    }
+
+    // ── GI-PG S2: splat (EM E-step over this frame's chains) → fit (M-step) ────
+    // Order within the frame: emit writes chains → splat reads chains + the PREVIOUS
+    // frame's params (ordered by the frame-start ping-pong barrier) and atomically
+    // accumulates stats → fit consumes stats and writes the params NEXT frame's
+    // sampling (S3) and splat will read. Keyless buckets: collisions only mix
+    // proposal quality, never MIS consistency (see pg_common.slang header).
+    if (pc.pathGuidingEnabled != 0u && m_pgSplatPipeline != VK_NULL_HANDLE && m_pgFitPipeline != VK_NULL_HANDLE &&
+        m_pgCellsBuf.isValid() && m_pgStatsBuf.isValid() && m_pgChainBuf.isValid()) {
+        auto pgBufBarrier = [](VkBuffer buf, VkAccessFlags2 srcAccess, VkAccessFlags2 dstAccess) {
+            return VkBufferMemoryBarrier2{.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                                          .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                          .srcAccessMask = srcAccess,
+                                          .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                                          .dstAccessMask = dstAccess,
+                                          .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                          .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                                          .buffer = buf,
+                                          .offset = 0,
+                                          .size = VK_WHOLE_SIZE};
+        };
+        // emit (main) chain writes → splat reads.
+        const std::array<VkBufferMemoryBarrier2, 1> emitToSplat{{
+            pgBufBarrier(m_pgChainBuf.handle(), VK_ACCESS_2_SHADER_WRITE_BIT, VK_ACCESS_2_SHADER_READ_BIT),
+        }};
+        const VkDependencyInfo emitToSplatDep{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                                              .memoryBarrierCount = 0,
+                                              .pMemoryBarriers = nullptr,
+                                              .bufferMemoryBarrierCount = 1,
+                                              .pBufferMemoryBarriers = &emitToSplat[0]};
+        vkCmdPipelineBarrier2(cmd, &emitToSplatDep);
+
+        const PgPushConstants pgPc{
+            .screenWidth = m_cfg.width, .screenHeight = m_cfg.height, .cameraPos = sm::float4(params.cameraPos, 1.0f)};
+        m_pgWriter.bind(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pgPipelineLayout);
+        vkCmdPushConstants(cmd, m_pgPipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pgPc), &pgPc);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pgSplatPipeline);
+        vkCmdDispatch(cmd, gx, gy, 1);
+
+        // splat stats writes → fit reads; splat/emit param reads → fit param writes.
+        const std::array<VkBufferMemoryBarrier2, 2> splatToFit{{
+            pgBufBarrier(m_pgStatsBuf.handle(),
+                         VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT,
+                         VK_ACCESS_2_SHADER_READ_BIT),
+            pgBufBarrier(m_pgCellsBuf.handle(), VK_ACCESS_2_SHADER_READ_BIT, VK_ACCESS_2_SHADER_WRITE_BIT),
+        }};
+        const VkDependencyInfo splatToFitDep{.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+                                             .memoryBarrierCount = 0,
+                                             .pMemoryBarriers = nullptr,
+                                             .bufferMemoryBarrierCount = 2,
+                                             .pBufferMemoryBarriers = splatToFit.data()};
+        vkCmdPipelineBarrier2(cmd, &splatToFitDep);
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pgFitPipeline);
+        vkCmdDispatch(cmd, (kPgSlots + 63u) / 64u, 1, 1);
+
+        // CRITICAL: DescriptorBufferWriter::bind() re-issues
+        // vkCmdBindDescriptorBuffersEXT into binding SLOT 0, so the gi-layout
+        // SetDescriptorBufferOffsets(..., bufferIndex 0) recorded before this block
+        // would resolve subsequent gi-layout dispatches through the PG descriptor
+        // buffer. recordBatch() below (the SMS first batch, same command buffer) has
+        // no rebind of its own — only recordContinuation does — so restore the gi
+        // writer here (the exact pattern recordContinuation uses before its batches).
+        m_descWriters[m_activeSlot].bind(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m_pipelineLayout);
+        // NOTE: the pg push (32 B) also overwrote gi pc bytes 0-31; every consumer
+        // after this point pushes its own constants (SmsPass::control/recordBatch
+        // push SmsQueuePush; MotionVector/TAA push their own), so no gi-pc restore
+        // is required here.
+        // NOTE 2: the fit → next-frame read dependency rides the frame-start ping-pong
+        // barrier (m_pgCellsBuf is in that list).
     }
     if (m_smsFrameActive) {
         if (m_smsPrior.isValid())

@@ -223,8 +223,24 @@ class GiPass {
     // + 26 scalars = 144 + 104 = 248). Stays within the existing 256-byte device budget.
     static_assert(sizeof(GiPushConstants) == 248);
 
+    /// GI-PG S2 push constants for the splat/fit passes (must equal the Slang PGPC).
+    struct PgPushConstants {
+        std::uint32_t screenWidth = 0;
+        std::uint32_t screenHeight = 0;
+        // Slang's cbuffer places float4 at offset 16 (16-byte alignment); sm::float4
+        // is align-4, so the padding is explicit to keep the mirror exact.
+        std::uint32_t _pad0 = 0;
+        std::uint32_t _pad1 = 0;
+        sm::float4 cameraPos{0.0f};
+    };
+    static_assert(sizeof(PgPushConstants) == 32);
+    static_assert(offsetof(PgPushConstants, cameraPos) == 16);
+
     [[nodiscard]] bool createDescriptors();
     [[nodiscard]] bool createPipelineLayout();
+    /// GI-PG S2: own 3-binding layout + splat/fit pipelines (buffers are init-time
+    /// static, so one descriptor set written once at initialize).
+    [[nodiscard]] bool createPgPass();
     [[nodiscard]] bool createComputePipeline(const char* spv,
                                              const char* entry,
                                              const char* cacheName,
@@ -257,6 +273,19 @@ class GiPass {
     /// descriptor set / push-constant layout as the emit megakernel.
     harmonia::core::UniquePipeline m_replayPipeline;
     harmonia::core::UniquePipeline m_combinePipeline;
+    // ── GI-PG S2: splat (EM E-step) + fit (M-step) passes over the guiding grid ──
+    // MUST match pg_common.slang (kPgSlots = 2^19): cells 6 float4 = 96 B/slot,
+    // stats 20 ints = 80 B/slot (4 lobes x int4 + count + pad).
+    static constexpr std::uint32_t kPgSlots = 1u << 19;
+    static constexpr std::uint32_t kPgCellFloat4 = 6u; ///< float4 words per cell record
+    static constexpr std::uint32_t kPgStatInts = 20u;  ///< int words per stats record
+    harmonia::core::UniqueDescriptorSetLayout m_pgSetLayout;
+    harmonia::core::UniquePipelineLayout m_pgPipelineLayout;
+    harmonia::core::UniquePipeline m_pgSplatPipeline;
+    harmonia::core::UniquePipeline m_pgFitPipeline;
+    harmonia::core::DescriptorBufferWriter m_pgWriter{};
+    harmonia::core::Buffer m_pgCellsBuf; // persistent vMF params (float4 stride x 6)
+    harmonia::core::Buffer m_pgStatsBuf; // per-frame fixed-point stats (int stride x 20)
     harmonia::pipeline::SmsPass m_sms;
     harmonia::core::Buffer m_smsContext, m_smsPrefixes, m_smsPrior, m_smsDiagnostics;
     harmonia::core::Buffer m_smsTemporalReservoir, m_smsHistoryReservoir;

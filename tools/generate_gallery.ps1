@@ -50,7 +50,7 @@ foreach ($scene in $scenes) {
     Write-Host "[$i/$total] $scene ..."
     $out = Join-Path $OutputDir "$scene.png"
     & $Renderer --scene $scene --offscreen-frames $Frames --width $Width --height $Height `
-        --output $out --no-validation 2>&1 | Select-String 'Saved|ERROR' | Select-Object -First 2
+        --output $out 2>&1 | Select-String 'Saved|ERROR' | Select-Object -First 2
     if ($LASTEXITCODE -ne 0) {
         Write-Warning "  $scene exited with code $LASTEXITCODE"
     }

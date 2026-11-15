@@ -354,8 +354,8 @@ struct RadCacheRecord {
 //   [base + 3 + 3*i]      = normal.xyz (shading normal)
 // Written ONLY by the initial-candidate walk (traceGiPathCandidate) while
 // pathGuidingEnabled (S1 default OFF — behavior-off until S3).
-static const uint kPgChainDepth = 10u;              // chain cap (scenes run <= 9 bounces)
-static const uint kPgChainSlots = 1u + 3u * kPgChainDepth; // 31 x 16 B = 496 B/pixel
+// Constants kPgChainDepth / kPgChainSlots live in pg_common.slang (shared with S2's
+// splat/fit passes in pg_fit.comp.slang) — included below.
 [[vk::binding(32, 0)]] RWStructuredBuffer<float4>   t_pgChains;
 
 float cgnsNeighborScale(float queryDist) {
@@ -1235,6 +1235,7 @@ float4 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
 /// BSDF direction or a non-finite result); callers treat that as a zero contribution. `outEnvNee`
 /// is kept separate from `outIndirect` so the firefly clamp never biases the sun term.
 #include "gi_sms.slang"
+#include "pg_common.slang" // GI-PG: kPgChain* (S1) + guiding-grid definitions (S2/S3)
 
 bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp, bool includePrimaryEnvNee,
                           out float3 outIndirect, out float3 outEnvNee,
