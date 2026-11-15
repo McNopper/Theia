@@ -117,6 +117,12 @@ bool Application::onInitialize() {
             m_forceMaterialLod = (!lodRaw->empty() && (*lodRaw)[0] != '0') ? 1 : 0;
             harmonia::core::Logger::info("THEIA_MATERIAL_LOD forced to {}", m_forceMaterialLod);
         }
+        // GI-NRC debug A/B: THEIA_RADIANCE_CACHE=0|1 forces the world-space
+        // radiance-cache tier (default = interactive on, estimator-pure capture off).
+        if (const auto rcRaw = harmonia::core::getEnvString("THEIA_RADIANCE_CACHE")) {
+            m_forceRadianceCache = (!rcRaw->empty() && (*rcRaw)[0] != '0') ? 1 : 0;
+            harmonia::core::Logger::info("THEIA_RADIANCE_CACHE forced to {}", m_forceRadianceCache);
+        }
     }
     if (m_pureEstimatorCapture) {
         if (!m_cameraJitterEnabled) {

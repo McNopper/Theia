@@ -291,6 +291,12 @@ class SmsGiFrameFixture : public RtFixture {
         params.useRestirPt = true;
         params.useRestirPtPath = pathReuse();
         params.fireflyClampEnabled = false;
+        // Contract tests pin the ESTIMATOR: the real-time-only tiers (PERF8 material
+        // LOD, GI-NRC radiance cache — both default-on for the interactive window)
+        // are presentation-layer bias and are OFF here exactly like the clamp, the
+        // A3(a) regularization and estimator-pure capture.
+        params.materialLodEnabled = false;
+        params.radianceCacheEnabled = false;
         gi.record(*cmd, params);
         first = false;
         ASSERT_TRUE(gi.completionRequired());

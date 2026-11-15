@@ -243,6 +243,18 @@ with warp count and pays at production resolution.
   forward fetches pinned to explicit `SampleLevel(uv, 0.0)` (Hyperion parity — provably
   capture-neutral). Receipts: module 60/60; engagement A/B gate PASS (mean 0.231,
   SSIM 0.998351); estimator-pure stability **bit-identical** vs the pre-change baseline.
+- **GI-NRC** (world-space radiance cache, SHaRC-style — whitepaper §9, Harmonia row
+  **done 2026-11-15**): landed here as the Theia wire — hashed world-cell table
+  (2 MiB, binding 31), walk-snapshot fill with EMA (α = 0.25) of per-vertex outgoing
+  radiance, diffuse-secondary query at bounce ≥ 1 terminating with the cached tail.
+  Biased by construction ⇒ **real-time tier only**: `radianceCacheEnabled` push const
+  (interactive ON / estimator-pure capture OFF), `THEIA_RADIANCE_CACHE=0|1` A/B force,
+  animated scenes always OFF (world-static table), per-surface `!smsPhysicalEvent`
+  exclusion (the blanket `smsEnabled==0` gate was removed after it made the cache inert
+  on every emitter scene — debugging record in the Harmonia row). Contract tests pin
+  the tier off like the clamp (`test_sms_gi_frame.cpp`). Receipts: module 60/60;
+  **engagement gate PASS** (0.945 / SSIM 0.983369 / hist 0.999939 @ matched 128f);
+  estimator-pure stability **bit-identical**; `--validation` clean with the cache on.
 - **GI-SMS** (caustics/SDS), **DN3** (converging denoiser — the à-trous replacement),
   **DN1** (real-time neural denoising slot — **open, no adoptable candidate**: the former
   RaNAD candidate was adjudicated no-go 2026-11-08 and struck from the pipeline 2026-11-09;

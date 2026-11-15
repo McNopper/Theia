@@ -90,6 +90,27 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx,
         }
     }
 
+    // GI-NRC: world-space radiance-cache table (binding 31). Fixed 2 MiB
+    // (kRadCacheSlots = 2^17 records x 16 B), persistent across frames, zero-filled
+    // once before first use (empty records read stamp = 0).
+    {
+        const VkDeviceSize radCacheBytes =
+            static_cast<VkDeviceSize>(kRadCacheSlots) * static_cast<VkDeviceSize>(sizeof(float) * 4u);
+        auto buf =
+            harmonia::core::Buffer::create(ctx,
+                                           radCacheBytes,
+                                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                               VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                           VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                           "theia.gi.radCache");
+        if (!buf) {
+            harmonia::core::Logger::error("GiPass: failed to create radiance-cache buffer: VkResult {}",
+                                          static_cast<int>(buf.error()));
+            return false;
+        }
+        m_radCacheBuf = std::move(*buf);
+    }
+
     m_reservoirPingPong = 0;
     m_reservoirsCleared = false;
     m_pathReservoirPingPong = 0;
@@ -166,6 +187,7 @@ void GiPass::shutdown() {
     m_pathReservoirBuf[1] = {};
     m_pathReservoirsCleared = false;
     m_pathReservoirPingPong = 0;
+    m_radCacheBuf = {};
     m_replayRecordsBuf[0] = {};
     m_replayRecordsBuf[1] = {};
     m_replayCountBuf[0] = {};
@@ -193,7 +215,7 @@ void GiPass::shutdown() {
 }
 
 bool GiPass::createDescriptors() {
-    const std::array<VkDescriptorSetLayoutBinding, 31> bindings{{
+    const std::array<VkDescriptorSetLayoutBinding, 32> bindings{{
         {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // TLAS
         {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // hdr (RW)
         {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // giBuffer
@@ -240,11 +262,13 @@ bool GiPass::createDescriptors() {
                                                                                           // emit params (RW)
         {30, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI-ENH §6.2.2 replay
                                                                                           // results (RW)
+        {31, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI-NRC world-space
+                                                                                          // radiance cache (RW)
     }};
 
     // MOD1: no UPDATE_AFTER_BIND — incompatible with DESCRIPTOR_BUFFER layouts.
     constexpr VkDescriptorBindingFlags kTextureFlags = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
-    const std::array<VkDescriptorBindingFlags, 31> bindingFlags{
+    const std::array<VkDescriptorBindingFlags, 32> bindingFlags{
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, kTextureFlags, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
@@ -369,6 +393,10 @@ void GiPass::updateDescriptors(const FrameParams& params) {
         w.writeStorageBufferHandle(*m_ctx, 14, scene->emissiveCdfBuffer());
         w.writeSampledImage(*m_ctx, 15, params.gradientVarianceView, VK_IMAGE_LAYOUT_GENERAL);
         w.writeStorageBufferHandle(*m_ctx, 19, scene->instanceTransformBuffer());
+        // GI-NRC: world-space radiance-cache table (frame-independent, all slots).
+        if (m_radCacheBuf.isValid()) {
+            w.writeStorageBufferHandle(*m_ctx, 31, m_radCacheBuf);
+        }
 
         // Bindless textures (binding 13) — write when scene changes.
         if (texturesDirty) {
@@ -457,14 +485,16 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
 
     // A4: one-time zero-fill of both reservoir buffers so uninitialized entries read as
     // empty (M == 0 → skipped by temporal reuse; no garbage samples injected).
-    // GI2 full PT: same for the path reservoir buffers.
+    // GI2 full PT: same for the path reservoir buffers. GI-NRC: same for the
+    // radiance-cache table (stamp 0 = empty record).
     if (!m_reservoirsCleared && m_reservoirBuf[0].isValid() && m_reservoirBuf[1].isValid() &&
-        m_pathReservoirBuf[0].isValid() && m_pathReservoirBuf[1].isValid()) {
+        m_pathReservoirBuf[0].isValid() && m_pathReservoirBuf[1].isValid() && m_radCacheBuf.isValid()) {
         vkCmdFillBuffer(cmd, m_reservoirBuf[0].handle(), 0, VK_WHOLE_SIZE, 0u);
         vkCmdFillBuffer(cmd, m_reservoirBuf[1].handle(), 0, VK_WHOLE_SIZE, 0u);
         vkCmdFillBuffer(cmd, m_pathReservoirBuf[0].handle(), 0, VK_WHOLE_SIZE, 0u);
         vkCmdFillBuffer(cmd, m_pathReservoirBuf[1].handle(), 0, VK_WHOLE_SIZE, 0u);
-        const std::array<VkBufferMemoryBarrier2, 4> fillBarriers{{
+        vkCmdFillBuffer(cmd, m_radCacheBuf.handle(), 0, VK_WHOLE_SIZE, 0u);
+        const std::array<VkBufferMemoryBarrier2, 5> fillBarriers{{
             {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
              .srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT,
              .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
@@ -503,6 +533,16 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
              .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
              .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
              .buffer = m_pathReservoirBuf[1].handle(),
+             .offset = 0,
+             .size = VK_WHOLE_SIZE},
+            {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+             .srcStageMask = VK_PIPELINE_STAGE_2_CLEAR_BIT,
+             .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+             .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+             .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT,
+             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+             .buffer = m_radCacheBuf.handle(),
              .offset = 0,
              .size = VK_WHOLE_SIZE},
         }};
@@ -620,6 +660,7 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         .reconnectShiftEnabled = params.reconnectShiftEnabled,
         .smsEnabled = m_smsFrameActive ? 1U : 0U,
         .materialLodEnabled = params.materialLodEnabled ? 1u : 0u,
+        .radianceCacheEnabled = params.radianceCacheEnabled ? 1u : 0u,
     };
 
     const bool replayCompaction = (pc.restirPtPathEnabled != 0u) && m_replayCountBuf[0].isValid() &&

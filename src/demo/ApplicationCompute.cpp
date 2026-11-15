@@ -45,6 +45,13 @@ GiPass::FrameParams Application::buildGiFrameParams(const sm::float4x4& view,
     // (convergence litmus); THEIA_MATERIAL_LOD=0|1 forces the mode for A/B.
     gp.materialLodEnabled = m_forceMaterialLod >= 0 ? (m_forceMaterialLod != 0) : !m_pureEstimatorCapture;
     gp.tanHalfFovY = std::tan(sm::radians(m_camera.vfovDeg) * 0.5f);
+    // GI-NRC (world-space radiance cache): two-tier like the clamps/LOD — interactive
+    // ON, estimator-pure capture OFF; THEIA_RADIANCE_CACHE=0|1 FORCES the mode for A/B
+    // (capture bypass, mirroring THEIA_MATERIAL_LOD). The animated-scene gate is
+    // unconditional: the table is world-static and would serve stale cells under motion.
+    const bool rcSceneOk = m_scene != nullptr && !m_scene->hasAnimation();
+    gp.radianceCacheEnabled =
+        rcSceneOk && (m_forceRadianceCache >= 0 ? (m_forceRadianceCache != 0) : !m_pureEstimatorCapture);
     return gp;
 }
 

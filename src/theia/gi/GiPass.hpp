@@ -136,6 +136,12 @@ class GiPass {
         /// PERF8: tan(fovY/2) of the current projection — seeds the primary pixel
         /// world footprint (meters) the ray cone starts from.
         float tanHalfFovY = 0.5f;
+        /// GI-NRC (world-space radiance cache): two-tier like the clamps/LOD — ON for
+        /// the interactive window, DISABLED in estimator-pure capture (biased by
+        /// construction, §5.6/§8 litmus). THEIA_RADIANCE_CACHE=0|1 forces the mode.
+        /// Also forced off for animated scenes (world-static table); SMS frames use the
+        /// per-surface smsPhysicalEvent exclusion instead of a blanket gate.
+        bool radianceCacheEnabled = true;
     };
 
     GiPass() = default;
@@ -201,12 +207,14 @@ class GiPass {
         std::uint32_t reconnectShiftEnabled = 1; ///< GI-ENH (a): reconnection shift feature mask
                                                  ///< bit0 = k=2, bit1 = k>=3. 0 = replay-only.
         std::uint32_t smsEnabled = 0;
-        std::uint32_t materialLodEnabled = 1; ///< PERF8: 1 = material LOD tier active (interactive);
-                                              ///< 0 = estimator-pure capture (full material everywhere)
+        std::uint32_t materialLodEnabled = 1;   ///< PERF8: 1 = material LOD tier active (interactive);
+                                                ///< 0 = estimator-pure capture (full material everywhere)
+        std::uint32_t radianceCacheEnabled = 1; ///< GI-NRC: 1 = world-space radiance-cache tier
+                                                ///< active (interactive); 0 = estimator-pure capture
     };
     // Layout guard: must equal the Slang `GiPC` struct exactly (2×float4x4 + float4
-    // + 24 scalars = 144 + 96 = 240). Stays within the existing 256-byte device budget.
-    static_assert(sizeof(GiPushConstants) == 240);
+    // + 25 scalars = 144 + 100 = 244). Stays within the existing 256-byte device budget.
+    static_assert(sizeof(GiPushConstants) == 244);
 
     [[nodiscard]] bool createDescriptors();
     [[nodiscard]] bool createPipelineLayout();
@@ -281,8 +289,16 @@ class GiPass {
     harmonia::core::Buffer m_pathReservoirBuf[2]{};
     std::uint32_t m_pathReservoirPingPong = 0;
     bool m_pathReservoirsCleared = false;
+    /// GI-NRC: world-space radiance-cache table (binding 31, 2 MiB, persistent
+    /// across frames — zero-filled once with the reservoir one-time clear).
+    harmonia::core::Buffer m_radCacheBuf{};
     /// GI-CG: the former Gaussian pairing maps (binding 22) were removed 2026-11-15 —
     /// the CGNS compatibility score supersedes their neighbor-selection role.
+
+    // ── GI-NRC: world-space radiance-cache table (binding 31) ─────────────────
+    // MUST match the shader's kRadCacheSlots (gi.comp.slang): 2^17 hashed world-cell
+    // records x {float3 rgb, uint stamp} = 2 MiB, persistent across frames.
+    static constexpr std::uint32_t kRadCacheSlots = 1u << 17;
 
     // ── GI-ENH §6.2.2 replay stream compaction (bindings 27-30) ──────────────
     // Three-kernel split: emit (main) → uniform replay (replayMain) → combine

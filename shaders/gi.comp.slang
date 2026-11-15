@@ -61,6 +61,8 @@ cbuffer GiPC {
     uint     smsEnabled;
     uint     materialLodEnabled;          // PERF8 (RTXPT §7): 1 = material-LOD tier active (interactive);
                                           // 0 = estimator-pure capture — full material everywhere
+    uint     radianceCacheEnabled;        // GI-NRC: 1 = world-space radiance-cache tier active
+                                          // (interactive); 0 = estimator-pure capture
 };
 
 // ── A4: ReSTIR DI reservoir type ──────────────────────────────────────────────
@@ -331,6 +333,15 @@ static const uint kPathSpatialNeighbors = 3u;
 [[vk::binding(28, 0)]] RWStructuredBuffer<uint>         t_replayCount;   // [0..2] = indirect dispatch command, [4] = record counter
 [[vk::binding(29, 0)]] RWStructuredBuffer<PtEmitParams> t_ptParams;      // per-pixel emit state
 [[vk::binding(30, 0)]] RWStructuredBuffer<float4>       t_replayResults; // per (pixel, slot) replay walk result
+// GI-NRC (world-space radiance cache, RTXPT whitepaper §9): one record per hashed
+// world cell — outgoing-radiance EMA filled by completed walks, queried by diffuse
+// secondary hits to terminate deep tails. Real-time tier only (flag-gated off in
+// estimator-pure capture). Record = {rgb, frameStamp(+1); 0 = empty}.
+struct RadCacheRecord {
+    float3 rgb;
+    uint   stamp;
+};
+[[vk::binding(31, 0)]] RWStructuredBuffer<RadCacheRecord> t_radCache;
 
 float cgnsNeighborScale(float queryDist) {
     return max(1.0e-8, sqrt(kCgnsSolidAngle / kPi) * queryDist);
@@ -599,6 +610,24 @@ static const float kSpecularLobePdf = 1.0;
 /// Conservative-MIP cap: bounded blur (2^6 = 64 texels/footprint) — keeps the
 /// reduction from degenerating on distant/texel-dense surfaces.
 static const float kMaxMaterialLod = 6.0;
+
+// ── GI-NRC (world-space radiance cache; RTXPT whitepaper §9, SHaRC-style) ──────
+/// Cell size in world meters — family scenes are meter-scale (revisit with a
+/// scene-bounds-derived scale if content changes). Hashed directly to one record
+/// (latest-wins races are benign: real-time tier only, never in capture).
+static const float kRadCacheCellSize = 0.5;
+static const uint  kRadCacheSlots = 1u << 17; ///< 131072 records x 16 B = 2 MiB
+static const uint  kRadCacheMinBounce = 1u;   ///< first secondary always walked live (anchor)
+static const uint  kRadCacheMaxSnap = 8u;     ///< per-walk snapshot stack cap (register budget)
+static const float kRadCacheEmaAlpha = 0.25;  ///< temporal blend: stable, low-frequency (bias policy)
+
+uint radCacheCellIndex(float3 p) {
+    const int3 c = int3(floor(p * (1.0 / kRadCacheCellSize)));
+    const uint hx = uint(c.x) * 73856093u;
+    const uint hy = uint(c.y) * 19349663u;
+    const uint hz = uint(c.z) * 83492791u;
+    return (hx ^ hy ^ hz) & (kRadCacheSlots - 1u);
+}
 
 /// Bindless-texture fetcher for the shared surface-frame populator. Compute shaders have no
 /// screen-space quad, so implicit-LOD .Sample() (which needs SPV_KHR_compute_shader_derivatives)
@@ -1372,9 +1401,23 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
     // from a rough diffuse-ish vertex it is diffuse-secondary class and its hits
     // fetch textures at the ray cone's conservative MIP. Seed = the primary pixel's
     // world footprint: viewDist · 2·tan(fovY/2) / screenHeight.
-    float coneRadius = 0.0; // world meters — cone footprint at the current surface
+    float coneRadius = 0.0; // world meters - cone footprint at the current surface
     float coneSpread = 0.0; // accumulated cone half-angle tan (capped at 1)
     bool rayFullClass = true;
+    // GI-NRC: snapshot stack for the cache fill — (cell, radiance-before, throughput)
+    // per real surface visit, popped on opacity pass-throughs. Capped at
+    // kRadCacheMaxSnap (register budget); deeper visits simply don't fill.
+    uint snapCell[kRadCacheMaxSnap];
+    float3 snapRad0[kRadCacheMaxSnap];
+    float3 snapThr[kRadCacheMaxSnap];
+    uint snapCount = 0u;
+    // GI-NRC active = the push flag alone. An earlier `smsEnabled == 0` gate here was
+    // removed: usesSms() is true for EVERY emitter scene at depth>=3, so the blanket
+    // gate made the cache inert everywhere. The precise protection is the per-surface
+    // `!smsPhysicalEvent` exclusion in the query/fill classification (prefix specular /
+    // receiver / reflection caster), mirroring the A3(a) and PERF8 exemptions; SMS
+    // contributions that do land in the cache are ordinary lighting (EMA-stable).
+    const bool radCacheActive = radianceCacheEnabled != 0u;
     if (materialLodEnabled != 0u) {
         const float primDist = max(length(primary.position - cameraPos.xyz), 1e-4);
         coneRadius = primDist * (2.0 * tanHalfFovY) / float(max(screenHeight, 1u));
@@ -1526,6 +1569,39 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
             }
             prevRough = saturate(surf.mat.specularRoughAnisoIor.x);
         }
+        // ── GI-NRC radiance-cache QUERY ────────────────────────────────────────
+        // A diffuse secondary hit beyond the first may terminate with its cell's
+        // cached outgoing radiance (own emission/NEE + deeper, EMA-filled by
+        // completed walks): the cache replaces this vertex's terms + subtree.
+        // Biased BY DESIGN (whitepaper §9) — real-time tier only, bypassed in
+        // estimator-pure capture (§5.6/§8 litmus). Gates: fully-opaque surface
+        // (would-be opacity pass-throughs are excluded WITHOUT consuming RNG —
+        // integrateSurface draws its own gate coin), diffuse-classified (the
+        // order-0 record is direction-correct for lambertians), non-glass and
+        // non-SMS (v1 scope), valid finite non-negative record. No RNG consumed.
+        if (radCacheActive && bounce >= kRadCacheMinBounce &&
+            saturate(surf.mat.opacityFlagsPad.x) >= 0.999) {
+            const float rcRough = surf.mat.specularRoughAnisoIor.x;
+            const float rcMetal = surf.mat.baseMetalnessDiffRough.x;
+            const float rcTrans = saturate(surf.mat.transmissionColorWeight.w);
+            if (rcRough >= 0.2 && rcMetal < 0.5 && rcTrans < 0.1 &&
+                !smoothDielectricTransmission && !smsPhysicalEvent) {
+                const RadCacheRecord rcRec = t_radCache[radCacheCellIndex(surf.position)];
+                if (rcRec.stamp != 0u && all(isfinite(rcRec.rgb)) &&
+                    min(rcRec.rgb.x, min(rcRec.rgb.y, rcRec.rgb.z)) >= 0.0) {
+                    state.radiance += state.throughput * rcRec.rgb;
+                    state.terminated = true;
+                    break;
+                }
+            }
+        }
+        // GI-NRC fill snapshot: pushed before integrate, popped on pass-through.
+        if (radCacheActive && snapCount < kRadCacheMaxSnap) {
+            snapCell[snapCount] = radCacheCellIndex(surf.position);
+            snapRad0[snapCount] = state.radiance;
+            snapThr[snapCount] = state.throughput;
+            ++snapCount;
+        }
         state.depth = bounce + primaryCharge;
         integrateSurface(tracer, surf,
             emissiveTriangleCount, emissiveTriangles, emissiveCdf,
@@ -1606,6 +1682,9 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
                            smoothDielectricTransmission || smsPhysicalEvent;
         }
         if (state.passedThrough) {
+            if (radCacheActive && snapCount > 0u) {
+                --snapCount; // no surface interaction happened - nothing to fill
+            }
             continue; // null interaction: same ray, same bounce index
         }
         ++bounce;
@@ -1618,6 +1697,33 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
             if (state.terminated) {
                 break;
             }
+        }
+    }
+
+    // ── GI-NRC fill: each snapshotted visit's outgoing radiance = (radiance after
+    // the walk - radiance before this vertex) / throughput at the vertex. Every
+    // term after V carries throughput(V) x E[...], so the division recovers V's own
+    // emission/NEE plus the deeper chain as per-vertex outgoing radiance (constant
+    // per direction for the lambertians the query selects). EMA-blended into the
+    // hashed cell (stability: whitepaper bias policy); degenerate throughput or
+    // non-finite/non-positive results are skipped (previous record kept). Raw
+    // pre-exposure units — the query adds to state.radiance before exposure runs
+    // once (below). Scene reload re-allocates/clears the table (GiPass).
+    if (radCacheActive) {
+        for (uint s = 0u; s < snapCount; ++s) {
+            const float minThr = min(snapThr[s].x, min(snapThr[s].y, snapThr[s].z));
+            if (!(minThr > 1.0e-4)) {
+                continue;
+            }
+            const float3 outgoing = (state.radiance - snapRad0[s]) / snapThr[s];
+            if (!all(isfinite(outgoing)) || any(outgoing < 0.0)) {
+                continue;
+            }
+            const RadCacheRecord prev = t_radCache[snapCell[s]];
+            RadCacheRecord upd;
+            upd.rgb = (prev.stamp == 0u) ? outgoing : lerp(prev.rgb, outgoing, kRadCacheEmaAlpha);
+            upd.stamp = frameSampleIndex + 1u;
+            t_radCache[snapCell[s]] = upd;
         }
     }
 

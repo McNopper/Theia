@@ -172,6 +172,9 @@ class Application final : public harmonia::app::App,
     /// PERF8 (material LOD): -1 = auto (interactive on / estimator-pure capture off),
     /// 0/1 = forced by THEIA_MATERIAL_LOD (debug A/B harness).
     int m_forceMaterialLod = -1;
+    /// GI-NRC (radiance cache): -1 = auto (interactive on / estimator-pure capture off,
+    /// also off for animated scenes), 0/1 = forced by THEIA_RADIANCE_CACHE (A/B harness).
+    int m_forceRadianceCache = -1;
     std::uint32_t m_sceneMaxDepth = 3u;
 
     /// Previous frame's row-major view-projection matrix for motion vector computation.
