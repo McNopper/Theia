@@ -124,6 +124,18 @@ class GiPass {
         /// 0 = replay-only (the clean baseline).
         std::uint32_t reconnectShiftEnabled = 3;
         VkImageView motionVectorView = VK_NULL_HANDLE;
+        /// PERF8 (RTXPT whitepaper §7, material LOD by ray class): reduced-BRDF +
+        /// conservative-MIP evaluation for diffuse-secondary visits (full material
+        /// for primary/near-specular/delta-spawned rays; visibility rays are
+        /// opacity-only by architecture). Two-tier like the firefly clamps: ON for
+        /// the interactive window, DISABLED in estimator-pure capture (--output) so
+        /// the capture converges to the unmodified ground truth (§5.6 litmus —
+        /// irreducible bias lives in the real-time-only layer only).
+        /// THEIA_MATERIAL_LOD=0|1 forces the mode (debug A/B harness).
+        bool materialLodEnabled = true;
+        /// PERF8: tan(fovY/2) of the current projection — seeds the primary pixel
+        /// world footprint (meters) the ray cone starts from.
+        float tanHalfFovY = 0.5f;
     };
 
     GiPass() = default;
@@ -174,7 +186,7 @@ class GiPass {
         std::uint32_t maxDepth = 3;
         std::uint32_t screenWidth = 0;
         std::uint32_t screenHeight = 0;
-        std::uint32_t _pad0 = 0;
+        float tanHalfFovY = 0.5f;                  ///< PERF8: tan(fovY/2) — primary pixel-footprint seed (was _pad0)
         std::uint32_t a3RegularizationEnabled = 1; ///< A3(a): secondary-bounce roughness regularization
         std::uint32_t hasGradientVariance = 0;     ///< A3(b): 1 when a real A-SVGF guide is bound
         std::uint32_t giAdaptiveMaxSamples =
@@ -189,10 +201,12 @@ class GiPass {
         std::uint32_t reconnectShiftEnabled = 1; ///< GI-ENH (a): reconnection shift feature mask
                                                  ///< bit0 = k=2, bit1 = k>=3. 0 = replay-only.
         std::uint32_t smsEnabled = 0;
+        std::uint32_t materialLodEnabled = 1; ///< PERF8: 1 = material LOD tier active (interactive);
+                                              ///< 0 = estimator-pure capture (full material everywhere)
     };
-    // Layout guard: must equal the Slang `GiParams` struct exactly (2×float4x4 + float4
-    // + 23 scalars = 144 + 92 = 236). Stays within the existing 256-byte device budget.
-    static_assert(sizeof(GiPushConstants) == 236);
+    // Layout guard: must equal the Slang `GiPC` struct exactly (2×float4x4 + float4
+    // + 24 scalars = 144 + 96 = 240). Stays within the existing 256-byte device budget.
+    static_assert(sizeof(GiPushConstants) == 240);
 
     [[nodiscard]] bool createDescriptors();
     [[nodiscard]] bool createPipelineLayout();

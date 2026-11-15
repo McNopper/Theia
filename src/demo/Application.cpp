@@ -111,6 +111,12 @@ bool Application::onInitialize() {
                                          (m_reconnectShiftEnabled & 1u) != 0u,
                                          (m_reconnectShiftEnabled & 2u) != 0u);
         }
+        // PERF8 debug A/B: THEIA_MATERIAL_LOD=0|1 forces the material-LOD tier
+        // (default = interactive on, estimator-pure capture off).
+        if (const auto lodRaw = harmonia::core::getEnvString("THEIA_MATERIAL_LOD")) {
+            m_forceMaterialLod = (!lodRaw->empty() && (*lodRaw)[0] != '0') ? 1 : 0;
+            harmonia::core::Logger::info("THEIA_MATERIAL_LOD forced to {}", m_forceMaterialLod);
+        }
     }
     if (m_pureEstimatorCapture) {
         if (!m_cameraJitterEnabled) {

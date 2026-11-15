@@ -42,7 +42,7 @@ cbuffer GiPC {
     uint     maxDepth;              // maximum number of traced bounce segments
     uint     screenWidth;
     uint     screenHeight;
-    uint     _pad0;
+    float    tanHalfFovY;               // PERF8: tan(fovY/2) — primary pixel-footprint seed (was _pad0)
     uint     a3RegularizationEnabled;      // A3(a): secondary-bounce roughness regularization (Theia-only bias)
     uint     hasGradientVariance;          // A3(b): 1 when t_gradientVariance holds a real A-SVGF guide
     uint     giAdaptiveMaxSamples;         // c1: max GI samples/pixel for variance-guided adaptive sampling (1 = off)
@@ -59,6 +59,8 @@ cbuffer GiPC {
                                            // Step-through debug: THEIA_SHIFT_MASK.
                                             // (0 = replay-only; A/B via THEIA_NO_RECONNECTION)
     uint     smsEnabled;
+    uint     materialLodEnabled;          // PERF8 (RTXPT §7): 1 = material-LOD tier active (interactive);
+                                          // 0 = estimator-pure capture — full material everywhere
 };
 
 // ── A4: ReSTIR DI reservoir type ──────────────────────────────────────────────
@@ -583,12 +585,43 @@ void runMediumWalk(inout PathState state,inout float3 origin,inout float3 dir) {
 /// termination — the same role kMaxMediumWalk plays for volumetric segments.
 static const uint kMaxNullInteractions = 256u;
 
+// ── PERF8 (RTXPT whitepaper §7: material LOD by ray class) ────────────────────
+/// Near-specular roughness threshold: a continuation spawned below it (or a delta
+/// lobe) is FULL-material class ("near glossy/specular hit" — high-quality BRDF +
+/// normal data). Second signal below: the SAMPLED lobe's pdf — a diffuse-lobe sample
+/// has pdf ≈ albedo·cos/π ≤ ~0.32, a concentrated glossy/specular sample ≫ 1, so
+/// `pdf > kSpecularPdfPdf` marks a narrow-lobe (detail-carrying) continuation.
+/// This matters because OpenPBR diffuse walls often carry a SMOOTH specular lobe
+/// (roughness < 0.2): material roughness alone would misclassify their diffuse
+/// bounces as near-specular and the whole LOD tier would no-op.
+static const float kNearSpecularRough = 0.2;
+static const float kSpecularLobePdf = 1.0;
+/// Conservative-MIP cap: bounded blur (2^6 = 64 texels/footprint) — keeps the
+/// reduction from degenerating on distant/texel-dense surfaces.
+static const float kMaxMaterialLod = 6.0;
+
 /// Bindless-texture fetcher for the shared surface-frame populator. Compute shaders have no
 /// screen-space quad, so implicit-LOD .Sample() (which needs SPV_KHR_compute_shader_derivatives)
-/// is both unsupported here and meaningless for a secondary ray hit — mip 0 only.
+/// is unsupported here — explicit SampleLevel only.
+///
+/// PERF8: `coneUvFootprint` = ray-cone footprint in UV units (cone radius in world
+/// meters × the hit triangle's UV gradient) — the conservative MIP for
+/// diffuse-secondary visits (whitepaper §7 "conservative MIP selection"). 0 = full
+/// detail (mip 0): primary, near-specular/delta-spawned rays, shift re-evaluations,
+/// opacity tests (shared cutout parity with Hyperion's any-hit must stay exact) and
+/// estimator-pure capture. `kMaxMaterialLod` bounds the blur.
 struct TheiaTextureSampler : ISurfaceTextureSampler {
+    float coneUvFootprint; // 0 = mip 0 (full); callers MUST initialize (set below)
     float4 sampleTex(uint idx, float2 uv) {
-        return t_bindless[NonUniformResourceIndex(idx)].SampleLevel(uv, 0.0);
+        const Sampler2D t = t_bindless[NonUniformResourceIndex(idx)];
+        if (coneUvFootprint <= 0.0) {
+            return t.SampleLevel(uv, 0.0);
+        }
+        uint w = 0;
+        uint h = 0;
+        t.GetDimensions(w, h);
+        const float lod = min(log2(max(1.0, coneUvFootprint * float(max(w, h)))), kMaxMaterialLod);
+        return t.SampleLevel(uv, lod);
     }
 };
 
@@ -613,8 +646,49 @@ float2 triangleUv(uint instIdx, uint tri, float2 bary) {
 /// so the cutout cannot drift between the two renderers.
 float triangleOpacity(uint instIdx, uint tri, float2 bary) {
     TheiaTextureSampler tex;
+    tex.coneUvFootprint = 0.0; // PERF8: opacity ALWAYS mip 0 (exact cutout parity)
     return evalGeometryOpacity(materials[instances[instIdx].materialIndex], tex,
                                triangleUv(instIdx, tri, bary));
+}
+
+/// PERF8: world-space UV gradient magnitude of the hit triangle (UV units per world
+/// meter) — the texel-density term converting a world-space ray cone into a UV
+/// footprint for conservative MIP selection (whitepaper §7: "a per-mesh or
+/// per-instance scale factor can convert cone radius at the hit point into an
+/// approximate texel footprint"). Upper bound sqrt(trace(inv(J^T J))), J = d(world)/d(uv):
+/// the estimate can only OVER-estimate the footprint → coarser mip = blur, never new
+/// aliasing ("conservative"). 0 = degenerate UV/geometry (caller keeps mip 0).
+float triangleUvGradPerMeter(uint instIdx, uint tri) {
+    const GpuInstance inst = instances[instIdx];
+    const uint base = inst.indexOffset + tri * 3u;
+    if (base + 2u >= inst.indexOffset + inst.indexCount) {
+        return 0.0;
+    }
+    const float4x4 o2w = instanceTransforms[instIdx];
+    const uint i0 = indices[base + 0u];
+    const uint i1 = indices[base + 1u];
+    const uint i2 = indices[base + 2u];
+    // Object-space edge vectors → world (translation cancels: w = 0).
+    const float3 e1 = mul(o2w, float4(vertices[i1].position - vertices[i0].position, 0.0)).xyz;
+    const float3 e2 = mul(o2w, float4(vertices[i2].position - vertices[i0].position, 0.0)).xyz;
+    const float du1 = vertices[i1].uv.x - vertices[i0].uv.x;
+    const float dv1 = vertices[i1].uv.y - vertices[i0].uv.y;
+    const float du2 = vertices[i2].uv.x - vertices[i0].uv.x;
+    const float dv2 = vertices[i2].uv.y - vertices[i0].uv.y;
+    // trace(inv(U^T U) ...): with E = [e1 e2] (world edges), U = uv edges (columns),
+    // inv(J^T J) = U (E^T E)^-1 U^T and trace reduces to the closed form below.
+    const float a = dot(e1, e1);
+    const float b = dot(e1, e2);
+    const float c = dot(e2, e2);
+    const float detE = a * c - b * b;
+    if (abs(detE) < 1e-20) {
+        return 0.0;
+    }
+    const float m00 = du1 * du1 + du2 * du2;
+    const float m01 = du1 * dv1 + du2 * dv2;
+    const float m11 = dv1 * dv1 + dv2 * dv2;
+    const float tr = (c * m00 - 2.0 * b * m01 + a * m11) / detE;
+    return sqrt(max(tr, 0.0));
 }
 
 /// Inline-ray-query shadow tracer satisfying the shared estimator's ITracer interface.
@@ -654,9 +728,12 @@ struct TheiaTracer : ITracer {
 
 /// Populate a SurfaceHit from a traced hit via the shared OpenPBR texture-map populator
 /// (identical 1:1 with Hyperion's shadeSurface, so the frame/C7 logic cannot drift).
-SurfaceHit makeSurfaceHit(GiHit h, float3 wo) {
+/// `coneUvFootprint` (PERF8): 0 = mip 0 full detail (primary, shift re-evaluations,
+/// capture); nonzero = conservative ray-cone MIP for diffuse-secondary visits.
+SurfaceHit makeSurfaceHit(GiHit h, float3 wo, float coneUvFootprint = 0.0) {
     GpuMaterial mat = materials[h.materialIdx];
     TheiaTextureSampler tex;
+    tex.coneUvFootprint = coneUvFootprint;
     SurfaceFrame f = applyOpenPbrTextureMaps(mat, tex, wo, h.shadingNormal, h.geoNormal, h.tangent, h.uv);
 
     SurfaceHit surf;
@@ -1289,6 +1366,25 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
     bool hopCaptured = false;
     float3 x2Pos = 0.0.xxx;
     float3 x2Normal = 0.0.xxx;
+    // PERF8 (RTXPT §7): ray-class material LOD state. The RAY CLASS is chosen at
+    // spawn ("the ray-generation shader chooses the ray class"): the primary's
+    // continuation is full-material when spawned from a delta/near-specular vertex;
+    // from a rough diffuse-ish vertex it is diffuse-secondary class and its hits
+    // fetch textures at the ray cone's conservative MIP. Seed = the primary pixel's
+    // world footprint: viewDist · 2·tan(fovY/2) / screenHeight.
+    float coneRadius = 0.0; // world meters — cone footprint at the current surface
+    float coneSpread = 0.0; // accumulated cone half-angle tan (capped at 1)
+    bool rayFullClass = true;
+    if (materialLodEnabled != 0u) {
+        const float primDist = max(length(primary.position - cameraPos.xyz), 1e-4);
+        coneRadius = primDist * (2.0 * tanHalfFovY) / float(max(screenHeight, 1u));
+        coneSpread = coneRadius / primDist;
+        // Class of the primary's continuation ray: delta / near-specular-lobe /
+        // narrow sampled pdf → full; a diffuse-lobe sample → diffuse-secondary class.
+        rayFullClass = state.specularBounce ||
+                       state.lastBsdfPdf > kSpecularLobePdf ||
+                       primary.mat.specularRoughAnisoIor.x < kNearSpecularRough;
+    }
     for (uint iter = 0u; bounce < bounces && !state.terminated && iter < maxIters; ++iter) {
         // A null interaction (opacity pass-through) RESUMES the ray instead of scattering it,
         // so it uses the small continuation epsilon — the scattering guard would skip every
@@ -1310,7 +1406,19 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
             break;
         }
 
-        SurfaceHit surf = makeSurfaceHit(h, -dir);
+        // PERF8: advance the ray cone to this hit (travel × accumulated spread), then
+        // fetch this visit's textures at the cone footprint MIP when the arriving ray
+        // is diffuse-secondary class. `bounce > 0` keeps the FIRST secondary at full
+        // material — it is the GI-ENH shift vertex x_2, rebuilt full at shift time,
+        // so the walk-time record and every shift re-evaluation agree exactly.
+        float hitConeUv = 0.0;
+        if (materialLodEnabled != 0u) {
+            coneRadius += length(h.worldPos - origin) * coneSpread;
+            if (!rayFullClass && bounce > 0u) {
+                hitConeUv = coneRadius * triangleUvGradPerMeter(h.instanceIndex, h.primitiveIndex);
+            }
+        }
+        SurfaceHit surf = makeSurfaceHit(h, -dir, hitConeUv);
         // Reject a non-finite secondary material rather than propagating NaN through
         // integrateSurface — terminate the path and keep the radiance accumulated so far.
         if (!all(isfinite(surf.mat.baseColorWeight.xyz)) || !all(isfinite(surf.mat.emissionColorLum.xyz))) {
@@ -1355,6 +1463,29 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
             const float regRough = lerp(curRough, max(curRough, regStrength), regT);
             surf.mat.specularRoughAnisoIor.x = regRough;
             surf.mat.coatRoughAnisoIorDark.x = max(surf.mat.coatRoughAnisoIorDark.x, regRough * 0.5);
+        }
+        // PERF8 §7 reduced BRDF for diffuse-secondary visits (Theia-only, flag-gated
+        // exactly like A3(a); OFF in estimator-pure capture). The whitepaper's
+        // approximation policy: preserve albedo, Fresnel, metallic and roughness
+        // behavior — so only the DETAIL layers (coat, fuzz) are dropped; the base
+        // diffuse + base specular GGX (albedo/Fresnel/metallic/roughness), emission
+        // and transmission stay untouched. MIS inside this vertex stays consistent
+        // (eval, sample and pdf all see the same reduced material); shift
+        // re-evaluations rebuild recorded vertices FULL material — the same
+        // bounded-walk-bias family A3(a) ships under. "Simplified normals" (same
+        // table) arrive through the conservative MIP on the normal-map fetch above.
+        // Exemptions mirror A3(a): smooth glass keeps its exact dielectric stack,
+        // SMS physical events keep the physical material for its caster laws.
+        // The arrival ray class (rayFullClass) gates it: specular/near-specular
+        // arrivals keep the full stack so reflections see the real material.
+        if (materialLodEnabled != 0u && bounce > 0u && !rayFullClass && !smoothDielectricTransmission &&
+            !smsPhysicalEvent) {
+            const float lodMetal = surf.mat.baseMetalnessDiffRough.x;
+            const float lodTrans = saturate(surf.mat.transmissionColorWeight.w);
+            if (lodMetal < 0.5 && lodTrans < 0.1) {
+                surf.mat.coatColorWeight = float4(0.0, 0.0, 0.0, 0.0);
+                surf.mat.fuzzColorWeight = float4(0.0, 0.0, 0.0, 0.0);
+            }
         }
         // Depth counts real surface interactions: the primary consumed one (primaryCharge),
         // so the loop's first real surface is depth 1 for a real primary and depth 0 when the
@@ -1460,6 +1591,20 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
         }
         origin = state.nextOrigin;
         dir = state.nextDirection;
+        // PERF8: scatter updates the cone (lobe spread accumulates into the angle)
+        // and re-derives the NEXT hit's ray class from the spawn vertex (§7: the
+        // class is chosen at spawn). A null interaction resumes the same ray —
+        // neither the angle nor the class changes (the radius advances at the next
+        // hit, so pass-through travel still grows the footprint). Medium-scatter
+        // spread is not accumulated (under-estimate → finer mip → toward mip 0, the
+        // safe direction).
+        if (materialLodEnabled != 0u && !state.passedThrough) {
+            coneSpread = min(1.0, coneSpread + saturate(surf.mat.specularRoughAnisoIor.x));
+            rayFullClass = state.specularBounce ||
+                           state.lastBsdfPdf > kSpecularLobePdf ||
+                           surf.mat.specularRoughAnisoIor.x < kNearSpecularRough ||
+                           smoothDielectricTransmission || smsPhysicalEvent;
+        }
         if (state.passedThrough) {
             continue; // null interaction: same ray, same bounce index
         }

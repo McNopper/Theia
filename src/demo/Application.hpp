@@ -169,6 +169,9 @@ class Application final : public harmonia::app::App,
     /// GI-ENH (a): reconnection shift feature mask (THEIA_NO_RECONNECTION=0 / THEIA_SHIFT_MASK).
     /// bit0 = k=2 shift, bit1 = k>=3 shift. 0 = replay-only.
     std::uint32_t m_reconnectShiftEnabled = 3u;
+    /// PERF8 (material LOD): -1 = auto (interactive on / estimator-pure capture off),
+    /// 0/1 = forced by THEIA_MATERIAL_LOD (debug A/B harness).
+    int m_forceMaterialLod = -1;
     std::uint32_t m_sceneMaxDepth = 3u;
 
     /// Previous frame's row-major view-projection matrix for motion vector computation.

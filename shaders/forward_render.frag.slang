@@ -512,29 +512,36 @@ FS_OUT main(FS_IN input, bool isFrontFace : SV_IsFrontFace) {
 
     // --- Bindless material textures (base_color, normal, ORM, emission) ---
     // Textures are pre-converted to linear Rec.2020 at load time, so no sRGB decode here.
+    // PERF8 (material LOD): explicit SampleLevel(..., 0.0) — the raster primary is the
+    // full-material class (whitepaper §7 Table 3) and must stay TEXEL-IDENTICAL with
+    // Hyperion's shared texsampler (texsampler.slang also fetches explicit mip 0), so
+    // implicit-LOD footprint filtering must not engage now that samplers expose the
+    // full mip range (Sampler maxLod) for the GI tier's conservative MIPs. The
+    // offscreen direct term is estimator-visible: an implicit trilinear fetch here
+    // drifts parity (measured SSIM 0.935 on cornell_textured_cube).
     const uint baseColorTex = mat.textureIndices.x;
     const uint normalTex     = mat.textureIndices.y;
     const uint ormTex        = mat.textureIndices.z;
     const uint emissionTex   = mat.textureIndices.w;
 
     if (baseColorTex != kNoTexture) {
-        float4 bc = t_bindless[NonUniformResourceIndex(baseColorTex)].Sample(input.uv);
+        float4 bc = t_bindless[NonUniformResourceIndex(baseColorTex)].SampleLevel(input.uv, 0.0);
         mat.baseColorWeight.xyz *= bc.xyz;
         mat.opacityFlagsPad.x   *= bc.w; // modulate opacity by texture alpha
     }
     if (ormTex != kNoTexture) {
         // glTF ORM convention: r = occlusion, g = roughness, b = metalness.
-        float3 orm = t_bindless[NonUniformResourceIndex(ormTex)].Sample(input.uv).xyz;
+        float3 orm = t_bindless[NonUniformResourceIndex(ormTex)].SampleLevel(input.uv, 0.0).xyz;
         mat.specularRoughAnisoIor.x = saturate(mat.specularRoughAnisoIor.x * orm.y);
         mat.baseMetalnessDiffRough.x = saturate(mat.baseMetalnessDiffRough.x * orm.z);
     }
     if (emissionTex != kNoTexture) {
-        mat.emissionColorLum.xyz *= t_bindless[NonUniformResourceIndex(emissionTex)].Sample(input.uv).xyz;
+        mat.emissionColorLum.xyz *= t_bindless[NonUniformResourceIndex(emissionTex)].SampleLevel(input.uv, 0.0).xyz;
     }
     if (normalTex != kNoTexture) {
         // Tangent-space normal map → world space using the TBN frame.
         // glTF/OpenGL convention: +Y. Reconstruct Z for robustness against JPG artifacts.
-        float3 tn = t_bindless[NonUniformResourceIndex(normalTex)].Sample(input.uv).xyz * 2.0 - 1.0;
+        float3 tn = t_bindless[NonUniformResourceIndex(normalTex)].SampleLevel(input.uv, 0.0).xyz * 2.0 - 1.0;
         tn.z = sqrt(saturate(1.0 - tn.x * tn.x - tn.y * tn.y));
         float3 perturbed = normalize(tn.x * T + tn.y * B + tn.z * N);
         // Guard against degenerate/encoded normals that would flip the shading normal
@@ -561,7 +568,7 @@ FS_OUT main(FS_IN input, bool isFrontFace : SV_IsFrontFace) {
     const uint opacityTex = mat.textureIndices2.w;
     if (opacityTex != kNoTexture) {
         mat.opacityFlagsPad.x *=
-            saturate(t_bindless[NonUniformResourceIndex(opacityTex)].Sample(input.uv).w);
+            saturate(t_bindless[NonUniformResourceIndex(opacityTex)].SampleLevel(input.uv, 0.0).w);
     }
     // The rasterizer's share of `mix(S_ambient-medium, M_surface, α)`: with probability
     // (1-α) this fragment's surface is simply not there, so it is discarded and the

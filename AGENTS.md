@@ -71,7 +71,9 @@ only — `--output` capture forces jitter ON, see below),
 Theia accumulates frames — use `--offscreen-frames` for convergence quality.
 
 **Capture is estimator-pure:** `--output` disables every presentation aid — denoiser/TAA,
-the firefly clamps, and the A3(a) secondary-bounce roughness regularization — and forces
+the firefly clamps, the A3(a) secondary-bounce roughness regularization, and the PERF8
+material-LOD tier (reduced-BRDF + conservative MIPs; `THEIA_MATERIAL_LOD=1` forces it
+back on for A/B measurement) — and forces
 camera jitter **on**, so the capture integrates the same pixel footprint as Hyperion's
 per-sample jitter and converges to the unclamped ground truth. Firefly speckle on HDR
 content in a capture is the estimator's true variance, not a bug.
@@ -308,7 +310,9 @@ path. Both paths share one task-shader entry point (`gid.x = 0..visibleCount-1`)
   the GD3 indirect draw is always available.
 - Debug A/B toggles: `THEIA_FORCE_GD3` (skip DGC, use indirect draw), `THEIA_SINGLE_PASS`
   (bypass two-pass Hi-Z), `THEIA_DISABLE_HIZ` (draw all meshlets), `THEIA_NO_RECONNECTION`
-  (GI-ENH (a) reconnection shift off — replay-only, for A/B measurement), `THEIA_SHIFT_MASK=<n>` (GI-ENH (a) shift MODE, mirroring the reference's `kShiftStrategy`):
+  (GI-ENH (a) reconnection shift off — replay-only, for A/B measurement), `THEIA_MATERIAL_LOD=0|1`
+  (PERF8 material-LOD tier force-off/-on; default = interactive ON, estimator-pure capture OFF),
+  `THEIA_SHIFT_MASK=<n>` (GI-ENH (a) shift MODE, mirroring the reference's `kShiftStrategy`):
   0 = RandomReplay (no shift), 1 = Reconnection, 2 = Hybrid, 3 = Hybrid (bit1 wins).
   1 = Reconnection: x_k at the first secondary hit, UNCONDITIONAL (reference:
   `!useHybridShift && path.length == 1`). 2/3 = Hybrid: x_k at the FIRST pair satisfying

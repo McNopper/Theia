@@ -41,6 +41,10 @@ GiPass::FrameParams Application::buildGiFrameParams(const sm::float4x4& view,
     gp.fireflyClampEnabled = !m_pureEstimatorCapture;
     gp.reconnectShiftEnabled = m_reconnectShiftEnabled;
     gp.motionVectorView = VK_NULL_HANDLE;
+    // PERF8 (material LOD): two-tier — interactive ON, estimator-pure capture OFF
+    // (convergence litmus); THEIA_MATERIAL_LOD=0|1 forces the mode for A/B.
+    gp.materialLodEnabled = m_forceMaterialLod >= 0 ? (m_forceMaterialLod != 0) : !m_pureEstimatorCapture;
+    gp.tanHalfFovY = std::tan(sm::radians(m_camera.vfovDeg) * 0.5f);
     return gp;
 }
 

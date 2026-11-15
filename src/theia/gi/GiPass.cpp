@@ -600,7 +600,7 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         .maxDepth = std::max(1u, params.maxDepth),
         .screenWidth = m_cfg.width,
         .screenHeight = m_cfg.height,
-        ._pad0 = 0u,
+        .tanHalfFovY = params.tanHalfFovY,
         .a3RegularizationEnabled = params.useA3Regularization ? 1u : 0u,
         .hasGradientVariance = (params.gradientVarianceView != VK_NULL_HANDLE) ? 1u : 0u,
         .giAdaptiveMaxSamples = std::max(1u, params.adaptiveMaxSamples),
@@ -619,6 +619,7 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         .fireflyClampEnabled = params.fireflyClampEnabled ? 1u : 0u,
         .reconnectShiftEnabled = params.reconnectShiftEnabled,
         .smsEnabled = m_smsFrameActive ? 1U : 0U,
+        .materialLodEnabled = params.materialLodEnabled ? 1u : 0u,
     };
 
     const bool replayCompaction = (pc.restirPtPathEnabled != 0u) && m_replayCountBuf[0].isValid() &&

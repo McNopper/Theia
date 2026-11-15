@@ -228,6 +228,21 @@ with warp count and pays at production resolution.
 
 ### Consumed items (defined elsewhere)
 
+- **PERF8** (material LOD by ray class — whitepaper §7, Harmonia row **done 2026-11-15**):
+  the Theia wire landed here — spawn-time ray classification (delta / near-specular lobe
+  via `lastBsdfPdf > 1.0` / roughness < 0.2 / glass / SMS-physical ⇒ full material; else
+  diffuse-secondary), a ray-cone conservative-MIP texture tier
+  (`TheiaTextureSampler.coneUvFootprint`, seeded from the primary pixel footprint,
+  per-triangle UV-gradient texel density, lod ≤ 6, opacity pinned mip 0), the reduced-BRDF
+  drop (coat/fuzz only, diffuse-secondary visits), and the two-tier flag
+  (`materialLodEnabled` push const: interactive ON / estimator-pure capture OFF;
+  `THEIA_MATERIAL_LOD=0|1` A/B). First secondary always full (GI-ENH shift vertex x_2 —
+  walk and shift agree exactly). Visibility rays verified already opacity-only by
+  architecture. **Harmonia dependency shipped with it:** full GPU mip chain at upload +
+  `Sampler.maxLod` `0.0` → `VK_LOD_CLAMP_NONE` (pre-existing clamp bug) + this repo's
+  forward fetches pinned to explicit `SampleLevel(uv, 0.0)` (Hyperion parity — provably
+  capture-neutral). Receipts: module 60/60; engagement A/B gate PASS (mean 0.231,
+  SSIM 0.998351); estimator-pure stability **bit-identical** vs the pre-change baseline.
 - **GI-SMS** (caustics/SDS), **DN3** (converging denoiser — the à-trous replacement),
   **DN1** (real-time neural denoising slot — **open, no adoptable candidate**: the former
   RaNAD candidate was adjudicated no-go 2026-11-08 and struck from the pipeline 2026-11-09;
