@@ -355,8 +355,14 @@ struct RadCacheRecord {
 // Written ONLY by the initial-candidate walk (traceGiPathCandidate) while
 // pathGuidingEnabled (S1 default OFF — behavior-off until S3).
 // Constants kPgChainDepth / kPgChainSlots live in pg_common.slang (shared with S2's
-// splat/fit passes in pg_fit.comp.slang) — included below.
+// splat/fit passes in pg_fit.comp.slang) - included below.
 [[vk::binding(32, 0)]] RWStructuredBuffer<float4>   t_pgChains;
+
+// GI-PG S3: the fitted guiding grid written by pg_fit.comp's M-step (PG-layout
+// binding 1; cell layout MUST match pg_common.slang kPgCellFloat4):
+//   [slot*6 + 0..3] = muKappa lobes (mu.xyz, kappa in w), [slot*6 + 4] = pi,
+//   [slot*6 + 5] = (valid, sampleCount, ...).
+[[vk::binding(33, 0)]] StructuredBuffer<float4>     t_pgCells;
 
 float cgnsNeighborScale(float queryDist) {
     return max(1.0e-8, sqrt(kCgnsSolidAngle / kPi) * queryDist);
@@ -1237,6 +1243,60 @@ float4 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
 #include "gi_sms.slang"
 #include "pg_common.slang" // GI-PG: kPgChain* (S1) + guiding-grid definitions (S2/S3)
 
+// ── GI-PG S3: eligibility + cell fetch + the walk's actual sampling density ────
+// Eligibility is MATERIAL-ONLY so the walk (which decides pgGuideOn) and every
+// density re-evaluation (shift MIS / NEE MIS) agree exactly. SMS frames disable
+// guiding wholesale on the C++ side (smsPhysicalEvent vertices cannot be classified
+// here), and the primary edge is never guided (the shift pdfY1 sites stay pure-BSDF
+// by construction).
+bool pgVertexEligible(SurfaceHit s) {
+    const float rough = saturate(s.mat.specularRoughAnisoIor.x);
+    const float metal = saturate(s.mat.baseMetalnessDiffRough.x);
+    const float trans = saturate(s.mat.transmissionColorWeight.w);
+    const float sss = saturate(s.mat.subsurfaceColorWeight.w);
+    return rough >= 0.2 && metal < 0.5 && trans < 0.1 && sss < 0.1;
+}
+
+PgGuideCell pgNoCell() {
+    PgGuideCell c;
+    c.pi = float4(0.0, 0.0, 0.0, 0.0);
+    c.muKappa[0] = float4(0.0, 0.0, 0.0, 0.0);
+    c.muKappa[1] = float4(0.0, 0.0, 0.0, 0.0);
+    c.muKappa[2] = float4(0.0, 0.0, 0.0, 0.0);
+    c.muKappa[3] = float4(0.0, 0.0, 0.0, 0.0);
+    return c;
+}
+
+/// Fetch the fitted cell for (position, material); pi stays zero when the cell is
+/// invalid or empty (S3's fit marks validity in [slot*6 + 5].x).
+PgGuideCell pgCellFetch(float3 pos, uint materialIdx) {
+    PgGuideCell c = pgNoCell();
+    const uint cb = pgCellSlot(pos, cameraPos.xyz, materialIdx) * kPgCellFloat4;
+    if (t_pgCells[cb + 5u].x >= 0.5) {
+        c.muKappa[0] = t_pgCells[cb];
+        c.muKappa[1] = t_pgCells[cb + 1u];
+        c.muKappa[2] = t_pgCells[cb + 2u];
+        c.muKappa[3] = t_pgCells[cb + 3u];
+        c.pi = t_pgCells[cb + 4u];
+    }
+    return c;
+}
+
+/// The density THIS pipeline actually samples with at (s, wo, wi): the one-sample-MIS
+/// mixture 0.5*q_bsdf + 0.5*q_guide when guiding is active for that vertex, else the
+/// plain BSDF pdf — must match integrateSurface's step-5 branch decision exactly.
+float pgSamplingPdf(SurfaceHit s, float3 wo, float3 wi, uint materialIdx) {
+    const float qB = pdfBSDF(s.mat, wo, wi, s.normal, s.T, s.B, s.coatN, s.coatT, s.coatB, s.backface);
+    if (pathGuidingEnabled == 0u || !pgVertexEligible(s)) {
+        return qB;
+    }
+    const PgGuideCell c = pgCellFetch(s.position, materialIdx);
+    if (c.pi.x + c.pi.y + c.pi.z + c.pi.w <= 0.0) {
+        return qB;
+    }
+    return 0.5 * qB + 0.5 * pgGuidePdf(c, wi);
+}
+
 bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp, bool includePrimaryEnvNee,
                           out float3 outIndirect, out float3 outEnvNee,
                           bool captureRe, bool disableRR, out ReconnectionCapture outRec,
@@ -1317,12 +1377,13 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
         if (includePrimaryEnvNee && envImportance && emissiveTriangleCount > 0u) {
             float3 sum = 0.0.xxx;
             const uint count = 4u;
+            const PgGuideCell noGuide = pgNoCell(); // primary edge is never guided
             for (uint i = 0u; i < count; ++i) {
                 EnvNeeSample envNee = evalEnvNEESample(
                     tracer, primary,
                     envMarginalCdf, envConditionalCdf,
                     envImportanceWidth, envImportanceHeight, envEnabled, envLuminanceScale,
-                    t_envMap, s_env, state.seed, capEnvUnused);
+                    t_envMap, s_env, state.seed, capEnvUnused, false, noGuide);
                 sum += envNee.contribution;
             }
             primaryEnvNee = sum / float(count);
@@ -1638,11 +1699,17 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
             pgPushed = true;
         }
         state.depth = bounce + primaryCharge;
+        // GI-PG S3: pre-fetch this vertex's guiding cell and eligibility (material-only
+        // so every density re-evaluation agrees). The loop covers SECONDARY vertices
+        // only — the primary edge stays pure-BSDF (the shift pdfY1 sites depend on it).
+        const PgGuideCell pgCell = pgCellFetch(surf.position, h.materialIdx);
+        const bool pgGuideOn = pathGuidingEnabled != 0u && pgVertexEligible(surf) &&
+                               (pgCell.pi.x + pgCell.pi.y + pgCell.pi.z + pgCell.pi.w) > 0.0;
         integrateSurface(tracer, surf,
             emissiveTriangleCount, emissiveTriangles, emissiveCdf,
             envMarginalCdf, envConditionalCdf,
             envImportanceWidth, envImportanceHeight, envEnabled, envLuminanceScale,
-            t_envMap, s_env, state);
+            t_envMap, s_env, state, pgGuideOn, pgCell);
         if (smsEnabled!=0u)
             smsAdvancePathSurface(smsPath,surf,state,h.geoNormal,uint2(h.instanceIndex,h.materialIdx),
                 remainingDepth,currentSmsReceiver);
@@ -1859,12 +1926,13 @@ float3 primaryEnvNeeOnly(SurfaceHit primary, RngState seed) {
     }
     float3 sum = 0.0.xxx;
     const uint count = 4u;
+    const PgGuideCell noGuide = pgNoCell(); // primary edge is never guided
     for (uint i = 0u; i < count; ++i) {
         EnvNeeSample envNee = evalEnvNEESample(
             tracer, primary,
             envMarginalCdf, envConditionalCdf,
             envImportanceWidth, envImportanceHeight, envEnabled, envLuminanceScale,
-            t_envMap, s_env, seed, capEnvUnused2);
+            t_envMap, s_env, seed, capEnvUnused2, false, noGuide);
         sum += envNee.contribution;
     }
     float3 result = (sum / float(count)) * exposure;
@@ -2036,15 +2104,17 @@ bool tryReconnectionShift(SurfaceHit primary, PathReservoir neighbor, float adap
             surfK.normal, surfK.T, surfK.B, surfK.coatN, surfK.coatT, surfK.coatB, surfK.backface);
         float misW = 1.0;
         if (envImportanceWidth > 0u && envImportanceHeight > 0u) {
-            const float bsdfPdfK = pdfBSDF(surfK.mat, woK, rec.env.wi,
-                surfK.normal, surfK.T, surfK.B, surfK.coatN, surfK.coatT, surfK.coatB, surfK.backface);
+            // GI-PG: mixed one-sample-MIS density — must match the walk's step-5 branch.
+            const float bsdfPdfK = pgSamplingPdf(surfK, woK, rec.env.wi, rec.xkMaterialIdx);
             misW = rec.env.srcPdf / max(rec.env.srcPdf + bsdfPdfK, 1.0e-6);
         }
         vertexNee += fEnv * rec.env.raw * misW;
     }
     // Continuation: x_k's own weight toward the cached suffix direction × L_inc.
-    const float pdfYk = max(pdfBSDF(surfK.mat, woK, rec.omegaK,
-        surfK.normal, surfK.T, surfK.B, surfK.coatN, surfK.coatT, surfK.coatB, surfK.backface), 1.0e-10);
+    // GI-PG: mixed density for x_k's continuation edge (the walk sampled it from
+    // the one-sample-MIS mixture — re-evaluating with the raw BSDF pdf would skew
+    // the reconnection Jacobian and the suffix-weight MIS).
+    const float pdfYk = max(pgSamplingPdf(surfK, woK, rec.omegaK, rec.xkMaterialIdx), 1.0e-10);
     const float3 fK = evalBSDF(surfK.mat, woK, rec.omegaK,
         surfK.normal, surfK.T, surfK.B, surfK.coatN, surfK.coatT, surfK.coatB, surfK.backface);
     float gContK;
@@ -2214,8 +2284,8 @@ bool tryReconnectionShiftK3(SurfaceHit primary, PathReservoir neighbor, float ad
     const float3 wHop = f1 * max(dot(hopDir, primary.normal), 0.0) * (fTerm1 / pdfY1);
 
     // ── Target-side reconnection-edge weight at x'_2 (direction ω_2 → x_k). ──
-    const float pdfY2 = max(pdfBSDF(surf2.mat, surf2.wo, wp,
-        surf2.normal, surf2.T, surf2.B, surf2.coatN, surf2.coatT, surf2.coatB, surf2.backface), 1.0e-10);
+    // GI-PG: mixed density for x'_2's edge (the walk sampled it from the mixture).
+    const float pdfY2 = max(pgSamplingPdf(surf2, surf2.wo, wp, h2.materialIdx), 1.0e-10);
     const float3 f2 = evalBSDF(surf2.mat, surf2.wo, wp,
         surf2.normal, surf2.T, surf2.B, surf2.coatN, surf2.coatT, surf2.coatB, surf2.backface);
     float gPrim2;
@@ -2241,14 +2311,16 @@ bool tryReconnectionShiftK3(SurfaceHit primary, PathReservoir neighbor, float ad
             surfK.normal, surfK.T, surfK.B, surfK.coatN, surfK.coatT, surfK.coatB, surfK.backface);
         float misW = 1.0;
         if (envImportanceWidth > 0u && envImportanceHeight > 0u) {
-            const float bsdfPdfK = pdfBSDF(surfK.mat, woK, rec.env.wi,
-                surfK.normal, surfK.T, surfK.B, surfK.coatN, surfK.coatT, surfK.coatB, surfK.backface);
+            // GI-PG: mixed one-sample-MIS density — must match the walk's step-5 branch.
+            const float bsdfPdfK = pgSamplingPdf(surfK, woK, rec.env.wi, rec.xkMaterialIdx);
             misW = rec.env.srcPdf / max(rec.env.srcPdf + bsdfPdfK, 1.0e-6);
         }
         vertexNee += fEnv * rec.env.raw * misW;
     }
-    const float pdfYk = max(pdfBSDF(surfK.mat, woK, rec.omegaK,
-        surfK.normal, surfK.T, surfK.B, surfK.coatN, surfK.coatT, surfK.coatB, surfK.backface), 1.0e-10);
+    // GI-PG: mixed density for x_k's continuation edge (the walk sampled it from
+    // the one-sample-MIS mixture — re-evaluating with the raw BSDF pdf would skew
+    // the reconnection Jacobian and the suffix-weight MIS).
+    const float pdfYk = max(pgSamplingPdf(surfK, woK, rec.omegaK, rec.xkMaterialIdx), 1.0e-10);
     const float3 fK = evalBSDF(surfK.mat, woK, rec.omegaK,
         surfK.normal, surfK.T, surfK.B, surfK.coatN, surfK.coatT, surfK.coatB, surfK.backface);
     float gContK;
@@ -2361,8 +2433,8 @@ bool tryForcedNEEReconnection(SurfaceHit primary, PathReservoir neighbor, float 
             surfK.normal, surfK.T, surfK.B, surfK.coatN, surfK.coatT, surfK.coatB, surfK.backface);
         float misW = 1.0;
         if (envImportanceWidth > 0u && envImportanceHeight > 0u) {
-            const float bsdfPdfK = pdfBSDF(surfK.mat, woK, rec.env.wi,
-                surfK.normal, surfK.T, surfK.B, surfK.coatN, surfK.coatT, surfK.coatB, surfK.backface);
+            // GI-PG: mixed one-sample-MIS density — must match the walk's step-5 branch.
+            const float bsdfPdfK = pgSamplingPdf(surfK, woK, rec.env.wi, rec.xkMaterialIdx);
             misW = rec.env.srcPdf / max(rec.env.srcPdf + bsdfPdfK, 1.0e-6);
         }
         vertexSum += fEnv * rec.env.raw * misW;

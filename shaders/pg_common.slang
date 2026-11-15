@@ -50,8 +50,10 @@ uint pgCellSlot(float3 pos, float3 camPos, uint materialIdx) {
 
 /// Unnormalized vMF direction density exp(kappa * mu·omega) (the kappa/(4pi sinh
 /// kappa) factor cancels inside the E-step's responsibility normalization).
+/// Exponent clamped to ±80 (fp32-safe; kappa <= kPgKappaMax=64 needs only ±64) —
+/// a tighter ±40 clamp truncated high-kappa responsibilities (see pgGuidePdf).
 float pgVmfExp(float3 mu, float kappa, float3 omega) {
-    return exp(clamp(kappa * dot(mu, omega), -40.0, 40.0));
+    return exp(clamp(kappa * dot(mu, omega), -80.0, 80.0));
 }
 
 #endif // PG_COMMON_SLANG

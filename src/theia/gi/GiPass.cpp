@@ -288,7 +288,7 @@ void GiPass::shutdown() {
 }
 
 bool GiPass::createDescriptors() {
-    const std::array<VkDescriptorSetLayoutBinding, 33> bindings{{
+    const std::array<VkDescriptorSetLayoutBinding, 34> bindings{{
         {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // TLAS
         {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // hdr (RW)
         {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // giBuffer
@@ -339,11 +339,13 @@ bool GiPass::createDescriptors() {
                                                                                           // radiance cache (RW)
         {32, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI-PG S1 per-pixel
                                                                                           // selected-path chains (RW)
+        {33, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI-PG S3 fitted
+                                                                                          // guiding cells (RO)
     }};
 
     // MOD1: no UPDATE_AFTER_BIND — incompatible with DESCRIPTOR_BUFFER layouts.
     constexpr VkDescriptorBindingFlags kTextureFlags = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
-    const std::array<VkDescriptorBindingFlags, 33> bindingFlags{
+    const std::array<VkDescriptorBindingFlags, 34> bindingFlags{
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, kTextureFlags, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
@@ -559,6 +561,10 @@ void GiPass::updateDescriptors(const FrameParams& params) {
         // GI-PG S1: per-pixel selected-path chain buffer (frame-independent, all slots).
         if (m_pgChainBuf.isValid()) {
             w.writeStorageBufferHandle(*m_ctx, 32, m_pgChainBuf);
+        }
+        // GI-PG S3: fitted guiding cells (frame-independent, all slots).
+        if (m_pgCellsBuf.isValid()) {
+            w.writeStorageBufferHandle(*m_ctx, 33, m_pgCellsBuf);
         }
 
         // Bindless textures (binding 13) — write when scene changes.
