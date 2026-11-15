@@ -116,7 +116,7 @@ the 320×240 parity resolution.
   compute loop executes the same chromatic hero-wavelength free-flight/scatter/boundary
   estimator as Hyperion (`runMediumWalk`), on both primary and secondary vertices. `sampleBSDF`
   sets `entersMedium` with per-channel Ïƒ_t exactly like Hyperion; it is NOT a diffuse-tint
-  approximation anymore. Thin-walled subsurface keeps the diffuse sheet. Pure absorbers
+  approximation anymore. Thin-walled subsurface keeps the diffuse sheet (OpenPBR 1.1.2 #258/#321: subsurface_color applied once, radius/scale ignored). Pure absorbers
   (single-scatter albedo = 0, e.g. OpenPBR transmission with `transmission_scatter = 0` and
   `transmission_depth > 0`) take the **exact deterministic Beer–Lambert** branch (no free-flight
   sampling, transmittance `exp(-Ïƒ_t·d)` applied at the boundary) — matches Hyperion, zero walk

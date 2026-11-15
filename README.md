@@ -7,7 +7,7 @@ GPU-driven accumulation path-traced renderer for OpenPBR materials.
 > *[Theia](https://en.wikipedia.org/wiki/Theia_(mythology)) — Titaness of heavenly light, mother of Helios, Selene and Eos.*
 
 Theia is a modern Vulkan 1.4 renderer built on GPU-driven rendering techniques.  
-It implements the [OpenPBR Surface v1.1.1](https://academysoftwarefoundation.github.io/OpenPBR/) material model and converges to [Hyperion](https://github.com/McNopper/Hyperion)'s path-traced output on identical test scenes through frame accumulation. A **unified HW ray-traced GI pass** (sharing Hyperion's `path_integrator`) provides multi-bounce indirect light *and* transmission/refraction. See *Indirect lighting and GI architecture* below.
+It implements the [OpenPBR Surface v1.1.2](https://academysoftwarefoundation.github.io/OpenPBR/) material model and converges to [Hyperion](https://github.com/McNopper/Hyperion)'s path-traced output on identical test scenes through frame accumulation. A **unified HW ray-traced GI pass** (sharing Hyperion's `path_integrator`) provides multi-bounce indirect light *and* transmission/refraction. See *Indirect lighting and GI architecture* below.
 
 **Converges to the ground truth** — accumulates jittered path-traced samples and resolves to the Hyperion reference.  
 **Architecture driven by [GPU-Driven Rendering](https://vkguide.dev/docs/gpudriven)** — compute-based culling, indirect dispatch, and clustered lighting.
@@ -74,7 +74,7 @@ It implements the [OpenPBR Surface v1.1.1](https://academysoftwarefoundation.git
 - **Sub-pixel camera jitter (Halton 2,3)** — deterministic raster AA sampling for accumulation-friendly opaque edge anti-aliasing
 - **Interactive camera control** — WASD movement, mouse look, EV100 physical exposure adjustment
 
-### Material model — OpenPBR Surface v1.1.1
+### Material model — OpenPBR Surface v1.1.2
 All parameters follow the [OpenPBR spec](https://academysoftwarefoundation.github.io/OpenPBR/) naming. All 8 material layers are fully supported:
 
 | Layer | Parameters | Status |
