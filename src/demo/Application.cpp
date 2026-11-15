@@ -397,19 +397,33 @@ void Application::record(VkCommandBuffer cmd, const harmonia::app::RenderTarget&
     m_passTimer.beginFrame(frameIndex() % 2U);
 
     // ANI2 (PERF3 follow-through): drive the shared TLAS update for animated
-    // scenes. Deterministic tick clock (Aether ANI2): seconds = frameIndex / fps,
-    // so the same logical frame always renders the same scene state. The update
-    // refits in place (periodic full rebuild) via the harmonia::scene_rt policy —
-    // host one-shot submissions, ordered before this frame's work. Motion
-    // invalidates the accumulation history (the offscreen path ignores the epoch
-    // by contract — animated sequence rendering is ANI7); TAA/motion-vector
-    // correctness for animated instances is ANI3 (tracked separately).
+    // scenes. Deterministic tick clock (Aether ANI2): seconds = tick / fps, so the
+    // same logical frame always renders the same scene state. The tick is
+    // animationFrameIndex(): the raw frame index normally, PINNED to the output
+    // frame during ANI7 sequence renders, so every accumulation sample of output
+    // frame k renders the same scene state. The update refits in place (periodic
+    // full rebuild) via the harmonia::scene_rt policy - host one-shot submissions,
+    // ordered before this frame's work. A changed tick invalidates the
+    // accumulation history (resetAccumulation) - once per output frame in a
+    // sequence render, once per frame in the classic paths as before. TAA /
+    // motion-vector correctness for animated instances is ANI3 (shipped).
     if (m_scene->hasAnimation()) {
-        m_scene->setAnimationTime(static_cast<float>(static_cast<double>(frameIndex()) / m_scene->animationFps()));
-        if (const VkResult r = m_scene->updateTlas(deviceContext(), commandPool()); r != VK_SUCCESS) {
-            harmonia::core::Logger::error("TLAS update failed: VkResult {}", static_cast<std::int32_t>(r));
+        const std::uint32_t tick = animationFrameIndex();
+        if (tick != m_lastAnimationTick) {
+            m_lastAnimationTick = tick;
+            m_scene->setAnimationTime(static_cast<float>(static_cast<double>(tick) / m_scene->animationFps()));
+            if (const VkResult r = m_scene->updateTlas(deviceContext(), commandPool()); r != VK_SUCCESS) {
+                harmonia::core::Logger::error("TLAS update failed: VkResult {}", static_cast<std::int32_t>(r));
+            }
+            resetAccumulation();
+            if (!config().outputFile.empty() && config().sequenceFrames == 0U && !m_animatedCaptureWarned) {
+                m_animatedCaptureWarned = true;
+                harmonia::core::Logger::warn(
+                    "animated scene captured with --output but no --sequence-frames: accumulation restarts every "
+                    "sample, so the capture is a single-sample last-tick image - use --sequence-frames <N> for "
+                    "per-frame EXR/PNG output (ANI7)");
+            }
         }
-        resetAccumulation();
     }
 
     m_renderer->setRngState(frameIndex(), config().rngSeed, config().deterministicReplay);

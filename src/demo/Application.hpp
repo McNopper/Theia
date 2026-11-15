@@ -182,6 +182,12 @@ class Application final : public harmonia::app::App,
     int m_forcePathGuiding = -1;
     std::uint32_t m_sceneMaxDepth = 3u;
 
+    /// ANI7: last animation tick applied - the guard that stamps + resets ONCE per
+    /// OUTPUT frame during sequence renders (per rendered frame otherwise, where the
+    /// raw index changes every frame anyway). ~0u = "never" so frame 0 always runs.
+    std::uint32_t m_lastAnimationTick = ~std::uint32_t{0};
+    bool m_animatedCaptureWarned = false; ///< one-time --output-without-sequence hint
+
     /// Previous frame's row-major view-projection matrix for motion vector computation.
     sm::float4x4 m_prevViewProj{1.0f};
     bool m_prevViewProjValid = false;
