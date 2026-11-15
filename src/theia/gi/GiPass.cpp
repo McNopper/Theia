@@ -9,7 +9,6 @@
 #include <harmonia/core/ShaderModule.hpp>
 #include <slang-math/slang-math.hpp>
 #include <span>
-#include <theia/gi/PairingTextures.hpp>
 #include <theia/renderer/ShaderPath.hpp>
 #include <theia/scene/Scene.hpp>
 #include <vector>
@@ -24,23 +23,6 @@
 #endif
 
 namespace theia {
-
-namespace {
-/// GI-ENH: deterministic per-frame pairing-texture permutation (ReSTIR PT Enhanced
-/// §3.2 — flip/mirror/transpose/offset so the static maps' tiling never bakes a
-/// fixed spatial pattern into the accumulated image). 19 packed bits:
-/// 0-2 = mirrorY|mirrorX|transpose, 3-10 = offsetX, 11-18 = offsetY.
-[[nodiscard]] std::uint32_t pairingPermFor(std::uint32_t frame, std::uint32_t texIdx) {
-    std::uint64_t z = static_cast<std::uint64_t>(frame) * 0x9E3779B97F4A7C15ULL +
-                      static_cast<std::uint64_t>(texIdx + 1U) * 0xBF58476D1CE4E5B9ULL;
-    z = (z ^ (z >> 30U)) * 0xBF58476D1CE4E5B9ULL;
-    z = (z ^ (z >> 27U)) * 0x94D049BB133111EBULL;
-    z ^= z >> 31U;
-    return static_cast<std::uint32_t>(z & 0x7FFFFU);
-}
-
-constexpr std::uint64_t kPairingSeed = 0x50414952494E47ULL; // "PAIRING"
-} // namespace
 
 GiPass::~GiPass() {
     shutdown();
@@ -108,23 +90,6 @@ bool GiPass::initialize(const harmonia::DeviceContext& ctx,
         }
     }
 
-    // GI-ENH: Gaussian paired-neighbor pairing textures (self-inverse offset maps
-    // built deterministically on the CPU, uploaded once, read-only at runtime).
-    {
-        const std::vector<std::uint32_t> packed = theia::pairing::buildPackedOffsets(kPairingSeed);
-        auto buf = harmonia::core::Buffer::upload(ctx,
-                                                  uploadPool,
-                                                  std::as_bytes(std::span<const std::uint32_t>(packed)),
-                                                  VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                                                      VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                                  "theia.gi.pairingOffsets");
-        if (!buf) {
-            harmonia::core::Logger::error("GiPass: failed to upload pairing offsets: VkResult {}",
-                                          static_cast<int>(buf.error()));
-            return false;
-        }
-        m_pairingOffsetBuf = std::move(*buf);
-    }
     m_reservoirPingPong = 0;
     m_reservoirsCleared = false;
     m_pathReservoirPingPong = 0;
@@ -201,7 +166,6 @@ void GiPass::shutdown() {
     m_pathReservoirBuf[1] = {};
     m_pathReservoirsCleared = false;
     m_pathReservoirPingPong = 0;
-    m_pairingOffsetBuf = {};
     m_replayRecordsBuf[0] = {};
     m_replayRecordsBuf[1] = {};
     m_replayCountBuf[0] = {};
@@ -258,7 +222,9 @@ bool GiPass::createDescriptors() {
                                                                                           // (cur, RW)
         {21, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI2 PT path reservoirs
                                                                                           // (prev, RO)
-        {22, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI-ENH pairing maps
+        {22, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // (slot reserved - former
+                                                                                          // GI-ENH pairing maps,
+                                                                                          // removed by GI-CG)
         {23, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI-ENH shift share (cur,
                                                                                           // RW)
         {24, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI-ENH shift share (prev,
@@ -313,10 +279,6 @@ bool GiPass::createDescriptors() {
         }
     }
 
-    // GI-ENH pairing maps (binding 22) are static after creation — write once per slot.
-    for (std::uint32_t si = 0; si < kDescriptorSlots; ++si) {
-        m_descWriters[si].writeStorageBufferHandle(*m_ctx, 22, m_pairingOffsetBuf);
-    }
     return true;
 }
 
@@ -655,10 +617,6 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         // path reservoir buffers.
         .restirPtPathEnabled = (params.useRestirPtPath && m_pathReservoirBuf[0].isValid()) ? 1u : 0u,
         .fireflyClampEnabled = params.fireflyClampEnabled ? 1u : 0u,
-        .pairingPerm0 = pairingPermFor(params.frameSampleIndex, 0u),
-        .pairingPerm1 = pairingPermFor(params.frameSampleIndex, 1u),
-        .pairingPerm2 = pairingPermFor(params.frameSampleIndex, 2u),
-        .pairingEnabled = m_pairingOffsetBuf.isValid() ? 1u : 0u,
         .reconnectShiftEnabled = params.reconnectShiftEnabled,
         .smsEnabled = m_smsFrameActive ? 1U : 0U,
     };

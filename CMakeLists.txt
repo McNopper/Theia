@@ -304,8 +304,6 @@ set(THEIA_gi_SOURCES
     src/theia/gi/GiPass.cpp
     src/theia/gi/GiPassSms.cpp
     src/theia/gi/GiPass.hpp
-    src/theia/gi/PairingTextures.cpp
-    src/theia/gi/PairingTextures.hpp
 )
 set(THEIA_postfx_SOURCES
     src/theia/postfx/MotionVectorPass.cpp

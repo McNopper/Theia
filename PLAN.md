@@ -146,7 +146,8 @@ chain measures as a pass-through/Middle-Man proxy — it is the designed layer c
 ### ReSTIR-PT refinements (GI-ENH — core + replay stream compaction landed)
 
 **Landed:** (b) vector-valued resampling weights (§6.3), (c) Gaussian
-paired-neighbor self-inverse maps (§3), (a) k=2 + k≥3 reconnection shifts (telescoping
+paired-neighbor self-inverse maps (§3) — **superseded and removed 2026-11-15 by
+GI-CG** (see below), (a) k=2 + k≥3 reconnection shifts (telescoping
 GRIS Jacobian, Eq. 5 footprint criteria), **paper-faithful resampling** (shift OR replay per candidate - the pairwise-MIS
 average and the paired shift-sharing shortcut were both dropped: shift-sharing
 consumed the reverse-direction shift, and the paper's section 3 pairing only
@@ -154,7 +155,15 @@ amortises the pair of shifts that pairwise MIS needs), **forced NEE reconnection
 using NEE only, higher eligibility), **Russian roulette at initial sampling only** (§6.2.4),
 and the **critical `flags |=` fix** (reconnection shift was silently never firing).
 Multi-frame captures are run-to-run pixel-reproducible. **§6.2.2 replay stream
-compaction landed (2026-11-09)** — see below. Remaining:
+compaction landed (2026-11-09)** — see below. **GI-CG landed (2026-11-15)** —
+CGNS compatibility-guided neighbor selection (`gi.comp.slang`: score
+`exp(-d/s)·max(n·n',0)^β`, s = sqrt(Ω/π)·queryDist, Ω = 0.05, β = 8; K = 8
+Shirley–Chiu disk candidates, A-Chao M = 1 per slot on a disjoint local per-slot
+RNG stream) replaced the pairing texture + uniform offsets in the spatial-reuse
+loop; `PairingTextures.{cpp,hpp}` deleted, binding 22 slot reserved. Receipts:
+module suite 60/60; stash-cycle A/B (128f) gate-PASS on dragon_teapot (mean_diff
+0.268 / SSIM 0.998472) and cornell_spheres (0.772 / 0.992428) — bounded
+deterministic delta, estimator unbiased. Remaining:
 
 - **Hybrid shift, remaining (paper-faithful gaps - read `DQLin/ReSTIR_PT` before touching):**
 - *Prefix-replay invertibility.* **CLOSED 2026-11-15 — full reference read, one check

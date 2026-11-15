@@ -186,17 +186,13 @@ class GiPass {
             0; ///< GI2: 1 = ReSTIR PT (path integrator owns primary emissive NEE); 0 = legacy DI path
         std::uint32_t restirPtPathEnabled = 0; ///< GI2 full PT: 1 = multi-bounce path reservoir owns the indirect walk
         std::uint32_t fireflyClampEnabled = 1; ///< 1 = presentation clamp (default); 0 = estimator-pure capture
-        std::uint32_t pairingPerm0 = 0;        ///< GI-ENH pairing-texture 0 per-frame transform (19 packed bits)
-        std::uint32_t pairingPerm1 = 0;
-        std::uint32_t pairingPerm2 = 0;
-        std::uint32_t pairingEnabled = 0;        ///< 1 = Gaussian paired neighbours in path-reservoir spatial reuse
         std::uint32_t reconnectShiftEnabled = 1; ///< GI-ENH (a): reconnection shift feature mask
                                                  ///< bit0 = k=2, bit1 = k>=3. 0 = replay-only.
         std::uint32_t smsEnabled = 0;
     };
     // Layout guard: must equal the Slang `GiParams` struct exactly (2×float4x4 + float4
-    // + 27 scalars = 144 + 108 = 252). Stays within the existing 256-byte device budget.
-    static_assert(sizeof(GiPushConstants) == 252);
+    // + 23 scalars = 144 + 92 = 236). Stays within the existing 256-byte device budget.
+    static_assert(sizeof(GiPushConstants) == 236);
 
     [[nodiscard]] bool createDescriptors();
     [[nodiscard]] bool createPipelineLayout();
@@ -271,8 +267,8 @@ class GiPass {
     harmonia::core::Buffer m_pathReservoirBuf[2]{};
     std::uint32_t m_pathReservoirPingPong = 0;
     bool m_pathReservoirsCleared = false;
-    /// GI-ENH: Gaussian paired-neighbor pairing maps (binding 22, static after init).
-    harmonia::core::Buffer m_pairingOffsetBuf{};
+    /// GI-CG: the former Gaussian pairing maps (binding 22) were removed 2026-11-15 —
+    /// the CGNS compatibility score supersedes their neighbor-selection role.
 
     // ── GI-ENH §6.2.2 replay stream compaction (bindings 27-30) ──────────────
     // Three-kernel split: emit (main) → uniform replay (replayMain) → combine

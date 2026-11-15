@@ -53,10 +53,6 @@ cbuffer GiPC {
     uint     restirPtPathEnabled;          // GI2 full PT: 1 = multi-bounce path reservoir owns the indirect walk
     uint     fireflyClampEnabled;          // 1 = presentation firefly clamp (interactive default);
                                            // 0 = estimator-pure capture (--output): no clamp, NaN/Inf guard only
-    uint     pairingPerm0;                 // GI-ENH: per-frame pairing-texture transform, texture 0
-    uint     pairingPerm1;                 //   bits 0-2 = mirrorY|mirrorX|transpose, 3-10 = offsetX,
-    uint     pairingPerm2;                 //   11-18 = offsetY (tile phase; decorrelates the static maps)
-    uint     pairingEnabled;               // 1 = Gaussian paired neighbours (path-reservoir spatial reuse)
     uint     reconnectShiftEnabled;        // GI-ENH (a) feature mask (0 = replay-only):
                                            //   bit0 (1) = k=2 reconnection shift
                                            //   bit1 (2) = k>=3 hybrid reconnection shift
@@ -284,27 +280,19 @@ float targetPdfEnv(float3 Le, float3 bsdfTimesCos) {
 [[vk::binding(20, 0)]] RWStructuredBuffer<PathReservoir>   t_pathReservoirsCur;   // current-frame write
 [[vk::binding(21, 0)]] StructuredBuffer<PathReservoir>     t_pathReservoirsPrev;  // previous-frame read
 
-// GI-ENH: Gaussian paired-neighbor pairing textures (built by PairingTextures.cpp,
-// uploaded once). Three concatenated self-inverse offset maps (254/230/210), one
-// packed int16x2 texel per uint (x low, y high).
-[[vk::binding(22, 0)]] StructuredBuffer<uint>              t_pairingOffsets;
-
-// ── GI-ENH (ReSTIR PT Enhanced §3): Gaussian paired-neighbor selection ────────
-// Texel (x, y) of each pairing map holds the offset to its unique partner (an
-// involution), so selecting neighbour A of B implies selecting B of A. Pair
-// displacements are isotropic Gaussian, sigma 16 px per axis (matched to the
-// previous uniform-disk radius 30 px). The per-frame transform
-// (transpose/mirror/offset — paper §3.2) decorrelates the map's tiling so no
-// fixed spatial pattern enters the accumulated image. NB on scope: in the paper the pairing exists to share one shift
-// evaluation between both endpoints (a 2x spatial-cost win against pairwise-MIS
-// baselines). That reuse was TRIED here and removed - it consumed the
-// reverse-direction shift, and section 3's pairing only amortises the PAIR of
-// shifts that pairwise MIS weights need, which this architecture does not use
-// ("shift OR replay per candidate"). The pairing is kept purely as a QUALITY
-// upgrade for this seed-space plain-RIS scheme: Gaussian-concentrated neighbours
-// give higher G-buffer compatibility and better FLIP at equal mean radius.
-static const uint kPairTexels0 = 254u * 254u;
-static const uint kPairTexels1 = 230u * 230u;
+// ── GI-CG (CGNS, HPG 2026 "Compatibility-Guided Neighbor Selection") ───────────
+// Replaces the former GI-ENH (c) Gaussian pairing texture (removed 2026-11-15:
+// its stated purpose — a QUALITY upgrade via higher G-buffer compatibility per
+// neighbour — is exactly what the CGNS score measures directly, so one selector
+// serves; the pairing's own §3 sharing rationale was already retired — see
+// Harmonia/PLAN.md GI-ENH). Paper §4.3 heuristic, h = exp(-‖x-y‖/s) ·
+// max(n·n', 0)^β, with the scene-scale-agnostic radius s = sqrt(Ω/π)·queryDist
+// (Ω = 0.05 sr, β = 8 defaults); Algorithm 1/§5: K candidates from a disk,
+// M = 1 per slot picked by A-Chao weighted reservoir sampling (Chao 1982 /
+// Efraimidis 2015: weightSum += score, accept with u < score/weightSum).
+static const float kCgnsSolidAngle = 0.05;  // Ω (sr) — paper default
+static const float kCgnsBeta = 8.0;         // normal-exponent — paper default
+static const uint  kCgnsCandidates = 8u;    // K candidates scored per slot
 
 // ── GI-ENH §6.2.2 replay stream compaction (three-kernel split) ───────────────
 // The spatial-reuse neighbor loop used to run the multi-bounce replay walks
@@ -342,24 +330,75 @@ static const uint kPathSpatialNeighbors = 3u;
 [[vk::binding(29, 0)]] RWStructuredBuffer<PtEmitParams> t_ptParams;      // per-pixel emit state
 [[vk::binding(30, 0)]] RWStructuredBuffer<float4>       t_replayResults; // per (pixel, slot) replay walk result
 
-int2 pairingOffset(uint texIdx, uint2 px) {
-    const int s = (texIdx == 0u) ? 254 : ((texIdx == 1u) ? 230 : 210);
-    const uint base = (texIdx == 0u) ? 0u : ((texIdx == 1u) ? kPairTexels0 : kPairTexels0 + kPairTexels1);
-    const uint perm = (texIdx == 0u) ? pairingPerm0 : ((texIdx == 1u) ? pairingPerm1 : pairingPerm2);
-    int2 t = int2(px);
-    if ((perm & 4u) != 0u) { t = t.yx; }  // transpose
-    if ((perm & 2u) != 0u) { t.x = -t.x; } // mirror x
-    if ((perm & 1u) != 0u) { t.y = -t.y; } // mirror y
-    t += int2(int((perm >> 3) & 0xFFu), int((perm >> 11) & 0xFFu)); // tile phase
-    const uint2 tc = uint2(uint(((t.x % s) + s) % s), uint(((t.y % s) + s) % s));
-    const uint v = t_pairingOffsets[base + tc.y * uint(s) + tc.x];
-    int2 d = int2(int(v << 16) >> 16, int(v) >> 16); // sign-extended int16 pair
-    // Inverse-transform the displacement back into screen space (mirror axes
-    // negate, transpose swaps) so the pairing stays an involution there too.
-    if ((perm & 1u) != 0u) { d.y = -d.y; }
-    if ((perm & 2u) != 0u) { d.x = -d.x; }
-    if ((perm & 4u) != 0u) { d = d.yx; }
-    return d;
+float cgnsNeighborScale(float queryDist) {
+    return max(1.0e-8, sqrt(kCgnsSolidAngle / kPi) * queryDist);
+}
+
+/// Shirley & Chiu 1997 concentric map: unit square (u, v in [0,1)) -> unit disk.
+float2 shirleyChiuDisk(float u, float v) {
+    const float2 a = float2(2.0 * u - 1.0, 2.0 * v - 1.0);
+    if (a.x == 0.0 && a.y == 0.0) {
+        return float2(0.0, 0.0);
+    }
+    float theta;
+    float r;
+    if (abs(a.x) > abs(a.y)) {
+        r = a.x;
+        theta = (kPi * 0.25) * (a.y / a.x);
+    } else {
+        r = a.y;
+        theta = (kPi * 0.5) - (kPi * 0.25) * (a.x / a.y);
+    }
+    return r * float2(cos(theta), sin(theta));
+}
+
+/// CGNS compatibility score (paper §4.3 / reference CGNSUtils.computeNeighborWeight):
+/// h = exp(-‖x-y‖/s) · max(n·n', 0)^β, clamped to [ε, 1]; one-surface-one-env
+/// pairs are discouraged (ε), both-env encouraged (1.0 — unreachable here: the
+/// emit stage runs only for valid primaries).
+float cgnsScore(float3 queryPos, float3 queryNormal, bool candidateValid,
+                float3 candidatePos, float3 candidateNormal, float scale) {
+    if (!candidateValid) {
+        return 1.0e-8;
+    }
+    const float positionScore = exp(-length(queryPos - candidatePos) / scale);
+    const float normalScore = max(dot(queryNormal, candidateNormal), 0.0);
+    return clamp(positionScore * pow(normalScore, kCgnsBeta), 1.0e-8, 1.0);
+}
+
+/// CGNS neighbour selection for one path-reservoir slot (Algorithm 1, M = 1):
+/// score K disk candidates against the query primary and A-Chao-pick one.
+/// Returns a pixel offset; the downstream gates (bounds/pos/normal/duplication)
+/// still filter it — the score chooses WHICH candidate to try, the gates keep
+/// the shift-eligibility contract. The per-slot RNG stream is composed locally
+/// (index space proven disjoint from the main sample/candidate streams), so the
+/// main stream's draw count is unchanged by the selection.
+int2 cgnsSelectNeighbor(uint2 px, float3 queryPos, float3 queryNormal, float queryDist,
+                        float radius, uint slot) {
+    RngState cgRng = composeRngSeed(px, frameSampleIndex * 4u + 0x1000u + slot, 0u, rngBaseSeed);
+    const float scale = cgnsNeighborScale(queryDist);
+    int2 selected = int2(int(px.x), int(px.y)); // reference init (self → duplication map filters it)
+    float weightSum = 0.0;
+    for (uint k = 0u; k < kCgnsCandidates; ++k) {
+        const float2 duv = shirleyChiuDisk(randFloat(cgRng), randFloat(cgRng));
+        const float2 off = duv * radius;
+        const int2 cand = int2(int(px.x) + int(round(off.x)), int(px.y) + int(round(off.y)));
+        if (cand.x < 0 || cand.y < 0 || cand.x >= int(screenWidth) || cand.y >= int(screenHeight)) {
+            continue;
+        }
+        const float4 gbuf4 = t_giBuffer.Load(int3(cand.x, cand.y, 0));
+        const bool candidateValid = asuint(gbuf4.w) != 0u;
+        const float3 candidatePos = gbuf4.xyz;
+        const float3 candidateNormal = t_gbuffer.Load(int3(cand.x, cand.y, 0)).xyz * 2.0 - 1.0;
+        const float score = cgnsScore(queryPos, queryNormal, candidateValid,
+                                      candidatePos, candidateNormal, scale);
+        weightSum += score;
+        const float u = randFloat(cgRng);
+        if (weightSum > 0.0 && u < score / weightSum) {
+            selected = cand;
+        }
+    }
+    return selected - int2(int(px.x), int(px.y));
 }
 
 /// Inverse of a row-major 3×3 lives in common.slang (shared with forward_render.mesh).
@@ -2098,13 +2137,10 @@ void restirPtEmit(SurfaceHit primary, uint2 px, float adaptiveClamp, inout RngSt
         uint seenCount = 1u;
 
         for (uint n = 0u; n < kPathSpatialNeighbors; ++n) {
-            int2 off;
-            if (pairingEnabled != 0u) {
-                off = pairingOffset(n, px); // GI-ENH: deterministic Gaussian pair
-            } else {
-                const float2 rnd = (float2(randFloat(rng), randFloat(rng)) * 2.0 - 1.0) * kSpatialRadius;
-                off = int2(int(round(rnd.x)), int(round(rnd.y)));
-            }
+            // GI-CG (CGNS): score K disk candidates against MY primary (position
+            // falloff scaled by camera distance + normal^β) and A-Chao-pick one
+            // per slot — replaces the former pairing/uniform-offset choice.
+            const int2 off = cgnsSelectNeighbor(px, curWorldPos, curViewN, viewDist, kSpatialRadius, n);
             if (n == 0u)      emitState.off0 = int4(off.x, off.y, 0, 0);
             else if (n == 1u) emitState.off1 = int4(off.x, off.y, 0, 0);
             else              emitState.off2 = int4(off.x, off.y, 0, 0);

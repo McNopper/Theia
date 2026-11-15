@@ -230,7 +230,7 @@ runs the vendored `tools/check_arch.py` engine (label `analysis`; local; not wir
 both; includes may only go **down** that order (cross-repo includes of
 harmonia/slang-math/aether are downward by design), only **declared edges** exist (default deny), and there must be
 **no include cycles** (file-level SCC detection). Theia's classes live in `namespace theia` (the scene module
-included; `theia::pairing` is a module sub-namespace). **Theia never depends on Hyperion**
+included; the `theia::pairing` sub-namespace was removed with PairingTextures — GI-CG, 2026-11-15). **Theia never depends on Hyperion**
 — the sibling renderers are independent; shared code goes down into Harmonia (a `hyperion/` include is a hard
 violation).
 
