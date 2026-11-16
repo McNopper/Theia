@@ -399,10 +399,11 @@ VkResult Scene::uploadSceneBuffers(const harmonia::DeviceContext& ctx,
                                   m_vertexBuffer)) {
         return r;
     }
-    // ANI4: skinned scenes keep an immutable rest-pose copy - the skinning
-    // kernel reads REST and writes the active buffer, so re-running at a new
-    // tick replaces the pose instead of composing onto the previous frame.
-    if (hasSkins()) {
+    // ANI4+ANI5: deforming (skinned/morphed) scenes keep an immutable rest-pose
+    // copy - the deformation kernel reads REST and writes the active buffer, so
+    // re-running at a new tick replaces the pose instead of composing onto the
+    // previous frame.
+    if (hasSkins() || hasMorphs()) {
         if (VkResult r =
                 uploadBuffer(ctx,
                              pool,

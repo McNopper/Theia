@@ -49,9 +49,11 @@ GiPass::FrameParams Application::buildGiFrameParams(const sm::float4x4& view,
     // ON, estimator-pure capture OFF; THEIA_RADIANCE_CACHE=0|1 FORCES the mode for A/B
     // (capture bypass, mirroring THEIA_MATERIAL_LOD). The animated-scene gate is
     // unconditional: the table is world-static and would serve stale cells under motion.
-    // ANI4: a skinned scene deforms world geometry every tick - the world-static
-    // radiance-cache table is exactly as unsafe there as on animated scenes.
-    const bool rcSceneOk = m_scene != nullptr && !m_scene->hasAnimation() && !m_scene->hasSkins();
+    // ANI4+ANI5: a skinned/morphed scene deforms world geometry every tick -
+    // the world-static radiance-cache table is exactly as unsafe there as on
+    // animated scenes.
+    const bool rcSceneOk =
+        m_scene != nullptr && !m_scene->hasAnimation() && !m_scene->hasSkins() && !m_scene->hasMorphs();
     gp.radianceCacheEnabled =
         rcSceneOk && (m_forceRadianceCache >= 0 ? (m_forceRadianceCache != 0) : !m_pureEstimatorCapture);
     return gp;
