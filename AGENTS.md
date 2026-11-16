@@ -65,7 +65,7 @@ build/theia.exe --scene shaderball_base                               # interact
 CLI flags: `--scene/-s`, `--output/-o` (headless EXR+PNG), `--width`, `--height`,
 `--offscreen-frames <n>` (accumulation count), `--frames-per-flip <n>` (interactive
 accumulation frames per swapchain flip, default 1 — I6), `--validation`/`--no-validation`,
-`--no-restir-di` (ReSTIR DI off), `--taa`/`--no-taa`, `--no-camera-jitter` (interactive
+`--no-restir-di` / `--no-restir-pt` / `--no-restir-pt-path` (ReSTIR DI off / multi-bounce path-reservoir off / path-only variant off), `--taa`/`--no-taa`, `--no-camera-jitter` (interactive
 only — `--output` capture forces jitter ON, see below),
 `--indirect-ambient <f>`, plus the shared capture-timing flags
 `--frame <n>` (ANI8 seek), `--capture-every-ms <f>` + `--start-seconds <f>`
