@@ -55,6 +55,7 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
 
 ## At a glance
 
+- **Release:** v0.9.0 (2026-11-16) - **deformation half + gate resolution consumed.** ANI4/ANI5 renderer halves (shared `DeformPass`: rest->morph->skin per tick, BLAS refit, rest-pose vertex copy, skinned/morphed conservative bounds, radiance-cache gate for hasMorphs()) + DQS blend consumption (zero renderer code - rides the shared job/staging); parity thresholds recalibrated (fresh gate 14/14 PASS incl. this renderer, 0 VUID); triage sync (C11 consumed-claim removed). Receipts: module **61/61**, e2e sequences 0 VUID with motion proof. Pins: Harmonia **v0.8.0**, Aether **v0.9.0**.
 - **Prior:** v0.8.3 - Vulkan capability wave consumed via Harmonia v0.7.21 (VK21 memory-budget
   startup log + offscreen guard; VK18 present-timing telemetry; VK4 subgroup set); README gallery
   regenerated on the capability-set change. v0.8.2 - GI-SMS caustics with spatiotemporal reuse
@@ -65,10 +66,9 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
   bandit, actionlint 1.7.12, yamllint. Coverage stays a local activity (the test
   suite needs a GPU).
 - **Next:** the PERF4/PERF5 arc is **removed 2026-11-15** (measured does-not-serve Theia real-time; tombstones + triggers in Harmonia PLAN section 5.1; the design/stage record stays in git - Baseline v0.8.0).
-  Theia's live items: **GI-ENH** remaining (paper-faithful hybrid-shift gaps —
-  prefix-replay invertibility closed 2026-11-15, k≥4, sampled-lobe alpha; §"ReSTIR-PT refinements") and the
-  shared-estimator adopters as they land in `Harmonia/PLAN.md` (C12 wires into
-  the shared passes).
+  Theia's live items: **none open** (GI-ENH closed 2026-11-16 - recorded paper-deltas are
+  notes, not tasks; shared-estimator adopters: C12 shipped, C11 dropped - see
+  `Harmonia/PLAN.md`).
 ## How to continue
 
 **Working branch is `main`.** All three family repos (Harmonia, Theia, Hyperion)
