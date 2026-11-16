@@ -255,9 +255,14 @@ RT-GI is the single unified indirect + transmission provider and drives both the
 > pure-absorber transmittance. Residuals are localized high-energy-IBL-through-glass Monte-Carlo
 > variance at finite frame counts, not a transport-model gap.
 >
-> **Gate policy:** keep the strict absolute gate (`mean_diff <= 4.0`) for opaque/direct/SDR fixtures.
-> For HDR transmissive fixtures, use `compare_renders.py --gate scale-aware` (absolute OR relative+PSNR),
-> which avoids brightness-dependent false fails while still rejecting large structural mismatches.
+> **Gate policy (recalibrated 2026-11-16):** the manifest gate is the strict-AND set
+> `mean_diff <= 120`, `rel_mse <= 250`, `SSIM >= 0.6`, `lum-hist >= 0.8` - calibrated above the
+> estimator-pure noise floor at the 256-frame budget and below the measured *completely
+> different* anchors, so it catches gross divergence rather than Monte-Carlo noise (method +
+> measurements in Harmonia/PLAN.md §7; budget-specific). `compare_renders.py --gate
+> scale-aware` (absolute OR relative+PSNR) stays in the tool for ad-hoc HDR comparisons, but
+> the manifest no longer routes scenes through it - both transmissive fixtures pass the plain
+> gate (measured: 98.8 / 174.9 / 0.8645 / 0.8894 and 82.6 / 98.1 / 0.8909 / 0.8777).
 
 ---
 
