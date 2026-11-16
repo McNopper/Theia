@@ -1,6 +1,6 @@
 # Theia v0.9.0 (2026-11-16) - minor release
 
-Real-time renderer release consuming **Harmonia v0.8.0 + Aether v0.9.0**.
+Real-time renderer release consuming **Harmonia v0.9.0 + Aether v0.9.0**.
 
 ## Shipped
 - **Deformation (ANI4/ANI5 renderer half)**: the shared `DeformPass` runs from the animation

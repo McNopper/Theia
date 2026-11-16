@@ -55,7 +55,7 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
 
 ## At a glance
 
-- **Release:** v0.9.0 (2026-11-16) - **deformation half + gate resolution consumed.** ANI4/ANI5 renderer halves (shared `DeformPass`: rest->morph->skin per tick, BLAS refit, rest-pose vertex copy, skinned/morphed conservative bounds, radiance-cache gate for hasMorphs()) + DQS blend consumption (zero renderer code - rides the shared job/staging); parity thresholds recalibrated (fresh gate 14/14 PASS incl. this renderer, 0 VUID); triage sync (C11 consumed-claim removed). Receipts: module **61/61**, e2e sequences 0 VUID with motion proof. Pins: Harmonia **v0.8.0**, Aether **v0.9.0**.
+- **Release:** v0.9.0 (2026-11-16) - **deformation half + gate resolution consumed.** ANI4/ANI5 renderer halves (shared `DeformPass`: rest->morph->skin per tick, BLAS refit, rest-pose vertex copy, skinned/morphed conservative bounds, radiance-cache gate for hasMorphs()) + DQS blend consumption (zero renderer code - rides the shared job/staging); parity thresholds recalibrated (fresh gate 14/14 PASS incl. this renderer, 0 VUID); triage sync (C11 consumed-claim removed). Receipts: module **61/61**, e2e sequences 0 VUID with motion proof. Pins: Harmonia **v0.9.0**, Aether **v0.9.0**.
 - **Prior:** v0.8.3 - Vulkan capability wave consumed via Harmonia v0.7.21 (VK21 memory-budget
   startup log + offscreen guard; VK18 present-timing telemetry; VK4 subgroup set); README gallery
   regenerated on the capability-set change. v0.8.2 - GI-SMS caustics with spatiotemporal reuse
