@@ -8,9 +8,11 @@
 #include <memory>
 #include <optional>
 #include <slang-math/slang-math.hpp>
+#include <string>
 
 #include "EnvImportanceResources.hpp"
 #include "ViewAccumulation.hpp"
+#include "aether/format/SceneAnimator.hpp"
 #include "harmonia/app/App.hpp"
 #include "harmonia/app/IFrameCompletion.hpp"
 #include "harmonia/app/IRenderer.hpp"
@@ -113,6 +115,10 @@ class Application final : public harmonia::app::App,
         sm::float4x4 viewProj;
     };
     [[nodiscard]] CameraMatrices computeCameraMatrices(const harmonia::app::RenderTarget& target) const noexcept;
+    /// ANI8: re-place m_camera from the bound node's evaluated world at
+    /// @p tick (position/target/up + scene-scale clip planes) and push it to
+    /// the renderer. No-op without a bound camera node.
+    void placeBoundCamera(std::uint32_t tick);
     void dispatchLightCull(VkCommandBuffer cmd, const sm::float4x4& proj, const sm::float4x4& view) noexcept;
     void submitAsyncCompute(VkCommandBuffer cmd,
                             const harmonia::app::RenderTarget& target,
@@ -147,6 +153,11 @@ class Application final : public harmonia::app::App,
     ForwardRenderer::CameraParams m_camera{};
     CameraController m_camCtrl{};
     bool m_cameraJitterEnabled = true;
+    /// ANI8 camera-from-node: the scripted camera node from `[camera] node`
+    /// (std::nullopt = the classic static/interactive camera) plus the last
+    /// tick it was placed at (never-placed sentinel forces frame 0).
+    std::optional<std::string> m_cameraNodeId;
+    std::uint32_t m_cameraTick = ~std::uint32_t{0};
     /// A4: ReSTIR DI spatiotemporal reservoir resampling for emissive-triangle direct
     /// lighting (default on). When active the forward pass skips its emissive-derived
     /// rect lights (setRestirDiActive) so GiPass owns that term without double-counting.

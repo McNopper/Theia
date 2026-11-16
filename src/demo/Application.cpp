@@ -339,6 +339,13 @@ bool Application::onSceneLoaded(const harmonia::scene::SceneLoader::SceneConfig&
     }
     m_renderer->setScene(m_scene.get());
 
+    // ANI8 camera-from-node: remember the scripted node; placement itself runs
+    // in record()'s per-tick block (its never-placed sentinel fires on frame 0,
+    // before the first present). The static pos/at/up stay the load-time
+    // fallback for scenes without a bound node.
+    m_cameraNodeId = sceneConfig.cameraNodeId;
+    m_cameraTick = ~std::uint32_t{0};
+
     if (sceneConfig.cameraPos && sceneConfig.cameraAt) {
         m_camera.position = *sceneConfig.cameraPos;
         m_camera.target = *sceneConfig.cameraAt;
@@ -426,6 +433,15 @@ void Application::record(VkCommandBuffer cmd, const harmonia::app::RenderTarget&
     // skin-only scene has no tracks but its POSE changes with the tick): the
     // deformation runs after the stamp and before the TLAS update -
     //   stage matrices -> LBS dispatch -> copy -> BLAS refit -> TLAS.
+    // ANI8 camera-from-node: re-place the scripted camera from the bound node's
+    // evaluated world at this frame's tick. Own tick guard - NOT the animation
+    // block's below: a camera bound to a STATIC node on an otherwise static
+    // scene must not trip that block's accumulation reset on every offline
+    // sample (it would never converge).
+    if (m_cameraNodeId && animationFrameIndex() != m_cameraTick) {
+        m_cameraTick = animationFrameIndex();
+        placeBoundCamera(m_cameraTick);
+    }
     if (m_scene->hasAnimation() || m_scene->hasSkins() || m_scene->hasMorphs()) {
         const std::uint32_t tick = animationFrameIndex();
         if (tick != m_lastAnimationTick) {
@@ -903,10 +919,32 @@ bool Application::onEvent(const SDL_Event& event) {
     }
 }
 
+void Application::placeBoundCamera(std::uint32_t tick) {
+    if (!m_cameraNodeId || m_scene == nullptr || m_scene->attachedScene() == nullptr || m_renderer == nullptr) {
+        return;
+    }
+    const auto pose = aether::SceneAnimator::evaluateCameraAtTick(*m_scene->attachedScene(), tick);
+    if (!pose) {
+        return; // hand-built scene without a placement - keep the current view
+    }
+    m_camera.position = pose->position; // aether::Vec3 is sm::float3
+    m_camera.target = m_camera.position + (pose->rotation * sm::float3{0.0f, 0.0f, -1.0f});
+    m_camera.up = pose->rotation * sm::float3{0.0f, 1.0f, 0.0f};
+    // Scene-scale-aware clip planes follow the placed camera-to-target
+    // distance (same helper the load path uses).
+    const float camDist = sm::length(m_camera.target - m_camera.position);
+    std::tie(m_camera.nearPlane, m_camera.farPlane) = harmonia::renderer::Camera::nearFarFromDistance(camDist);
+    m_renderer->setCamera(m_camera);
+}
+
 void Application::onUpdate(float dtSeconds) {
-    m_camera.position = m_camCtrl.integrate(m_camera.position, dtSeconds);
-    m_camera.target = m_camera.position + m_camCtrl.forward();
-    m_camera.up = sm::float3{0.0f, 1.0f, 0.0f};
+    if (!m_cameraNodeId) {
+        // ANI8: a node-bound camera is SCRIPTED - the interactive controller
+        // must not clobber the placed pose (navigation is ignored while bound).
+        m_camera.position = m_camCtrl.integrate(m_camera.position, dtSeconds);
+        m_camera.target = m_camera.position + m_camCtrl.forward();
+        m_camera.up = sm::float3{0.0f, 1.0f, 0.0f};
+    }
     m_renderer->setCamera(m_camera);
 
     // Restart progressive accumulation whenever the view changes so a moving
