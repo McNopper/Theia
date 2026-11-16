@@ -116,6 +116,16 @@ class Scene : public harmonia::scene::SceneBase {
     [[nodiscard]] const harmonia::core::Buffer& instanceBoundsBuffer() const noexcept { return m_instanceBoundsBuffer; }
     [[nodiscard]] const harmonia::core::Buffer& materialBuffer() const noexcept { return m_materialBuffer; }
     [[nodiscard]] const harmonia::core::Buffer& vertexBuffer() const noexcept { return m_vertexBuffer; }
+    /// ANI4: immutable rest-pose copy of the scene-global vertices (valid for
+    /// skin-carrying scenes only) - the skinning kernel's read source; the
+    /// active `vertexBuffer()` receives the deformed pose each tick.
+    [[nodiscard]] const harmonia::core::Buffer& vertexRestBuffer() const noexcept { return m_vertexRestBuffer; }
+    /// ANI4: per-mesh range start in the scene-global vertex buffer (indexed by
+    /// mesh index) - the `SkinDeformPass::execute` argument. Sphere entries are
+    /// 0 (analytic geometry cannot be skinned).
+    [[nodiscard]] std::span<const std::uint32_t> meshSceneVertexOffsets() const noexcept {
+        return m_meshSceneVertexOffsets;
+    }
     [[nodiscard]] const harmonia::core::Buffer& indexBuffer() const noexcept { return m_indexBuffer; }
     [[nodiscard]] const harmonia::core::Buffer& meshletBuffer() const noexcept { return m_meshletBuffer; }
     [[nodiscard]] const harmonia::core::Buffer& meshletVertexBuffer() const noexcept { return m_meshletVertexBuffer; }
@@ -210,6 +220,10 @@ class Scene : public harmonia::scene::SceneBase {
     harmonia::core::Buffer m_instanceBoundsBuffer{};
     harmonia::core::Buffer m_materialBuffer{};
     harmonia::core::Buffer m_vertexBuffer{};
+    /// ANI4: rest-pose copy for the skinning kernel (only when hasSkins()).
+    harmonia::core::Buffer m_vertexRestBuffer{};
+    /// ANI4: per-mesh ranges into m_vertexBuffer (parallel to m_meshes).
+    std::vector<std::uint32_t> m_meshSceneVertexOffsets{};
     harmonia::core::Buffer m_indexBuffer{};
     harmonia::core::Buffer m_meshletBuffer{};
     harmonia::core::Buffer m_meshletVertexBuffer{};

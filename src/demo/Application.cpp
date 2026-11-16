@@ -308,6 +308,8 @@ void Application::onSceneUnload() {
     if (m_renderer) {
         m_renderer->setScene(nullptr);
     }
+    // ANI4: the pass's descriptors bind the previous scene's buffers.
+    m_skinDeform.reset();
     m_scene = std::make_unique<Scene>();
 }
 
@@ -315,6 +317,24 @@ bool Application::onSceneLoaded(const harmonia::scene::SceneLoader::SceneConfig&
     if (m_scene->build(deviceContext(), commandPool()) != VK_SUCCESS) {
         harmonia::core::Logger::error("Failed to build scene TLAS");
         return false;
+    }
+    // ANI4 renderer half: the shared GPU skinning pass (skin-carrying scenes
+    // only; the rest/active vertex + skin buffers must exist by now).
+    if (m_scene->hasSkins()) {
+        auto skinPass = harmonia::scene::SkinDeformPass::create(deviceContext(),
+                                                                *m_scene,
+                                                                m_scene->vertexRestBuffer(),
+                                                                m_scene->vertexBuffer(),
+                                                                std::filesystem::path(HARMONIA_SHADER_DIR) /
+                                                                    "skin_deform.comp.spv");
+        if (!skinPass) {
+            harmonia::core::Logger::error("SkinDeformPass creation failed: VkResult {}",
+                                          static_cast<std::int32_t>(skinPass.error()));
+            return false;
+        }
+        m_skinDeform = std::move(*skinPass);
+    } else {
+        m_skinDeform.reset();
     }
     m_renderer->setScene(m_scene.get());
 
@@ -401,11 +421,31 @@ void Application::record(VkCommandBuffer cmd, const harmonia::app::RenderTarget&
     // accumulation history (resetAccumulation) - once per output frame in a
     // sequence render, once per frame in the classic paths as before. TAA /
     // motion-vector correctness for animated instances is ANI3 (shipped).
-    if (m_scene->hasAnimation()) {
+    // ANI4 renderer half: skin-carrying scenes enter the same tick block (a
+    // skin-only scene has no tracks but its POSE changes with the tick): the
+    // deformation runs after the stamp and before the TLAS update -
+    //   stage matrices -> LBS dispatch -> copy -> BLAS refit -> TLAS.
+    if (m_scene->hasAnimation() || m_scene->hasSkins()) {
         const std::uint32_t tick = animationFrameIndex();
         if (tick != m_lastAnimationTick) {
             m_lastAnimationTick = tick;
-            m_scene->setAnimationTime(static_cast<float>(static_cast<double>(tick) / m_scene->animationFps()));
+            const float seconds = static_cast<float>(static_cast<double>(tick) / m_scene->animationFps());
+            if (m_scene->hasAnimation()) {
+                m_scene->setAnimationTime(seconds);
+            }
+            if (m_skinDeform.has_value()) {
+                if (const VkResult skinResult = m_skinDeform->execute(deviceContext(),
+                                                                      commandPool(),
+                                                                      *m_scene,
+                                                                      seconds,
+                                                                      m_scene->vertexRestBuffer(),
+                                                                      m_scene->vertexBuffer(),
+                                                                      m_scene->meshSceneVertexOffsets());
+                    skinResult != VK_SUCCESS) {
+                    harmonia::core::Logger::error("Skin deform failed: VkResult {}",
+                                                  static_cast<std::int32_t>(skinResult));
+                }
+            }
             if (const VkResult r = m_scene->updateTlas(deviceContext(), commandPool()); r != VK_SUCCESS) {
                 harmonia::core::Logger::error("TLAS update failed: VkResult {}", static_cast<std::int32_t>(r));
             }

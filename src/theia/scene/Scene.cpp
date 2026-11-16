@@ -28,6 +28,15 @@
 
 namespace theia {
 
+namespace {
+// ANI4: conservative object-space envelope radius for SKINNED geometry. The
+// meshlet spheres and instance AABBs are build-time (rest-pose); a deformed
+// vertex can leave them, so skinned bounds are inflated to effectively never
+// cull until a per-frame bounds refresh exists (skinned meshes skip culling -
+// correctness over culling throughput for the few skinned meshes).
+constexpr float kSkinnedBoundsRadius = 1.0e6F;
+} // namespace
+
 std::unique_ptr<harmonia::scene::Geometry> Scene::createTriangleMesh(const harmonia::DeviceContext& ctx,
                                                                      const harmonia::core::CommandPool& pool,
                                                                      harmonia::scene::MeshData&& data,
@@ -171,6 +180,10 @@ void Scene::buildMeshlets(std::vector<harmonia::GpuVertex>& vertices,
                           std::vector<std::uint32_t>& meshletVertices,
                           std::vector<std::uint32_t>& meshletTriangles) {
     m_meshGpu.assign(m_meshes.size(), MeshGpu{});
+    // ANI4: parallel per-mesh ranges into the scene-global vertex buffer
+    // (SkinDeformPass's meshSceneVertexOffsets argument; spheres stay 0 -
+    // analytic geometry cannot be skinned).
+    m_meshSceneVertexOffsets.assign(m_meshes.size(), 0U);
 
     constexpr std::size_t kMaxVerts = 64;
     constexpr std::size_t kMaxTris = 124;
@@ -182,6 +195,7 @@ void Scene::buildMeshlets(std::vector<harmonia::GpuVertex>& vertices,
         }
         MeshGpu& gpu = m_meshGpu[mi];
         gpu.vertexOffset = static_cast<std::uint32_t>(vertices.size());
+        m_meshSceneVertexOffsets[mi] = gpu.vertexOffset;
         gpu.indexOffset = static_cast<std::uint32_t>(indices.size());
         gpu.geometryKind = 0;
 
@@ -260,7 +274,9 @@ void Scene::buildMeshlets(std::vector<harmonia::GpuVertex>& vertices,
                 .centerX = bounds.center[0],
                 .centerY = bounds.center[1],
                 .centerZ = bounds.center[2],
-                .radius = bounds.radius,
+                // ANI4: rest-pose bounds would cull deformed skinned geometry
+                // - inflate to the conservative envelope instead.
+                .radius = mesh->isDynamic() ? kSkinnedBoundsRadius : bounds.radius,
             });
         }
     }
@@ -303,7 +319,13 @@ void Scene::buildGpuInstances() {
         });
         m_instanceBounds.push_back([&] {
             const harmonia::scene::Aabb object = m_meshes[inst.meshIndex]->objectAabb();
-            const harmonia::scene::Aabb world = harmonia::scene::worldAabbFromInstance(object, inst.transform);
+            harmonia::scene::Aabb world = harmonia::scene::worldAabbFromInstance(object, inst.transform);
+            if (m_meshes[inst.meshIndex]->isDynamic()) {
+                // ANI4: same conservative envelope as the meshlet spheres -
+                // skinned instances skip frustum culling (bounds are static).
+                world.min = world.min - sm::float3{kSkinnedBoundsRadius, kSkinnedBoundsRadius, kSkinnedBoundsRadius};
+                world.max = world.max + sm::float3{kSkinnedBoundsRadius, kSkinnedBoundsRadius, kSkinnedBoundsRadius};
+            }
             return GpuInstanceBounds{
                 .minX = world.min.x,
                 .minY = world.min.y,
@@ -372,10 +394,24 @@ VkResult Scene::uploadSceneBuffers(const harmonia::DeviceContext& ctx,
     if (VkResult r = uploadBuffer(ctx,
                                   pool,
                                   std::as_bytes(std::span<const harmonia::GpuVertex>(vertices.data(), vertices.size())),
-                                  kStorageAddr,
+                                  kStorageAddr | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
                                   "scene.vertices",
                                   m_vertexBuffer)) {
         return r;
+    }
+    // ANI4: skinned scenes keep an immutable rest-pose copy - the skinning
+    // kernel reads REST and writes the active buffer, so re-running at a new
+    // tick replaces the pose instead of composing onto the previous frame.
+    if (hasSkins()) {
+        if (VkResult r =
+                uploadBuffer(ctx,
+                             pool,
+                             std::as_bytes(std::span<const harmonia::GpuVertex>(vertices.data(), vertices.size())),
+                             kStorageAddr,
+                             "scene.vertexRest",
+                             m_vertexRestBuffer)) {
+            return r;
+        }
     }
     if (VkResult r = uploadBuffer(ctx,
                                   pool,

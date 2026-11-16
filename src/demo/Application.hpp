@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <slang-math/slang-math.hpp>
 
 #include "EnvImportanceResources.hpp"
@@ -13,6 +14,7 @@
 #include "harmonia/app/App.hpp"
 #include "harmonia/app/IFrameCompletion.hpp"
 #include "harmonia/app/IRenderer.hpp"
+#include "harmonia/scene/SkinDeformPass.hpp"
 #include "theia/camera/CameraController.hpp"
 #include "theia/cull/LightCuller.hpp"
 #include "theia/gi/GiPass.hpp"
@@ -181,6 +183,10 @@ class Application final : public harmonia::app::App,
     /// OUTPUT frame during sequence renders (per rendered frame otherwise, where the
     /// raw index changes every frame anyway). ~0u = "never" so frame 0 always runs.
     std::uint32_t m_lastAnimationTick = ~std::uint32_t{0};
+    /// ANI4 renderer half: the shared GPU skinning pass, created for
+    /// skin-carrying scenes in onSceneLoaded (its descriptors bind that
+    /// scene's buffers, so it is reset on scene unload).
+    std::optional<harmonia::scene::SkinDeformPass> m_skinDeform;
     bool m_animatedCaptureWarned = false; ///< one-time --output-without-sequence hint
 
     /// Previous frame's row-major view-projection matrix for motion vector computation.
