@@ -316,9 +316,7 @@ path. Both paths share one task-shader entry point (`gid.x = 0..visibleCount-1`)
   (GI-ENH (a) reconnection shift off — replay-only, for A/B measurement), `THEIA_MATERIAL_LOD=0|1`
   (PERF8 material-LOD tier force-off/-on; default = interactive ON, estimator-pure capture OFF),
   `THEIA_RADIANCE_CACHE=0|1` (GI-NRC world-space radiance-cache force-off/-on; default =
-  interactive ON, capture OFF, animated scenes always OFF), `THEIA_PATH_GUIDING=1`
-  (GI-PG guided candidate sampling — **ships DEFAULT-OFF: an open investigation measured
-  a +0.020 one-sided bias when forced on; see the Harmonia GI-PG row's variant table**),
+  interactive ON, capture OFF, animated scenes always OFF),
   `THEIA_SHIFT_MASK=<n>` (GI-ENH (a) shift MODE, mirroring the reference's `kShiftStrategy`):
   0 = RandomReplay (no shift), 1 = Reconnection, 2 = Hybrid, 3 = Hybrid (bit1 wins).
   1 = Reconnection: x_k at the first secondary hit, UNCONDITIONAL (reference:

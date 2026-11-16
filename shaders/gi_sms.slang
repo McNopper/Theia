@@ -58,16 +58,9 @@ void produceSmsReceiver(uint2 pixel,GiHit initialHit,SurfaceHit initialSurface) 
         }
         if (!path.prefixSpecular || remaining<3u) return;
         state.depth=depth;
-        // GI-PG: SMS prefix/suffix walks stay on the exact BSDF path (no guiding).
-        PgGuideCell noPgGuide;
-        noPgGuide.pi = float4(0.0, 0.0, 0.0, 0.0);
-        noPgGuide.muKappa[0] = float4(0.0, 0.0, 0.0, 0.0);
-        noPgGuide.muKappa[1] = float4(0.0, 0.0, 0.0, 0.0);
-        noPgGuide.muKappa[2] = float4(0.0, 0.0, 0.0, 0.0);
-        noPgGuide.muKappa[3] = float4(0.0, 0.0, 0.0, 0.0);
         integrateSurface(tracer,surface,emissiveTriangleCount,emissiveTriangles,emissiveCdf,
             envMarginalCdf,envConditionalCdf,envImportanceWidth,envImportanceHeight,hasEnvMap!=0u,
-            envLuminanceScale,t_envMap,s_env,state,false,noPgGuide);
+            envLuminanceScale,t_envMap,s_env,state);
         smsAdvancePathSurface(path,surface,state,hit.geoNormal,uint2(hit.instanceIndex,hit.materialIdx),remaining,false);
         if (state.terminated || !path.prefixSpecular) return;
         float3 origin=state.nextOrigin,direction=state.nextDirection;

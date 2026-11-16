@@ -175,11 +175,6 @@ class Application final : public harmonia::app::App,
     /// GI-NRC (radiance cache): -1 = auto (interactive on / estimator-pure capture off,
     /// also off for animated scenes), 0/1 = forced by THEIA_RADIANCE_CACHE (A/B harness).
     int m_forceRadianceCache = -1;
-    /// GI-PG: -1 = auto (ON — the guiding proposal is MIS-consistent, so it runs in
-    /// both tiers), 0/1 = forced by THEIA_PATH_GUIDING (A/B harness). SMS frames are
-    /// gated OFF (smsPhysicalEvent vertices cannot be classified at density
-    /// re-evaluation time), mirroring the material-LOD/radiance-cache force pattern.
-    int m_forcePathGuiding = -1;
     std::uint32_t m_sceneMaxDepth = 3u;
 
     /// ANI7: last animation tick applied - the guard that stamps + resets ONCE per

@@ -52,15 +52,6 @@ GiPass::FrameParams Application::buildGiFrameParams(const sm::float4x4& view,
     const bool rcSceneOk = m_scene != nullptr && !m_scene->hasAnimation();
     gp.radianceCacheEnabled =
         rcSceneOk && (m_forceRadianceCache >= 0 ? (m_forceRadianceCache != 0) : !m_pureEstimatorCapture);
-    // GI-PG S3: guided candidate sampling is implemented but ships DEFAULT-OFF —
-    // an open investigation (row record) measured a reproducible +0.020 one-sided
-    // pixel bias with guiding forced on, root cause not yet isolated (every pairing
-    // identity verified: sampler==pdf in fp32, f·cos/pdf convention, one-sample-MIS
-    // marginal, zero-μ and κ>40 numerics, fallback bookkeeping — all fixed/ruled
-    // out; variant table in Harmonia/PLAN.md GI-PG row). THEIA_PATH_GUIDING=1
-    // forces it on for debugging; the default stays OFF until the bias is found
-    // and the strict-gate A/B passes.
-    gp.pathGuidingEnabled = m_forcePathGuiding > 0;
     return gp;
 }
 

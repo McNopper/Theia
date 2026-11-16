@@ -123,12 +123,6 @@ bool Application::onInitialize() {
             m_forceRadianceCache = (!rcRaw->empty() && (*rcRaw)[0] != '0') ? 1 : 0;
             harmonia::core::Logger::info("THEIA_RADIANCE_CACHE forced to {}", m_forceRadianceCache);
         }
-        // GI-PG: THEIA_PATH_GUIDING=0|1 forces the path-guiding tier (default ON —
-        // MIS-consistent proposal; SMS frames are gated OFF separately).
-        if (const auto pgRaw = harmonia::core::getEnvString("THEIA_PATH_GUIDING")) {
-            m_forcePathGuiding = (!pgRaw->empty() && (*pgRaw)[0] != '0') ? 1 : 0;
-            harmonia::core::Logger::info("THEIA_PATH_GUIDING forced to {}", m_forcePathGuiding);
-        }
     }
     if (m_pureEstimatorCapture) {
         if (!m_cameraJitterEnabled) {

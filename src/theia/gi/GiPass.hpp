@@ -142,11 +142,6 @@ class GiPass {
         /// Also forced off for animated scenes (world-static table); SMS frames use the
         /// per-surface smsPhysicalEvent exclusion instead of a blanket gate.
         bool radianceCacheEnabled = true;
-        /// GI-PG S1: candidate-walk chain capture into the per-pixel splat buffer.
-        /// S1 default OFF (behavior-off: nothing reads the buffer until S2's splat/fit
-        /// passes exist); THEIA_PATH_GUIDING=1 forces it for plumbing tests; S3 flips
-        /// the default ON once guided sampling lands.
-        bool pathGuidingEnabled = false;
     };
 
     GiPass() = default;
@@ -216,31 +211,13 @@ class GiPass {
                                                 ///< 0 = estimator-pure capture (full material everywhere)
         std::uint32_t radianceCacheEnabled = 1; ///< GI-NRC: 1 = world-space radiance-cache tier
                                                 ///< active (interactive); 0 = estimator-pure capture
-        std::uint32_t pathGuidingEnabled = 0;   ///< GI-PG S1: 1 = candidate chain capture (plumbing;
-                                                ///< S1 default 0 = behavior-off until S3)
     };
     // Layout guard: must equal the Slang `GiPC` struct exactly (2×float4x4 + float4
-    // + 26 scalars = 144 + 104 = 248). Stays within the existing 256-byte device budget.
-    static_assert(sizeof(GiPushConstants) == 248);
-
-    /// GI-PG S2 push constants for the splat/fit passes (must equal the Slang PGPC).
-    struct PgPushConstants {
-        std::uint32_t screenWidth = 0;
-        std::uint32_t screenHeight = 0;
-        // Slang's cbuffer places float4 at offset 16 (16-byte alignment); sm::float4
-        // is align-4, so the padding is explicit to keep the mirror exact.
-        std::uint32_t _pad0 = 0;
-        std::uint32_t _pad1 = 0;
-        sm::float4 cameraPos{0.0f};
-    };
-    static_assert(sizeof(PgPushConstants) == 32);
-    static_assert(offsetof(PgPushConstants, cameraPos) == 16);
+    // + 25 scalars = 144 + 100 = 244). Stays within the existing 256-byte device budget.
+    static_assert(sizeof(GiPushConstants) == 244);
 
     [[nodiscard]] bool createDescriptors();
     [[nodiscard]] bool createPipelineLayout();
-    /// GI-PG S2: own 3-binding layout + splat/fit pipelines (buffers are init-time
-    /// static, so one descriptor set written once at initialize).
-    [[nodiscard]] bool createPgPass();
     [[nodiscard]] bool createComputePipeline(const char* spv,
                                              const char* entry,
                                              const char* cacheName,
@@ -273,19 +250,6 @@ class GiPass {
     /// descriptor set / push-constant layout as the emit megakernel.
     harmonia::core::UniquePipeline m_replayPipeline;
     harmonia::core::UniquePipeline m_combinePipeline;
-    // ── GI-PG S2: splat (EM E-step) + fit (M-step) passes over the guiding grid ──
-    // MUST match pg_common.slang (kPgSlots = 2^19): cells 6 float4 = 96 B/slot,
-    // stats 20 ints = 80 B/slot (4 lobes x int4 + count + pad).
-    static constexpr std::uint32_t kPgSlots = 1u << 19;
-    static constexpr std::uint32_t kPgCellFloat4 = 6u; ///< float4 words per cell record
-    static constexpr std::uint32_t kPgStatInts = 20u;  ///< int words per stats record
-    harmonia::core::UniqueDescriptorSetLayout m_pgSetLayout;
-    harmonia::core::UniquePipelineLayout m_pgPipelineLayout;
-    harmonia::core::UniquePipeline m_pgSplatPipeline;
-    harmonia::core::UniquePipeline m_pgFitPipeline;
-    harmonia::core::DescriptorBufferWriter m_pgWriter{};
-    harmonia::core::Buffer m_pgCellsBuf; // persistent vMF params (float4 stride x 6)
-    harmonia::core::Buffer m_pgStatsBuf; // per-frame fixed-point stats (int stride x 20)
     harmonia::pipeline::SmsPass m_sms;
     harmonia::core::Buffer m_smsContext, m_smsPrefixes, m_smsPrior, m_smsDiagnostics;
     harmonia::core::Buffer m_smsTemporalReservoir, m_smsHistoryReservoir;
@@ -328,22 +292,13 @@ class GiPass {
     /// GI-NRC: world-space radiance-cache table (binding 31, 2 MiB, persistent
     /// across frames — zero-filled once with the reservoir one-time clear).
     harmonia::core::Buffer m_radCacheBuf{};
-    /// GI-PG S1: per-pixel selected-path chains (binding 32, 496 B/pixel; sized from
-    /// the configured extent — small at receipt resolutions, paper-class at 1080p).
-    harmonia::core::Buffer m_pgChainBuf{};
     /// GI-CG: the former Gaussian pairing maps (binding 22) were removed 2026-11-15 —
     /// the CGNS compatibility score supersedes their neighbor-selection role.
 
-    // ── GI-PG: world-space radiance-cache table (binding 31) ─────────────────
+    // ── GI-NRC: world-space radiance-cache table (binding 31) ─────────────────
     // MUST match the shader's kRadCacheSlots (gi.comp.slang): 2^17 hashed world-cell
     // records x {float3 rgb, uint stamp} = 2 MiB, persistent across frames.
     static constexpr std::uint32_t kRadCacheSlots = 1u << 17;
-
-    // ── GI-PG S1: per-pixel selected-path chain buffer (binding 32) ───────────
-    // MUST match the shader's kPgChainSlots (gi.comp.slang): header float4 + 3 float4
-    // per vertex x kPgChainDepth(10) = 31 slots = 496 B/pixel (the paper's own
-    // ~102.8 MB/bounce class at 1080p; trivial at 320p receipts).
-    static constexpr std::uint32_t kPgChainSlots = 31u;
 
     // ── GI-ENH §6.2.2 replay stream compaction (bindings 27-30) ──────────────
     // Three-kernel split: emit (main) → uniform replay (replayMain) → combine
