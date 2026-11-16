@@ -118,7 +118,7 @@ class Application final : public harmonia::app::App,
     /// ANI8: re-place m_camera from the bound node's evaluated world at
     /// @p tick (position/target/up + scene-scale clip planes) and push it to
     /// the renderer. No-op without a bound camera node.
-    void placeBoundCamera(std::uint32_t tick);
+    void placeBoundCamera(double seconds);
     void dispatchLightCull(VkCommandBuffer cmd, const sm::float4x4& proj, const sm::float4x4& view) noexcept;
     void submitAsyncCompute(VkCommandBuffer cmd,
                             const harmonia::app::RenderTarget& target,
@@ -157,7 +157,7 @@ class Application final : public harmonia::app::App,
     /// (std::nullopt = the classic static/interactive camera) plus the last
     /// tick it was placed at (never-placed sentinel forces frame 0).
     std::optional<std::string> m_cameraNodeId;
-    std::uint32_t m_cameraTick = ~std::uint32_t{0};
+    std::uint64_t m_cameraTick = ~std::uint64_t{0};
     /// A4: ReSTIR DI spatiotemporal reservoir resampling for emissive-triangle direct
     /// lighting (default on). When active the forward pass skips its emissive-derived
     /// rect lights (setRestirDiActive) so GiPass owns that term without double-counting.
@@ -193,7 +193,7 @@ class Application final : public harmonia::app::App,
     /// ANI7: last animation tick applied - the guard that stamps + resets ONCE per
     /// OUTPUT frame during sequence renders (per rendered frame otherwise, where the
     /// raw index changes every frame anyway). ~0u = "never" so frame 0 always runs.
-    std::uint32_t m_lastAnimationTick = ~std::uint32_t{0};
+    std::uint64_t m_lastAnimationTick = ~std::uint64_t{0};
     /// ANI4+ANI5 renderer half: the shared GPU deformation pass (skin +
     /// morphs), created for deforming scenes in onSceneLoaded (its descriptors
     /// bind that scene's buffers, so it is reset on scene unload).

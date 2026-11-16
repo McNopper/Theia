@@ -344,7 +344,7 @@ bool Application::onSceneLoaded(const harmonia::scene::SceneLoader::SceneConfig&
     // before the first present). The static pos/at/up stay the load-time
     // fallback for scenes without a bound node.
     m_cameraNodeId = sceneConfig.cameraNodeId;
-    m_cameraTick = ~std::uint32_t{0};
+    m_cameraTick = ~std::uint64_t{0};
 
     if (sceneConfig.cameraPos && sceneConfig.cameraAt) {
         m_camera.position = *sceneConfig.cameraPos;
@@ -433,20 +433,23 @@ void Application::record(VkCommandBuffer cmd, const harmonia::app::RenderTarget&
     // skin-only scene has no tracks but its POSE changes with the tick): the
     // deformation runs after the stamp and before the TLAS update -
     //   stage matrices -> LBS dispatch -> copy -> BLAS refit -> TLAS.
-    // ANI8 camera-from-node: re-place the scripted camera from the bound node's
-    // evaluated world at this frame's tick. Own tick guard - NOT the animation
-    // block's below: a camera bound to a STATIC node on an otherwise static
-    // scene must not trip that block's accumulation reset on every offline
-    // sample (it would never converge).
-    if (m_cameraNodeId && animationFrameIndex() != m_cameraTick) {
-        m_cameraTick = animationFrameIndex();
-        placeBoundCamera(m_cameraTick);
+    // ONE animation system (ANI7/ANI8): a single clock (seconds + change key)
+    // drives EVERY animation consumer - scene stamping, deformation, TLAS
+    // refit and the scripted camera - so they can never disagree (interval
+    // captures sample time between integer ticks). Both guards below read the
+    // SAME clock key; the camera keeps its own guard purely for reset
+    // semantics: a camera bound to a STATIC node on a static scene must not
+    // trip the animation block's accumulation reset (offline would never
+    // converge) - that case re-places the camera idempotently instead.
+    const harmonia::app::App::AnimationClock clock = animationClock(m_scene->animationFps());
+    if (m_cameraNodeId && clock.key != m_cameraTick) {
+        m_cameraTick = clock.key;
+        placeBoundCamera(clock.seconds);
     }
     if (m_scene->hasAnimation() || m_scene->hasSkins() || m_scene->hasMorphs()) {
-        const std::uint32_t tick = animationFrameIndex();
-        if (tick != m_lastAnimationTick) {
-            m_lastAnimationTick = tick;
-            const float seconds = static_cast<float>(static_cast<double>(tick) / m_scene->animationFps());
+        if (clock.key != m_lastAnimationTick) {
+            m_lastAnimationTick = clock.key;
+            const float seconds = static_cast<float>(clock.seconds);
             if (m_scene->hasAnimation()) {
                 m_scene->setAnimationTime(seconds);
             }
@@ -919,11 +922,11 @@ bool Application::onEvent(const SDL_Event& event) {
     }
 }
 
-void Application::placeBoundCamera(std::uint32_t tick) {
+void Application::placeBoundCamera(double seconds) {
     if (!m_cameraNodeId || m_scene == nullptr || m_scene->attachedScene() == nullptr || m_renderer == nullptr) {
         return;
     }
-    const auto pose = aether::SceneAnimator::evaluateCameraAtTick(*m_scene->attachedScene(), tick);
+    const auto pose = aether::SceneAnimator::evaluateCamera(*m_scene->attachedScene(), static_cast<float>(seconds));
     if (!pose) {
         return; // hand-built scene without a placement - keep the current view
     }

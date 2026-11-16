@@ -67,7 +67,10 @@ CLI flags: `--scene/-s`, `--output/-o` (headless EXR+PNG), `--width`, `--height`
 accumulation frames per swapchain flip, default 1 — I6), `--validation`/`--no-validation`,
 `--no-restir-di` (ReSTIR DI off), `--taa`/`--no-taa`, `--no-camera-jitter` (interactive
 only — `--output` capture forces jitter ON, see below),
-`--indirect-ambient <f>`. RT-GI is always on (it is the renderer — no GI-off path).
+`--indirect-ambient <f>`, plus the shared capture-timing flags
+`--frame <n>` (ANI8 seek), `--capture-every-ms <f>` + `--start-seconds <f>`
+(ANI7 time-based sequences - see Harmonia's AGENTS; one `App::animationClock`
+drives scene/deform/TLAS/camera together). RT-GI is always on (it is the renderer — no GI-off path).
 Theia accumulates frames — use `--offscreen-frames` for convergence quality.
 
 **Capture is estimator-pure:** `--output` disables every presentation aid — denoiser/TAA,

@@ -39,3 +39,10 @@ Real-time renderer release consuming **Harmonia v0.8.0 + Aether v0.9.0**.
   (controller skipped while bound), `--frame N` via the shared clock.
   Receipts: 61/61, orbit sequences 0 VUID, frame0 parity vs Hyperion PASS
   (mean 25.558 / SSIM 0.938).
+- **One animation clock + time-based capture (2026-11-16):** scene stamp,
+  deform, TLAS and the scripted camera all read `App::animationClock`
+  (seconds + key) - a camera can no longer lag an interval capture; shared
+  `--capture-every-ms` / `--start-seconds` flags. Receipts: 61/61, tick-grid
+  renders bit-identical pre/post, static-node-camera classic capture
+  converges (0.000 vs sequence), 0 VUID.
+
