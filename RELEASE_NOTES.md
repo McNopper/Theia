@@ -30,3 +30,12 @@ Real-time renderer release consuming **Harmonia v0.8.0 + Aether v0.9.0**.
 ## Release mechanics
 - Local commits only: **tag `v0.9.0`, push commits + tag together** (pins reference the new
   Harmonia/Aether tags; local builds use `FETCHCONTENT_SOURCE_DIR_*` overrides).
+
+## Also in this release (added after the notes assembly)
+
+- **ANI8 half** (commit 8676a85): per-tick camera-from-node placement in
+  `record()` with its own tick guard (static bound nodes never trip the
+  animation block's accumulation reset), scripted-camera handling in `onUpdate`
+  (controller skipped while bound), `--frame N` via the shared clock.
+  Receipts: 61/61, orbit sequences 0 VUID, frame0 parity vs Hyperion PASS
+  (mean 25.558 / SSIM 0.938).
