@@ -67,7 +67,7 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
 - **Next:** the PERF4/PERF5 arc is **removed 2026-11-15** (measured does-not-serve Theia real-time; tombstones + triggers in Harmonia PLAN section 5.1; the design/stage record stays in git - Baseline v0.8.0).
   Theia's live items: **GI-ENH** remaining (paper-faithful hybrid-shift gaps —
   prefix-replay invertibility closed 2026-11-15, k≥4, sampled-lobe alpha; §"ReSTIR-PT refinements") and the
-  shared-estimator adopters as they land in `Harmonia/PLAN.md` (C11, C12 wire into
+  shared-estimator adopters as they land in `Harmonia/PLAN.md` (C12 wires into
   the shared passes).
 ## How to continue
 
@@ -257,8 +257,7 @@ with warp count and pays at production resolution.
   **engagement gate PASS** (0.945 / SSIM 0.983369 / hist 0.999939 @ matched 128f);
   estimator-pure stability **bit-identical**; `--validation` clean with the cache on.
 - **GI-SMS** (caustics/SDS), **DN3** (converging denoiser — the à-trous replacement),
-  **C11** (ReSTIR SSS — brings Theia's realtime SSS onto the shared random-walk model
-  Hyperion already runs → SSS parity), **C9/C12** (BSDF)
+   **C9/C12** (BSDF)
   — all tracked in `Harmonia/PLAN.md`. The removed PERF4/PERF5 items (tombstones in Harmonia PLAN section 5.1); what shipped stays shipped - PassTimer, the reconstructGiHitFromQuery salvage, and the calibrated gates (Baseline v0.8.0).
 - **VK4** (subgroup rotate/reconvergence → faster reservoir merging/compaction; adopted)
   and **VK5** (pipeline binaries — **shipped in Harmonia as the opt-in
