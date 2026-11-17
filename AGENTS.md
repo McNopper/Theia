@@ -243,7 +243,7 @@ included; the `theia::pairing` sub-namespace was removed with PairingTextures �
 — the sibling renderers are independent; shared code goes down into Harmonia (a `hyperion/` include is a hard
 violation).
 
-**Dead-code gate:** `python tools/check_dead.py` - orphan headers, never-compiled sources (absent from `compile_commands.json` AND unreferenced by any CMake file), and FetchContent declare/consume mismatches. Also registered as ctest `test_dead` (label `analysis`; local only - registration is gated on the per-user check-dead skill install, so CI runners skip it). Justified findings go into `tools/check_dead.exceptions` with a reason; real dead code is deleted in a fix commit.
+**Dead-code gate:** `python tools/check_dead.py` - orphan headers, never-compiled sources (absent from `build/compile_commands.json` AND unreferenced by any CMake file), and FetchContent declare/consume mismatches. Also registered as ctest `test_dead` (label `analysis`; local only - registration is gated on the per-user check-dead skill install, so CI runners skip it). Justified findings go into `tools/check_dead.exceptions` with a reason; real dead code is deleted in a fix commit.
 
 Sanitizer lane (Clang/GCC configures only):
 **Coverage lane (Clang/GCC configures only):** configure a separate build with
@@ -268,7 +268,7 @@ SDL3, slangc and volk come from the Vulkan SDK (not vcpkg). vcpkg provides tomlp
   OpenPBR's canonical/reference implementation is **MaterialX** (`mx_*` genGLSL nodes); follow
   OpenPBR parameter naming and use MaterialX as the cross-check. Parameters are identical to
   Hyperion — the goal is the best real-time approximation of the same OpenPBR inputs, not
-  different parameters. The shared OpenPBR BSDF lives in Harmonia (`bsdf_shared.slang`).
+  different parameters. The shared OpenPBR BSDF lives in `Harmonia/shaders/bsdf_shared.slang`.
 
 ## GPU-driven design (Theia)
 
@@ -329,7 +329,10 @@ path. Both paths share one task-shader entry point (`gid.x = 0..visibleCount-1`)
   (i) roughness min(a_{k-1}, a_k) >= 0.2, (ii) distance ||x_k - x_{k-1}|| >= 0.1
   (Params.slang: specularRoughnessThreshold / nearFieldDistance). The shift BODY is
   chosen by the captured `kLevel`, not the mask - the reference has one
-  `computeShiftedIntegrandReconnection` serving any rcVertexLength).
+  `computeShiftedIntegrandReconnection` serving any rcVertexLength), `THEIA_DEBUG_RAY_HIT_MODE=<f>`
+  (ray-hit debug visualization mode, clamped 0..6 and logged when > 0; 0 = off),
+  `THEIA_SMS_DIAGNOSTICS=1` (SMS qualification: uploads the 64-slot diagnostics buffer the
+  qualification runs read).
 - GD4: Both Hi-Z passes (`cullPhase=1` and `cullPhase=2`) use the same GPU-indirect path;
   per-meshlet Hi-Z occlusion is handled by the mesh shader using `cullPhase` push constant.
 

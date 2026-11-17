@@ -1,0 +1,9 @@
+# check-docs-refs configuration (skill: check-docs-refs).
+#
+# siblings - the family checkouts live next to this repo, so cross-repo
+#   references such as `Harmonia/PLAN.md` resolve against them (declared
+#   trust; each sibling's own run verifies its side of the contract).
+# generated - build/ is never in a clean checkout (compile DB,
+#   FetchContent copies, generated .spv, qualification manifests).
+siblings = ["Aether", "Harmonia", "Hyperion", "Theia", "slang-math"]
+generated = ["build/"]

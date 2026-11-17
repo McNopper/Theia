@@ -91,8 +91,8 @@ All parameters follow the [OpenPBR spec](https://academysoftwarefoundation.githu
 
 Conductor reflectance (F82), thin-film iridescence (`mx_fresnel_airy`), fuzz/sheen (LTC),
 and the chromatic volumetric subsurface/transmission random walk are implemented once in
-the shared Harmonia `bsdf_shared.slang` and run **identically to Hyperion** by construction —
-see [Harmonia README — Material model](../Harmonia/README.md#material-model--openpbr-surface-v111)
+the shared `Harmonia/shaders/bsdf_shared.slang` and run **identically to Hyperion** by construction —
+see [Harmonia README — Material model](https://github.com/McNopper/Harmonia/blob/main/README.md#material-model---openpbr-surface-v112)
 for the canonical description. Theia executes the same estimator (including the volumetric
 walk) in its RT-GI compute stage. Renderer-specific notes: the rasterizer resolves cutout
 opacity as a stochastic coverage draw per fragment (discard with probability 1−α, same
@@ -219,7 +219,7 @@ build/theia.exe --scene cornell_classic --output out.exr
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--scene <name>` / `-s` | `cornell_classic.scene.toml` | Scene name or path; bare names resolve against the assets directory (also accepted as first positional argument) |
+| `--scene <name>` / `-s` | `cornell_classic` | Scene name or path; bare names resolve against the assets directory (also accepted as first positional argument) |
 | `--output <file>` / `-o` | — | Offscreen mode: render and save EXR (untonemapped) + PNG (tonemapped), then exit |
 | `--offscreen-frames <n>` | `4` | Number of frames accumulated/warmed up before offscreen capture is written |
 | `--width <n>` | 1024 | Render width in pixels |
@@ -285,7 +285,7 @@ RT-GI is the single unified indirect + transmission provider and drives both the
 
 ## References
 
-Theia's BSDF, volumetric, color-science, and denoising references live in [Harmonia's README](../Harmonia/README.md#references) (the shared implementation). Below: real-time-renderer-specific references only.
+Theia's BSDF, volumetric, color-science, and denoising references live in [Harmonia's README](https://github.com/McNopper/Harmonia/blob/main/README.md#references) (the shared implementation). Below: real-time-renderer-specific references only.
 
 ### Real-time rendering & GPU-driven
 | Resource | Relevance |

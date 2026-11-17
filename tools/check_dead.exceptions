@@ -1,0 +1,3 @@
+# check_dead exceptions - justified findings only (one per line:
+# <check> <path-or-name> <reason>). Never silence real findings here;
+# delete dead code in a fix commit instead.
