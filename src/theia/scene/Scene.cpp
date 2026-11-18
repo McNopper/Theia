@@ -547,6 +547,79 @@ void Scene::synthesizeEmissiveLights(const std::vector<harmonia::GpuMaterial>& g
         const float planarity = sm::length(normalSum) / (2.0F * totalArea);
 
         if (planarity < 0.5F) {
+            // Flat-thin closed emitters (thin boxes - the fixture/gallery panel
+            // class) are EXTENDED sources. A point at the centroid is a delta
+            // approximation that over-lights near-field specular content (hard
+            // 1/dist^2 hotspot); shadeRectLight documents the same point-vs-area
+            // failure and integrates the panel so it matches Hyperion's
+            // emissive-mesh result. Synthesize the two dominant faces as
+            // RectLights (both sides emit, like Hyperion's bidirectional
+            // triangles; the thin side faces are negligible area). Keep the point
+            // approximation only for genuinely blobby or rotated-thin shapes.
+            sm::float3 extLo = wverts[0];
+            sm::float3 extHi = wverts[0];
+            for (const auto& wv : wverts) {
+                extLo.x = std::min(extLo.x, wv.x);
+                extLo.y = std::min(extLo.y, wv.y);
+                extLo.z = std::min(extLo.z, wv.z);
+                extHi.x = std::max(extHi.x, wv.x);
+                extHi.y = std::max(extHi.y, wv.y);
+                extHi.z = std::max(extHi.z, wv.z);
+            }
+            const sm::float3 extents{extHi.x - extLo.x, extHi.y - extLo.y, extHi.z - extLo.z};
+            const float ex[3] = {extents.x, extents.y, extents.z};
+            int ax0 = 0;
+            int ax1 = 1;
+            int ax2 = 2;
+            // Bubble-sort the three axis indices by extent (ascending): ax0 = thin.
+            if (ex[ax1] < ex[ax0]) {
+                const int tmp = ax0;
+                ax0 = ax1;
+                ax1 = tmp;
+            }
+            if (ex[ax2] < ex[ax1]) {
+                const int tmp = ax1;
+                ax1 = ax2;
+                ax2 = tmp;
+            }
+            if (ex[ax1] < ex[ax0]) {
+                const int tmp = ax0;
+                ax0 = ax1;
+                ax1 = tmp;
+            }
+            const float thin = ex[ax0];
+            const float second = ex[ax1];
+            if (thin <= 0.25F * second) {
+                sm::float3 normalAxis{0.0f, 0.0f, 0.0f};
+                normalAxis[ax0] = 1.0f;
+                const float faceOffset = 0.5F * thin;
+                const float halfU = 0.5F * ex[ax1];
+                const float halfV = 0.5F * ex[ax2];
+                const float faceSign[2] = {1.0f, -1.0f};
+                for (const float sign : faceSign) {
+                    harmonia::GpuLight gl{};
+                    gl.position = centroid + normalAxis * (sign * faceOffset);
+                    gl.type = std::bit_cast<float>(static_cast<std::uint32_t>(harmonia::LightType::Rect));
+                    gl.direction = normalAxis * sign;
+                    gl.range = 0.0F;
+                    gl.color = static_cast<sm::float3>(gpuMat.emissionColorLum);
+                    gl.intensity = luminance;
+                    gl.halfWidth = halfU;
+                    gl.halfHeight = halfV;
+                    gpuLights.push_back(gl);
+                }
+                harmonia::core::Logger::info("Scene: emissive mesh {} → harmonia::scene::RectLight x2 (flat-thin) at "
+                                             "({:.1f},{:.1f},{:.1f}) lum={:.0f} hw={:.1f} hh={:.1f}",
+                                             i,
+                                             centroid.x,
+                                             centroid.y,
+                                             centroid.z,
+                                             luminance,
+                                             halfU,
+                                             halfV);
+                continue;
+            }
+
             float radius = 0.0F;
             for (const auto& wv : wverts) {
                 radius = std::max(radius, sm::length(wv - centroid));
