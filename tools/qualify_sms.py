@@ -369,19 +369,33 @@ def stage_performance(case: str, reference: Path) -> None:
                 refined = True
                 frames = max(1, round(frames * target / elapsed))
                 _, elapsed = render_theia(f"timecheck2_{case}_{mode}_{target}_{frames}", scene, mode, frames, SEEDS[0])
-            timing_valid[mode][str(target)] = abs(elapsed - target) <= target * TIME_TOLERANCE
-            if not timing_valid[mode][str(target)]:
-                log(f"equal-time {case} {mode} @{target}s: timing inconclusive after one refinement")
+            if abs(elapsed - target) > target * TIME_TOLERANCE:
+                log(f"equal-time {case} {mode} @{target}s: pilot calibration off after one "
+                    "refinement; the per-seed runs decide acceptance")
+            # Follow-up closure (2026-11-18): acceptance is the ACTUAL quality
+            # samples landing inside the budget. Each seed gets the same single
+            # refinement the calibration gets (throughput jitter is measured per
+            # run, not assumed); the +-5% tolerance is unchanged - a seed still
+            # failing after its refinement keeps the stage inconclusive.
+            timing_valid[mode][str(target)] = True
             energies, mses, times = [], [], []
             per_seed = {}
             for seed in SEEDS:
-                path, elapsed = render_theia(f"eqt_{case}_{mode}_{target}_{seed}", scene, mode, frames, seed)
+                seed_frames = frames
+                path, elapsed = render_theia(f"eqt_{case}_{mode}_{target}_{seed}", scene, mode, seed_frames, seed)
+                seed_refined = False
+                if abs(elapsed - target) > target * TIME_TOLERANCE:
+                    seed_refined = True
+                    seed_frames = max(1, round(seed_frames * target / elapsed))
+                    path, elapsed = render_theia(
+                        f"eqt2_{case}_{mode}_{target}_{seed}_{seed_frames}", scene, mode, seed_frames, seed)
                 if abs(elapsed - target) > target * TIME_TOLERANCE:
                     timing_valid[mode][str(target)] = False
                 energies.append(roi_energy(path, roi))
                 mses.append(roi_mse(reference, path, roi))
                 times.append(elapsed)
-                per_seed[str(seed)] = {"mse": mses[-1], "completed_frame_seconds": elapsed}
+                per_seed[str(seed)] = {"mse": mses[-1], "completed_frame_seconds": elapsed,
+                                       "frames": seed_frames, "refined": seed_refined}
             ratios = (np.mean(energies, axis=0) / expected).tolist()
             mse = float(np.mean(mses))
             stderr = float(np.std(mses, ddof=1) / np.sqrt(len(mses)))
