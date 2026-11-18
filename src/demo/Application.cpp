@@ -369,9 +369,16 @@ bool Application::onSceneLoaded(const harmonia::scene::SceneLoader::SceneConfig&
         m_camera.vfovDeg = sceneConfig.cameraVfov.value_or(45.0f);
     }
     // Physical camera exposure — shared factory from harmonia::renderer::Camera.
-    {
-        const float ev100 = sceneConfig.cameraEv100.value_or(7.0f);
-        m_camera.physical = harmonia::renderer::Camera::PhysicalCamera::fromEv100(ev100);
+    // Fallback parity with Hyperion's buildCamera (ground truth): apply fromEv100 ONLY
+    // when the scene carries cameraEv100, else keep the shared PhysicalCamera{} struct
+    // default. The previous `value_or(7.0f)` diverged the two engines by 50x whenever a
+    // scene's `[camera] reference = "presets/..."` failed to resolve (staged scenes ship
+    // without presets/ — the staged C4 qualification fixture hit exactly this), making
+    // the cross-renderer parity gate unpassable. Scenes with an explicit ev100 (C1–C3:
+    // inline `ev100 = 7`) are unaffected.
+    m_camera.physical = harmonia::renderer::Camera::PhysicalCamera{};
+    if (sceneConfig.cameraEv100) {
+        m_camera.physical = harmonia::renderer::Camera::PhysicalCamera::fromEv100(*sceneConfig.cameraEv100);
     }
     // Reset camera controller orientation to match the new target.
     const sm::float3 dir = sm::normalize(m_camera.target - m_camera.position);
