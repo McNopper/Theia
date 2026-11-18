@@ -172,3 +172,15 @@ TEST_F(SmsResamplingFixture, LogRisAlwaysSelectsPositiveCandidatesAtLargestUnifo
     EXPECT_EQ(outputs[1].z, 0.0F);
     EXPECT_EQ(outputs[1].w, 1.0F);
 }
+
+TEST_F(SmsResamplingFixture, SmsIdentityNoReuseAndUnsupportedNeighborSplitControls) {
+    // 2d.2 identity/no-reuse controls: fp-exact constants, no tolerances.
+    const std::array<Words, 1> inputs{Words{8u, 0u, 0u, 0u}};
+    std::vector<sm::float4> outputs;
+    ASSERT_NO_FATAL_FAILURE(probe(inputs, outputs));
+    ASSERT_EQ(outputs.size(), inputs.size());
+    EXPECT_EQ(outputs[0].x, 1.0F) << "zero neighbors must refuse (no-reuse gate), parts 0";
+    EXPECT_EQ(outputs[0].y, 1.0F) << "identity neighbor must split exactly 1/2-1/2";
+    EXPECT_EQ(outputs[0].z, 1.0F) << "unsupported neighbor: weight 0, canonical part 1";
+    EXPECT_EQ(outputs[0].w, 1.0F) << "mis=0 chain neighbor must leave the estimate bit-identical";
+}

@@ -132,6 +132,24 @@ void main(uint3 id : SV_DispatchThreadID) {
         pc.outputs[id.x]=float4(ok?float(state.selected):-1.0,state.weightSum,color.xy);
         return;
     }
+    if (input.x==8u) {
+        // 2d.2 identity/no-reuse + unsupported-neighbor controls (fp-exact).
+        float canonical,neighbor;
+        bool gate=!smsPairwiseMis(2.0,2.0,0u,true,canonical,neighbor) && canonical==0.0 && neighbor==0.0;
+        bool identity=smsPairwiseMis(6.0,6.0,1u,true,canonical,neighbor) &&
+            canonical==0.5 && neighbor==0.5;
+        bool unsupported=smsPairwiseMis(6.0,0.0,1u,false,canonical,neighbor) &&
+            canonical==1.0 && neighbor==0.0;
+        float3 integrand=float3(2,1,3);
+        SmsResamplingState full=emptySmsResampling(),single=emptySmsResampling();
+        bool adds=smsResamplingAdd(full,0u,2.0,0.5,0.25,0.5) &&
+            smsResamplingAdd(full,1u,2.0,0.5,0.0,0.5) &&
+            smsResamplingAdd(single,0u,2.0,0.5,0.25,0.5);
+        float3 eFull=0.0.xxx,eSingle=0.0.xxx;
+        bool chain=adds && smsResamplingEstimate(full,integrand,eFull) &&
+            smsResamplingEstimate(single,integrand,eSingle) && all(eFull==eSingle);
+        pc.outputs[id.x]=float4(gate?1.0:0.0,identity?1.0:0.0,unsupported?1.0:0.0,chain?1.0:0.0); return;
+    }
     bool alternative=input.x==1u;
     float3 expectation=0.0.xxx;
     uint invalid=0u;

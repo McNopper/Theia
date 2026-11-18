@@ -17,6 +17,7 @@ set(THEIA_MODULE_TEST_SOURCES
     module/test_sms_scene.cpp
     module/test_sms_gi_frame.cpp
     module/test_sms_resampling.cpp
+    module/test_sms_shift.cpp
 )
 
 add_executable(theia_module_tests ${THEIA_MODULE_TEST_SOURCES})
@@ -25,7 +26,8 @@ set(COMPILE_SLANG_SHADER_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
 set(COMPILE_SLANG_EXTRA_INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/shaders" "${HARMONIA_SHADER_SOURCE_DIR}")
 set(COMPILE_SLANG_EXTRA_DEPENDS "${PROJECT_SOURCE_DIR}/shaders/sms_resampling.slang"
     "${PROJECT_SOURCE_DIR}/shaders/sms_shift.slang")
-compile_slang_shaders(theia_sms_test_shaders "${CMAKE_CURRENT_BINARY_DIR}/shaders" sms_scene_test.slang sms_resampling_test.slang)
+compile_slang_shaders(theia_sms_test_shaders "${CMAKE_CURRENT_BINARY_DIR}/shaders" sms_scene_test.slang
+    sms_resampling_test.slang sms_shift_test.slang)
 unset(COMPILE_SLANG_EXTRA_DEPENDS)
 unset(COMPILE_SLANG_SHADER_ROOT)
 unset(COMPILE_SLANG_EXTRA_INCLUDE_DIRS)

@@ -49,7 +49,7 @@ class GiPass {
         std::uint32_t smsPartitionResolution = 16;
         bool smsPriorEnabled = true;
         std::uint32_t smsTrialBudget = 32; ///< Per-dispatch budget, never a total reciprocal-trial cap.
-        bool smsSpatialReuse = false;      ///< Experimental until rendered support/MIS gates pass.
+        bool smsSpatialReuse = false;      ///< Opt-in (--sms-mode reuse): qualified C1/C2/C3 + 2d.2 controls; default local.
     };
 
     /// Per-frame scene + camera state consumed by record(). Most resources are
