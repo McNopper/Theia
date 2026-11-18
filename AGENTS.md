@@ -332,7 +332,8 @@ path. Both paths share one task-shader entry point (`gid.x = 0..visibleCount-1`)
   `computeShiftedIntegrandReconnection` serving any rcVertexLength), `THEIA_DEBUG_RAY_HIT_MODE=<f>`
   (ray-hit debug visualization mode, clamped 0..6 and logged when > 0; 0 = off),
   `THEIA_SMS_DIAGNOSTICS=1` (SMS qualification: uploads the 64-slot diagnostics buffer the
-  qualification runs read).
+  qualification runs read), `THEIA_SMS_PARTITION=<1..32>` (2c.1 ablation: trust-region partition
+  resolution; 1 = full-domain/unpartitioned, default 16).
 - GD4: Both Hi-Z passes (`cullPhase=1` and `cullPhase=2`) use the same GPU-indirect path;
   per-meshlet Hi-Z occlusion is handled by the mesh shader using `cullPhase` push constant.
 

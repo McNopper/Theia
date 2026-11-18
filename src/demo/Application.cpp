@@ -123,6 +123,21 @@ bool Application::onInitialize() {
             m_forceRadianceCache = (!rcRaw->empty() && (*rcRaw)[0] != '0') ? 1 : 0;
             harmonia::core::Logger::info("THEIA_RADIANCE_CACHE forced to {}", m_forceRadianceCache);
         }
+        // 2c.1 ablation: THEIA_SMS_PARTITION=<1..32> overrides the trust-region
+        // partition resolution (1 = full-domain/unpartitioned; default 16).
+        if (const auto partRaw = harmonia::core::getEnvString("THEIA_SMS_PARTITION")) {
+            const auto parsed = std::strtoul(partRaw->c_str(), nullptr, 0);
+            if (parsed >= 1 && parsed <= 32) {
+                m_smsPartitionResolution = static_cast<std::uint32_t>(parsed);
+                harmonia::core::Logger::info("THEIA_SMS_PARTITION = {} ({})",
+                                             m_smsPartitionResolution,
+                                             m_smsPartitionResolution == 1u ? "unpartitioned full domain"
+                                                                            : "trust-region partitioned");
+            } else {
+                harmonia::core::Logger::warn("THEIA_SMS_PARTITION out of range 1..32 - keeping {}",
+                                             m_smsPartitionResolution);
+            }
+        }
     }
     if (m_pureEstimatorCapture) {
         if (!m_cameraJitterEnabled) {
@@ -174,6 +189,7 @@ bool Application::onInitialize() {
             .gbufferImage = m_renderer->gbufferImage(),
             .gbufferView = m_renderer->gbufferView(),
             .smsEnabled = m_smsMode != SmsMode::Off,
+            .smsPartitionResolution = m_smsPartitionResolution,
             .smsSpatialReuse = m_smsMode == SmsMode::Reuse,
         };
         switch (m_smsMode) {
@@ -626,6 +642,7 @@ void Application::onResize(VkExtent2D extent) noexcept {
             .gbufferImage = m_renderer->gbufferImage(),
             .gbufferView = m_renderer->gbufferView(),
             .smsEnabled = m_smsMode != SmsMode::Off,
+            .smsPartitionResolution = m_smsPartitionResolution,
             .smsSpatialReuse = m_smsMode == SmsMode::Reuse,
         };
         if (!m_giPass.initialize(deviceContext(), giCfg, commandPool())) {

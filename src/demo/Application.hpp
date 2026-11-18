@@ -188,6 +188,9 @@ class Application final : public harmonia::app::App,
     /// GI-NRC (radiance cache): -1 = auto (interactive on / estimator-pure capture off,
     /// also off for animated scenes), 0/1 = forced by THEIA_RADIANCE_CACHE (A/B harness).
     int m_forceRadianceCache = -1;
+    /// 2c.1 ablation: THEIA_SMS_PARTITION=<1..32> overrides the trust-region
+    /// partition resolution (1 = full-domain/unpartitioned; default 16).
+    std::uint32_t m_smsPartitionResolution = 16u;
     std::uint32_t m_sceneMaxDepth = 3u;
 
     /// ANI7: last animation tick applied - the guard that stamps + resets ONCE per
