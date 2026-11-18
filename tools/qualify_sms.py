@@ -59,6 +59,12 @@ CASES = {
     # light source excluded (in-window max 2.7 vs scene max 48).
     "DRAGON": {"scene": str(GITHUB / "Aether" / "assets" / "dragon_teapot.scene.toml"),
                "roi": [0.375, 0.688, 0.675, 0.988]},
+    # C4 = 2e complex-scene integration: dragon_teapot content + a finite area
+    # emitter (usesSms requires emitterCount != 0; the IBL-only DRAGON asset
+    # runs plain PT - recorded in the 2e receipts). ROI = the SMS-active
+    # region, derived from the 512-frame local-vs-reuse difference map
+    # (reuse engages: 0.82% of pixels differ, in-window mean 3.6e-4).
+    "C4": {"scene": "c4_dragon_area_light.scene.toml", "roi": [0.375, 0.438, 0.675, 0.738]},
 }
 
 
@@ -125,42 +131,45 @@ def provenance(case: str) -> dict:
         if path.is_file():
             inputs[path.name] = sha256(path)
     source = scene_source(case)
-    if source.parent != ASSETS:
-        # External scene (2e): hash it and the files it references directly so
-        # staleness detection tracks the Aether assets too.
-        inputs[source.as_posix()] = sha256(source)
-        text = source.read_text(encoding="utf-8")
-        refs = re.findall(r'material_libraries = \["([^"]+)"\]', text)
-        refs += re.findall(r'path = "([^"]+)"', text)
-        for ref in refs:
-            ref_path = source.parent / ref
-            if ref_path.is_file():
-                inputs[ref] = sha256(ref_path)
+    inputs[source.name] = sha256(source)
+    for name in scene_references(source.read_text(encoding="utf-8")):
+        resolved = resolve_reference(source, name)
+        if resolved is not None:
+            inputs[name] = sha256(resolved)
     return {"case": case, "runner_sha256": sha256(Path(__file__).resolve()), "repos": repos, "inputs": inputs}
+
+
+def scene_references(text: str) -> list[str]:
+    """Every external file a scene declares: material_libraries entries and
+    mesh paths, order-preserving and deduplicated."""
+    names: list[str] = []
+    for line in text.splitlines():
+        if line.startswith("material_libraries"):
+            names.extend(re.findall(r'"([^"]+)"', line))
+    names.extend(re.findall(r'^path = "([^"]+)"', text, re.M))
+    return list(dict.fromkeys(names))
+
+
+def resolve_reference(source: Path, name: str) -> Path | None:
+    for candidate in (source.parent / name, GITHUB / "Aether" / "assets" / name):
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def prepare_run_dir(case: str) -> Path:
     source = scene_source(case)
-    if source.is_absolute() and source.parent != ASSETS:
-        # External complex scene (2e): its bare material/mesh references
-        # resolve against the Aether assets root where the files live.
-        if not source.is_file():
-            raise SystemExit(f"Missing scene: {source}")
-        return source
+    if not source.is_file():
+        raise SystemExit(f"Missing scene: {source}")
     run_dir = OUT / "scenes" / case
     run_dir.mkdir(parents=True, exist_ok=True)
-    materials = ASSETS / "sms_qualification.materials.toml"
-    shutil.copy2(materials, run_dir / materials.name)
-    obj_targets = {}
-    for obj in sorted(ASSETS.glob("*.obj")):
-        shutil.copy2(obj, run_dir / obj.name)
-        obj_targets[obj.name] = (run_dir / obj.name).as_posix()
     text = source.read_text(encoding="utf-8")
-    if MATERIAL_LINE not in text:
-        raise SystemExit(f"{source}: material reference contract broken")
-    text = text.replace(MATERIAL_LINE, f'material_libraries = ["{(run_dir / materials.name).as_posix()}"]')
-    for name, absolute in obj_targets.items():
-        text = text.replace(f'path = "{name}"', f'path = "{absolute}"')
+    for name in scene_references(text):
+        resolved = resolve_reference(source, name)
+        if resolved is None:
+            raise SystemExit(f"{source.name}: unresolved reference {name!r}")
+        shutil.copy2(resolved, run_dir / resolved.name)
+        text = text.replace(f'"{name}"', f'"{(run_dir / resolved.name).as_posix()}"')
     target = run_dir / source.name
     target.write_text(text, encoding="utf-8")
     return target
