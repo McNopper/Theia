@@ -54,7 +54,21 @@ CASES = {
     "C1": {"scene": "c1_curved_glass.scene.toml", "roi": [0.38, 0.70, 0.62, 0.84]},
     "C2": {"scene": "c2_absorption_prefix.scene.toml", "roi": [0.38, 0.70, 0.62, 0.84]},
     "C3": {"scene": "c3_boundary_mixed.scene.toml", "roi": [0.25, 0.60, 0.75, 0.85]},
+    # 2e complex-scene integration (dragon/teapot). ROI derived from a 64-frame
+    # probe render: clipped-luminance variance window over the detail band,
+    # light source excluded (in-window max 2.7 vs scene max 48).
+    "DRAGON": {"scene": str(GITHUB / "Aether" / "assets" / "dragon_teapot.scene.toml"),
+               "roi": [0.375, 0.688, 0.675, 0.988]},
 }
+
+
+def scene_source(case: str) -> Path:
+    """Absolute CASES scenes resolve where they live; relative ones are the
+    staged SMS fixtures under ASSETS."""
+    scene = Path(CASES[case]["scene"])
+    return scene if scene.is_absolute() else ASSETS / scene
+
+
 FRAME_RE = re.compile(r"frame_timing_ms:(\d+):([0-9]+(?:\.[0-9]+)?)")
 
 
@@ -110,10 +124,29 @@ def provenance(case: str) -> dict:
     for path in sorted(ASSETS.iterdir()):
         if path.is_file():
             inputs[path.name] = sha256(path)
+    source = scene_source(case)
+    if source.parent != ASSETS:
+        # External scene (2e): hash it and the files it references directly so
+        # staleness detection tracks the Aether assets too.
+        inputs[source.as_posix()] = sha256(source)
+        text = source.read_text(encoding="utf-8")
+        refs = re.findall(r'material_libraries = \["([^"]+)"\]', text)
+        refs += re.findall(r'path = "([^"]+)"', text)
+        for ref in refs:
+            ref_path = source.parent / ref
+            if ref_path.is_file():
+                inputs[ref] = sha256(ref_path)
     return {"case": case, "runner_sha256": sha256(Path(__file__).resolve()), "repos": repos, "inputs": inputs}
 
 
 def prepare_run_dir(case: str) -> Path:
+    source = scene_source(case)
+    if source.is_absolute() and source.parent != ASSETS:
+        # External complex scene (2e): its bare material/mesh references
+        # resolve against the Aether assets root where the files live.
+        if not source.is_file():
+            raise SystemExit(f"Missing scene: {source}")
+        return source
     run_dir = OUT / "scenes" / case
     run_dir.mkdir(parents=True, exist_ok=True)
     materials = ASSETS / "sms_qualification.materials.toml"
@@ -122,7 +155,6 @@ def prepare_run_dir(case: str) -> Path:
     for obj in sorted(ASSETS.glob("*.obj")):
         shutil.copy2(obj, run_dir / obj.name)
         obj_targets[obj.name] = (run_dir / obj.name).as_posix()
-    source = ASSETS / CASES[case]["scene"]
     text = source.read_text(encoding="utf-8")
     if MATERIAL_LINE not in text:
         raise SystemExit(f"{source}: material reference contract broken")
