@@ -667,6 +667,49 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     capture hops beyond the first, the N-hop prefix replay in place of the single-hop
     body, footprint/Jacobian over ALL hops, and `THEIA_SHIFT_MASK` bit2 for k=4.
 
+  **Gap A STAGE 2 DESIGN (2026-11-19) - complete read of the k=3 shift body done,
+  design pinned, NO CODE YET. Also corrects the stage-1 budget note.**
+  - *Where the work is* (`gi.comp`): replay + eligibility L2100-2127; x_k rebuild and
+    connection L2129-2152; **footprint Eq.5 (k=3 form)** L2154-2170 (min over hop /
+    edge / continuation, threshold `2e-4 * rPri2`); visibility L2172-2176; target-side
+    hop weight `wHop` L2178-2188 and edge weight `wEdge` L2190-2200; x_k vertex sum
+    L2202-2237; **telescoping Jacobian L2239-2256**; assembly L2258.
+  - *The four things stage 2 must generalise, each INERT at the default capacity 1:*
+    1. **Replay loop** - replace the single trace of `hopDir[0]` (L2101-2108) with a
+       loop over `hopCount = kLevel - 1` hops: for each, trace `hopDir[j]`, apply the
+       same per-hop eligibility (`roughness >= 0.2` L2111-2114 and the near-field
+       `>= 0.1` L2124-2127) and carry the previous surface forward; the final surface
+       becomes `surf2` (today's x'_2) and the connection/visibility logic is unchanged.
+    2. **Weight product** - `wHop` (L2188) becomes `prod_j wHop_j`, each with its own
+       `pdfY_j`/`f_j`/`fTerm_j` evaluated at the replayed vertex toward `hopDir[j]`.
+    3. **Jacobian product** - `jacEndDenom` (L2246) becomes
+       `prod_j (hopPdf_j * hopGSource_j) * pdfInK * geomGInKSource`, and the numerator
+       (L2247) `prod_j (pdfY_j * geomGTarget_j) * (pdfY2 * geomGTargetEdge)`.
+       `jacCont = jacEnd * pdfYk / pdfOmegaK` (L2249) and both
+       `reconnectionJacobianValid` guards (L2251-2256) stay exactly as they are.
+    4. **Footprint** - `footprint1` (L2159) becomes `min_j (hopPdf_j * hopGSource_j)`;
+       `footprint2`/`footprint3` (L2160-2161) and the `skipInverse` rule are untouched.
+    Plus (5) **`THEIA_SHIFT_MASK` bit2 = k4** in the dispatch (L2464-2467) so the k=4
+    body is step-through observable, and only THEN is `kMaxHybridK` safe to raise.
+  - *Capture side required to feed it:* hops must be captured **per bounce** (today
+    only bounce 0, L1636-1648), the reconnection **edge** must be captured at the
+    vertex where `captureTarget` is actually decided (today it is hard-wired to the
+    bounce-0 vertex), and the harvest needs `x_{k-1}` rather than the hard-coded
+    `x2Pos` (L1669). `state.prevPosition`/`prevNormal` fed from `gi.comp` at arrival -
+    the same pattern Gap B used for `arrivalDist` - is the vehicle.
+  - ***CORRECTION to the stage-1 budget note (3c9e418):*** a hop is **28 B, not 24 B**.
+    The Jacobian denominator needs each hop's SOURCE PDF, so a hop is
+    `dir + pdf + dist2 + geomG source + geomG reverse` = 12+4+4+4+4 = 28 B. The 24 B
+    figure counted only the four fields the k=3 record happens to store, because k=3
+    reuses `pdfEdgeIn` as hop 0's pdf and `pdfInK` as the edge pdf - roles that
+    separate once hopCount > 1. Corrected growth: default (hopCount 1) still
+    byte-identical; **k=4 costs +28 B per record** (+84 B per pixel neighbourhood
+    with 3 path neighbours, ~6.4 MB/frame at 320x240) and +7 registers per copy.
+  - *Ordering rule for the implementation:* capture side first (inert, verifiable by
+    build + verifier alone), then the replay/weight/Jacobian/footprint products, then
+    bit2, and only then raise the knob - each step default-inert so a regression can
+    never be attributed to "the cap changed".
+
     the plan required.
 
     the plan asks for.
