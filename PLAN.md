@@ -631,6 +631,42 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     or the register footprint. No budget blocker; the remaining Gap A work is the code
     itself (knob, array, N-hop replay generalising `tryReconnectionShiftK3`, mask bit2).
 
+  **Gap A STAGE 1 LANDED (2026-11-19): bounded hop array + `kMaxHybridK` knob.
+  Harmonia `7d6ce55` / Theia `b5a8a09`. DEFAULT-INERT and SAFE IF RAISED.**
+  - `static const kMaxHybridK = 3` (today's cap) and `kHopCapacity = kMaxHybridK - 2`
+    (= 1 at default); the hybrid selection cap now reads `kMaxHybridK` instead of a
+    literal `3u` (identical value).
+  - `ReconnectionCapture`'s four single-hop named fields became parameter-sized arrays
+    (`hopDir / hopDist2 / hopGSource / hopGReverse`); at capacity 1 they hold exactly
+    the one hop the named fields held, and the five reconnection-edge fields
+    (`omegaInK / pdfInK / dist2InK / geomGInK*`) are untouched. Capture init loops.
+  - Caller half: capture and every shift-side read index `hop[0]`; harvest `kLevel`
+    became `captureTarget + 1` **hoisted after the if/else** (the old hard-coded
+    `1u`/`2u` would have left kLevel unset for a higher captureTarget); shift dispatch
+    went from `kLevel >= 2u -> k3 body` to `kLevel == 2u`, so an unknown kLevel falls
+    through with `vShift = false` -> **unbiased replay fallback**, never a
+    reconnection computed against a mislabelled edge. The k2 guard (`kLevel != 1u`)
+    is unchanged.
+  - *Why the dispatch change was mandatory, not cosmetic:* with today's hard-coded
+    `kLevel = 1u|2u`, raising the cap would have labelled a k=4 record as k=3 and
+    replayed ONE hop against a two-hop edge - silently wrong, not merely inefficient.
+    A knob that can lie is not a parameter-driven knob.
+  - *Near-miss, recorded honestly:* the first edit's span check was written as a
+    post-hoc `must` instead of a precondition, so it ran anyway and the 9-line span
+    (4 hop fields interleaved with the 5 edge fields) **deleted the five
+    reconnection-edge fields**. The verifier's positive assertion ("edge fields
+    PRESENT") caught it, they were restored, and only then did anything build.
+    Two further verifier bugs (a missing `in l`, and `endswith` on lines carrying
+    trailing `///<` comments) were also fixed - the failures were in the CHECKS, not
+    the code, and each was diagnosed before being "fixed" to green.
+  - *Receipts:* Harmonia **BUILD_EXIT=0**, Theia **BUILD_EXIT=0** (gi.comp compiles
+    against the new record layout), verifier **28/28 VERIFY_EXIT=0**, braces 59/59 and
+    296/296. **Suites and `qualify_gap_c.py` NOT yet re-run** - the C4 battery job owns
+    the GPU (one app at a time); they are the next actions when it releases.
+  - *Stage 2 still owed (and the knob is not safe to raise past 3 until it lands):*
+    capture hops beyond the first, the N-hop prefix replay in place of the single-hop
+    body, footprint/Jacobian over ALL hops, and `THEIA_SHIFT_MASK` bit2 for k=4.
+
     the plan required.
 
     the plan asks for.
