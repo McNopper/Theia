@@ -228,6 +228,53 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
   - Next: apply the fix, re-stage, cheap probe render (must be non-black), then
     re-run the full Gap C differential.
 
+  **Gap C REAL observation (2026-11-19, after the fixture camera fix 2088350):
+  premise CONFIRMED; the gate condition is noise-limited, not a k=3 defect.**
+  - *Content precondition: OK on all five frames* (reference max 3848.85 / std 77.90;
+    arms max 2160.65 / std 27.35) - the all-black failure is gone.
+  - **B - mask REACHES estimator: LIVE** (replay vs reconnection pixel max|d|
+    **90.845032**).
+  - **A - the k=3 body FIRES: YES** (reconnection vs hybrid pixel max|d|
+    **90.845032**) => **Gap C's fixture premise is proven**: the near-specular
+    primary really does push pair selection past pair 1 and the k=3 shift body
+    contributes measurably.
+  - **D - mask2 vs mask3 = 0.000000 exactly**, i.e. the two arms are pixel-identical
+    as predicted - an INDEPENDENT empirical confirmation of the shader reading in
+    e204d02 (bit1 selects the mode; bit0 is only seen via `!= 0`; bodies dispatch
+    on kLevel).
+  - **C - gate-clean vs Hyperion: FAIL at the standard budget** (256spp/256f):
+    mean_diff **2097.4 / 120**, Rel-MSE **1062.3 / 250**; SSIM 0.7866 / 0.6 pass,
+    lum_hist 0.9964 / 0.8 pass.
+  - *Noise-floor measurement (same budget, second seed) shows the gate is NOT
+    discriminative on this fixture:*
+
+    | pair | mean_diff | Rel-MSE | SSIM | tm_mean | gate |
+    |---|---|---|---|---|---|
+    | ref-vs-ref (Hyperion's own noise) | **2342.1** | **18292.8** | 0.7773 | 8.026 | FAIL |
+    | cand-vs-cand (Theia's own noise) | 1223.6 | 25.2 | 0.8855 | 2.658 | FAIL |
+    | ref-vs-cand seed91 | 2074.8 | 1111.6 | 0.7840 | 7.107 | FAIL |
+    | ref-vs-cand seed17 | 2097.4 | 1062.3 | 0.7866 | 7.088 | FAIL |
+
+    The cross gap sits **inside the reference's own sampling noise on every
+    metric** (2097 < 2342, 1062 << 18293, SSIM 0.7866 > 0.7773, tm 7.088 < 8.026),
+    and **Hyperion fails the gate against ITSELF**. The shift-free `replay` arm
+    fails essentially identically (tm 7.088 vs 7.089 for the hybrid arm), so the
+    failure is a property of the fixture's noise (near-specular primary + bright
+    emitter at 256spp), NOT of the reconnection/hybrid shift.
+  - *Honest status:* condition **A/B/D are MET**; condition **C is NOT ASSESSABLE
+    at the standard budget** - it is neither a pass nor evidence against k=3
+    correctness. The 120/250 thresholds are calibrated for the 14-scene manifest
+    where the clean envelope sits below them; this fixture's noise envelope at
+    256spp exceeds them by itself.
+  - *Next (no gate change):* raise the render budget until the reference's own
+    noise sits under the gate - noise scales ~1/sqrt(N), so ~512x the samples
+    (256 -> ~131k) should bring ref-vs-ref mean_diff from 2342 to < 120. Verify
+    the scaling empirically at 4096 first (Hyperion 1.0s/256spp, Theia 3.1ms/f on
+    this 4-box scene, so the probe costs seconds). Thresholds stay exactly 120/250/
+    0.6/0.8 - at a higher budget they are conservative, which is recorded rather
+    than silently reinterpreted.
+
+
 
 
 **Living source of truth for outstanding work.** Shipped items are removed from the work
