@@ -1476,11 +1476,29 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
             if (smsPathEmissionTail(smsPath) && smsGiCollectableEmitter(h,surf)) break;
             currentSmsReceiver=smsCapturePathReceiver(smsPath,surf.mat,remainingDepth);
         }
-        // Prevent primary direct-light double count: camera->primary->emissive (bounce 0)
-        // is forward-owned direct (RectLight/emissive proxy), so GI must not add it.
+        // Primary direct-light ownership: camera->primary->emissive (bounce 0).
+        // The guard follows the SAME ownership knob that drives the forward pass's
+        // emissive-proxy skip (setRestirDiActive <-> gi push restirDiEnabled):
+        //  * DI/PT off (restirDiEnabled == 0): the FORWARD pass owns primary direct
+        //    (analytic RectLight proxies) - the walk breaks here as before, so the
+        //    proxy term is never double counted.
+        //  * DI/PT on (restirDiEnabled == 1): the forward pass SKIPS its proxies, and
+        //    a single-light-sample reservoir cannot represent DELTA reflections of the
+        //    emitter (camera->primary(delta)->emissive) - the term would vanish between
+        //    owners (measured: C4 dragon D2 gap, theia exactly 0 where Hyperion counts
+        //    the depth-1 post-specular emission). The walk therefore carries it through
+        //    the SHARED evalEmissionGuarded at depth bounce+primaryCharge - exactly
+        //    Hyperion's rule: specular adds, non-specular is 0 + terminate (which keeps
+        //    the non-delta case single-counted, owned by the reservoir's NEE).
         const float3 surfEmission = max(surf.mat.emissionColorLum.xyz, 0.0.xxx)
                                   * max(surf.mat.emissionColorLum.w, 0.0);
         if (bounce == 0u && maxComp(surfEmission) > 0.0 && dot(surf.wo, surf.geoNormal) > 0.0) {
+            if (restirDiEnabled == 0u) {
+                break; // forward pass owns primary direct (analytic proxies active)
+            }
+            state.radiance += state.throughput * evalEmissionGuarded(
+                surfEmission, bounce + primaryCharge, state.specularBounce,
+                surf.wo, surf.geoNormal, emissiveTriangleCount);
             break;
         }
         // A3(a): path regularization — widen near-specular GGX lobes on secondary+ bounces
