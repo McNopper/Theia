@@ -621,6 +621,21 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     resolution + camera-jitter contract, near/far derivation, exposure application,
     and the analytic-light ownership gate as a shared contract.
 
+  **Cross-renderer audit - EXECUTION 3 (2026-11-19): tonemap and exposure.**
+  | seam | verdict | evidence |
+  |---|---|---|
+  | exposure computation | **SHARED** | both derive it from the shared `harmonia::renderer::Camera::PhysicalCamera` (Theia `ApplicationCompute.cpp` L46 / `ForwardRenderer.cpp` L184, L393 read `m_camera.physical.exposure()`; Hyperion `Application.cpp` L239 builds it with the same `fromEv100`); the formula itself is documented once in shared `common.slang` L16: `exposure = 1 / (1.2 * 2^EV100)` |
+  | tonemap | **SHARED (host-owned), with a structural difference** | Theia does not configure a tonemapper at all - `Application.hpp` L34 states "the host owns window/context/swapchain/HDR image/**tonemap**/present", i.e. the shared `harmonia::app::App::createToneMapper` + `ToneMapStagePass` (Harmonia `App.cpp` L41-L51, L329) own it. Hyperion ALSO forwards `tonemapper()` into its own config (`Application.cpp` L210, `PathTracer.cpp` L136) - same shared `harmonia::Tonemapper` enum, but a second copy of the plumbing |
+  - *Reading:* both rows are SHARED at the computation level, so neither can drift
+    numerically. The Hyperion-side extra forwarding is structural only; it is flagged
+    for the audit session rather than called a defect, because nothing in the receipts
+    shows a tonemap difference (the perceptual gate would have caught one).
+  - *Backlog after this pass:* the resolution contract (width/height defaults and the
+    parity 320x240 budget) and the DI/PT analytic-light **ownership gate** as a shared
+    contract instead of two per-renderer knobs. Scene parsing, camera defaults,
+    emissive synthesis, near/far, jitter, exposure and tonemap are now characterised
+    (executions 1-3).
+
   **Cross-renderer audit - EXECUTION 2 (2026-11-19): near/far and the jitter contract.**
   | seam | verdict | evidence |
   |---|---|---|
