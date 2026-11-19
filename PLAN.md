@@ -197,6 +197,54 @@ deterministic delta, estimator unbiased. Remaining:
   so the k=3 body is barely hit. It needs a scene where the first pair fails (near-specular
   primary, or a sub-0.1 segment) before its correctness can be measured.
 
+  **VERIFICATION PLAN (recorded 2026-11-19, before any edit of this gap set; order
+  C -> B -> A so every later gap is measured by the earlier gap's instrument):**
+  *Gap C - k=3-exercising fixture + observation:* new staged scene (Harmonia
+  `tests/assets/sms`, C-track fixture conventions: inline `ev100`, absolute asset
+  paths) whose primary is near-specular (material roughness < alpha_min 0.2, e.g. a
+  polished-metal plate filling the frame) so hybrid pair 1 FAILS the pairwise-alpha
+  criterion, with the continuation landing on rough diffuse far-field geometry so pair
+  2 qualifies -> captureTarget = 1 -> the k=3 body fires (pair selection at
+  gi.comp L1554-1573, cap `surfaceCount < 2u`). Observation is parameter-driven via
+  the existing `THEIA_SHIFT_MASK` step-through (bit0 = k=2, bit1 = k>=3): evidence =
+  mask differential renders (k3-only vs k2-only vs all) on the fixture must differ
+  AND the k3-only arm must stay gate-clean vs Hyperion - proving the k=3 body runs
+  and is correct; receipt = suite 64/64 + fixture added to the qualification battery
+  cases (reference + correctness stages). *Gap B - alpha from sampled lobes:* replace
+  the material-roughness proxy in the capture gates (curRough/prevRough from
+  `specularRoughAnisoIor.x`, with the recorded NB at L1552-1553) with the alpha of
+  the LOBE ACTUALLY SAMPLED at each vertex: add a `sampledAlpha` field to PathState,
+  set it inside the shared `sampleBSDF` result handling (primary site + the shared
+  integrateSurface continuation), persist the pair's alphas into the capture
+  decision. PRE-EDIT READS (mandatory, the row's own rule): the Enhanced paper's
+  criteria section + DQLin/ReSTIR_PT's handling, to pin the diffuse-lobe alpha
+  convention (the reference uses the sampled lobe; diffuse alpha needs an explicit
+  recorded choice), and `BSDFSample` for an existing lobe classification. Shift-side
+  eligibility guards stay material-roughness unless that read says otherwise
+  (recorded either way). Acceptance: Gap-C fixture still reaches k=3 (criteria
+  change must not silently change which k fires - report old/new k distribution
+  via the mask differential), module suite 64/64, C1-C4 battery re-cert green,
+  and a disagreement case (material proxy vs sampled alpha) demonstrated on record.
+  *Gap A - k >= 4 (uncap + N-hop body):* (1) re-read the reference's adaptive
+  rcVertexLength + full-prefix replay (Shift.slang / PathTracer.slang handleHit)
+  for the general-N footprint/Jacobian formulation before writing code; (2) uncap
+  the hybrid selection (gi.comp `state.surfaceCount < 2u` -> a recorded cap knob
+  `kMaxHybridK`, default keeps today's behavior = parameter-driven, no silent
+  semantic change) and extend `ReconnectionCapture` with a bounded hop array
+  (direction + pdf + geomG source/reverse per hop + the connection edge fields)
+  - first check PathReservoir/register budget for the record growth; (3) generalize
+  `tryReconnectionShiftK3` into an N-hop replay (loop the recorded hop directions
+  from the target's primary, then the existing connection-edge machinery
+  visibility/Footprint-Eq.5-over-all-edges/Jacobian at y_{k-1}->x_k); (4) extend the
+  observation surface: `THEIA_SHIFT_MASK` gains bit2 = k4 so the k=4 body can be
+  step-through observed (documented next to the existing bits at the push
+  constant). Acceptance: Gap-C fixture at the raised cap must be able to fire k=4
+  (mask differential evidence, same contract as C), k2-only mask = bit-identity on
+  the existing scenes (no regression), identity-style check like 2d.2 (shifted
+  value vs full-replay at overlap where both are defined), suite 64/64, C1-C4 +
+  fixture battery green. GPU receipts strictly serial; every step keeps commits
+  local (no push).
+
 **Stream compaction** (§6.2.2) — **LANDED 2026-11-09.** The GI pass split into
 three kernels sharing one module/push-layout: `main` (emit — neighbour gates +
 inline shift attempts, results stored per pixel; replay jobs appended to an
