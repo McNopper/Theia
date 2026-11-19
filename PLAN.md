@@ -559,6 +559,41 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     old/new. Note C1-C3/C4 are transmission/coat content, so they are the natural
     home for that case.
 
+  **CROSS-RENDERER DIVERGENCE AUDIT (2026-11-19) - owner-initiated, PRIORITY SESSION.**
+  Owner hypothesis: if Hyperion/Theia/Harmonia do not actually call the same functions,
+  renderer parity is unachievable and we would be "trying to achieve something which is
+  just not possible" - i.e. the problem is at the BASE, while our paper/external work
+  (PSMS, RTXDI, ReSTIR PT) is already correct. First-pass evidence (CPU grep over all
+  three repos, no renders):
+  - **SHARED and confirmed:** `integrateSurface` is called by Theia (`gi.comp` L1675,
+    `gi_sms.slang` L61) **and** Hyperion (`closesthit.slang` L277) from the SAME
+    Harmonia `path_integrator.slang`; both `import bsdf` (Harmonia's
+    `sampleBSDF/evalBSDF/pdfBSDF`); both use `harmonia::renderer::Camera::PhysicalCamera::fromEv100`.
+    So the estimator and the BSDF really are 1:1 - paper-level correctness does reach both.
+  - **DIVERGENT (each renderer keeps a private copy):** camera assembly (Theia
+    `Application.cpp`/`ApplicationCompute.cpp` vs Hyperion `Application.cpp buildCamera`)
+    with INDEPENDENT default constants - Theia `value_or(39.1f)` (was 45) vs Hyperion
+    `kCornellVfovDeg = 39.1f`; Theia's ev100 fallback (was `value_or(7.0f)`) vs
+    Hyperion's conditional; and light synthesis (Theia `Scene.cpp`, the dual-RectLight
+    fix) with no Hyperion counterpart in the same place.
+  - **CONCLUSION - the hypothesis is CONFIRMED in a specific form:** the shared MATH is
+    shared, but the pipeline INPUTS (camera, exposure, light/scene synthesis) are
+    assembled TWICE with independent defaults, and no shared test covers that seam.
+    Both parity defects root-caused this session (50x exposure, 5.9 deg vfov) lived in
+    Theia's PRIVATE camera assembly - never in shared code - which is exactly why they
+    passed every shared-estimator test and only surfaced in the cross-renderer gate.
+    The strict-AND gate can say the images differ; it cannot say WHY.
+  - *Proposed session charter (owner to confirm/trim):* enumerate every duplicated
+    construction point across the three repos - camera pose/fov, exposure, emitter and
+    light synthesis, scene loading, tonemap/working-space params, resolution and
+    camera-jitter contract - and for each row decide: (a) hoist into Harmonia so there
+    is ONE definition, or (b) keep it renderer-specific but add a cross-renderer
+    parity assertion for it. Deliverable: a divergence table with owner + test per row,
+    so the base is verified before further paper-level work builds on it.
+  - *Sequencing:* the two in-flight items (C4 battery comparison, `biasCorrectionMode`
+    link/commit) are closed FIRST so this session starts from a clean tree; no new
+    feature work is started ahead of it.
+
   **Gap A - MANDATORY PRE-EDIT RE-READ COMPLETE (2026-11-19): DQLin/ReSTIR_PT
   `Shift.slang` fetched and read end-to-end. It CHANGES the shape of the task.**
   - *What the reference actually does for a hybrid shift of ANY k* (`Shift.slang`):
