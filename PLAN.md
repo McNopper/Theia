@@ -512,6 +512,53 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
   - Receipts: **BUILD_EXIT=0**, **test_arch 1/1 PASSED** (was Failed),
     **suite 100% of 67** (SUITE_EXIT=0), **clang-format 22.1.3 clean** on all three.
 
+  **Gap B STEP 2 LANDED (2026-11-19) - the hybrid pair decision moved to where both
+  sampled lobes exist. Harmonia `b79beb6` / Theia `a478208`.**
+  - *Caller half (`gi.comp`):* `PathState` inputs are threaded - `captureHybridMode`
+    (from mask bit1), `sampledAlphaPrev` (primary's MATERIAL roughness as the default,
+    so an opacity pass-through primary behaves exactly as before, overwritten with the
+    primary's real `bs.lobeAlpha` once a lobe is sampled) and `arrivalDist = h.dist`
+    just before `integrateSurface`. `prevRough` + its comment are deleted (dead), the
+    in-gate hybrid branch (`surfaceCount < 2u`) is removed, and BOTH stale
+    "material roughness as a proxy" notes are corrected. Only the unconditional
+    reconnection branch still decides at arrival. The local `kCaptureNone` is gone.
+  - *Shared half (`path_integrator`):* `captureHere` becomes mutable; immediately
+    AFTER `sampleBSDF` the hybrid test runs over **both** sampled lobes -
+    `min(sampledAlphaPrev, bsdfSample.lobeAlpha) >= 0.2 && arrivalDist >= 0.1` - and
+    sets `captureTarget = surfaceCount - 1` (identical to the caller's pre-increment
+    assignment), then the NEE capture block (moved down from above the sample) is
+    evaluated against the FINAL `captureHere`, then this vertex's lobe alpha is stored
+    for the next pair. Guarded by `captureRe != 0 && captureHybridMode != 0`.
+  - *Build detail worth recording:* Slang rejects a non-static global const with an
+    initializer (`error[E31224]: global const requires static`); after adding `static`,
+    **Theia's `gi.comp` still compiles**, which proves the constant is visible through
+    `import path_integrator` - so there is ONE definition, not a duplicated sentinel.
+  - *Receipts:* Harmonia **BUILD_EXIT=0** + suite **185/185**; Theia **BUILD_EXIT=0**
+    + suite **100% of 67**; edit verifier **22/22 (VERIFY_EXIT=0)**; brace balance
+    56/56 and 296/296; `static const kCaptureNone` single definition.
+  - *Gap C acceptance re-run (the "must not silently change which k fires" clause):*
+    **k3 body FIRES - max|d| 90.845032**, mask LIVE **90.845032**,
+    **mask2 vs mask3 = 0.000000**. Every statistic matches the pre-change run to
+    6 dp (arm max 2160.647949, std 27.346701, tm 7.088/7.089), i.e. **k selection is
+    unchanged** and the change is a no-op on this single-lobe fixture. Condition C is
+    still judged by the owner's noise-envelope criterion (0fbcb0b), unchanged.
+  - *Battery re-cert in flight as a REGRESSION DIFFERENTIAL* (one GPU app, sequential):
+    for each of C1-C4 render 320x240 / 512f / seed 17 / local and compare against the
+    pre-Gap-B baseline - C1-C3 use the stored `cand_<case>_local_512_17.exr` (those
+    scenes pin `vertical_field_of_view` inline, so they remain valid Gap-B baselines
+    even though they predate f5c71e7) and C4 uses `c4_vfov_sanity.exr` (the only valid
+    C4 baseline: post-f5c71e7, pre-Gap-B). **Rationale:** Gap B draws no RNG and moves
+    no sample, so `bit-identical <=> capture decisions unchanged <=> the recorded
+    pre-change verdict still holds`; any difference is reported with its magnitude and
+    must be judged against the case's 512f noise floor, never silently accepted.
+    This substitutes for re-running the rejected ~11h ladder (e457997) WITHOUT
+    weakening any threshold.
+  - *Still owed for Gap B:* the battery result above, and the **material-vs-sampled
+    disagreement case** - a multi-lobe vertex (e.g. diffuse + coat/GGX) where
+    `specularRoughAnisoIor.x` and the sampled lobe's alpha actually differ, reported
+    old/new. Note C1-C3/C4 are transmission/coat content, so they are the natural
+    home for that case.
+
     the plan asks for.
 
 **Living source of truth for outstanding work.** Shipped items are removed from the work
