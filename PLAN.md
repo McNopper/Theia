@@ -621,6 +621,25 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     resolution + camera-jitter contract, near/far derivation, exposure application,
     and the analytic-light ownership gate as a shared contract.
 
+  **Cross-renderer audit - EXECUTION 2 (2026-11-19): near/far and the jitter contract.**
+  | seam | verdict | evidence |
+  |---|---|---|
+  | near/far derivation | **SHARED** | both call `harmonia::renderer::Camera::nearFarFromDistance` - Theia `Application.cpp` L372 (static) + L946 (bound/animated camera), Hyperion `Application.cpp` L243 (static) + L274 (bound) - a symmetric pair of call sites per renderer, same argument semantics |
+  | **camera jitter** | **SAME GOAL, DIFFERENT MECHANISM, UNTESTED** | Theia: `applyProjectionJitter(proj, cameraJitterNdc(frameIndex(), w, h))` at `Application.cpp` L545-546 - a **per-frame Halton(2,3) low-discrepancy NDC offset on the projection matrix** (CPU, `theia/camera/CameraJitter.hpp`); Hyperion: **per-sample in-shader** `float2 jitter = randFloat(seed); uv = (launchID + jitter)/launchDim` at `raygen.slang` L20-21 (uniform RNG, spp samples/frame) |
+  - *Why this row matters even though both are unbiased:* the two use DIFFERENT
+    sampling strategies (deterministic Halton per accumulated frame vs pseudo-random
+    uniform per sample), so they integrate the same pixel footprint but deliver
+    different FINITE-SAMPLE variance - which is exactly the quantity an equal-time
+    quality comparison reports. The documented intent (`--output` capture forces jitter
+    on "so the accumulation integrates the same pixel footprint as Hyperion's
+    per-sample jitter") is a claim, not a checked contract: **no test asserts the two
+    footprints match**, and no test pins the sequences.
+  - *Audit backlog after this pass:* tonemap/working-space parameter assembly,
+    resolution contract, exposure application at capture time, and the DI/PT
+    analytic-light ownership gate as a shared (rather than per-renderer) contract.
+    Scene parsing, camera defaults, emissive synthesis, near/far and the estimator
+    itself are now all characterised (execution 1 + this pass).
+
   **Gap A - MANDATORY PRE-EDIT RE-READ COMPLETE (2026-11-19): DQLin/ReSTIR_PT
   `Shift.slang` fetched and read end-to-end. It CHANGES the shape of the task.**
   - *What the reference actually does for a hybrid shift of ANY k* (`Shift.slang`):
