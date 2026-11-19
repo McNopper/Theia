@@ -123,6 +123,33 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     run - no `--stage correctness` verdict exists for any case post-f5c71e7. This
     entry exists so the absence of that gate can never be mistaken for a pass.
 
+  **Calibrated decision rule (2026-11-19, measured before the post-fix render).**
+  Instrument: `c4_postfix_verdict.py` (selftest 12/12 PASS, reproduces every
+  recorded number), scoring row-mode / emitter-band / tm_mean / SSIM against
+  `ref_C4_final_4096.exr`:
+  - *Emitter band* = `c4_diff_composition.py`'s exact mask (y24:41, x60:101),
+    NOT the qualify ROI - an earlier draft of the instrument scored the qualify
+    window (y105-177) and read ratio 0.901 where the recorded finding is
+    0.000; the selftest caught it. Verified against the recorded composition
+    run: band ref 0.0438 vs cand 0.0000, band SSIM 0.2348, noise 0.360/0.9663.
+  - *Budget-specific noise floors* (seed 17 vs 91, band excluded):
+    512f -> tm 0.605/255, SSIM 0.9540;  8192f -> tm 0.360/255, SSIM 0.9663.
+  - *PASS rule* (owner's perceptual bar, unchanged): row-mode == 31 == reference
+    AND tm_mean < 3/255 AND emitter band lit (cand/ref > 0.5).
+  - *Why the 512f sanity render IS a valid discriminator*: on the pre-fix pair the
+    two budgets agree to +/-0.06 tm (512f 5.094 vs 8192f 5.039) with identical
+    row-mode (43), identical dark band (0.000) and identical verdict; at 512f the
+    defect sits 8.4x above its own noise floor. So 512f separates "fixed" from
+    "still broken" decisively. It is NOT sensitive to a small residual - a
+    borderline post-fix result (tm in roughly 1-3) escalates to the 8192f render.
+  - *Throughput finding (why this calibration matters)*: the in-flight 512f render
+    has been running at ~7.8 s/frame against a recorded 0.5 s/frame (full SM clock
+    2940/3090 MHz, P0, no throttle reason active, theia 3D engine 79.7% - so it is
+    rendering, not stalled; machine is simply ~15x down on this morning). At that
+    rate the planned single 8192f render would be ~15-18h rather than the recorded
+    78min. The 512f-first rule therefore avoids an unnecessary overnight job while
+    keeping the escalation path intact.
+
 **Living source of truth for outstanding work.** Shipped items are removed from the work
 lists; the shipped record is the *Baseline* below and `git log`. Only outstanding work is
 tracked here.
