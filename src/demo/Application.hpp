@@ -119,6 +119,11 @@ class Application final : public harmonia::app::App,
     /// @p tick (position/target/up + scene-scale clip planes) and push it to
     /// the renderer. No-op without a bound camera node.
     void placeBoundCamera(double seconds);
+    /// Camera placement from the loaded scene: static pos/at/up, the Hyperion-parity
+    /// vfov/ev100 fallbacks (f5c71e7 / 3f27122) and the controller orientation reset.
+    /// Extracted from onSceneLoaded (Extract Method, the Code-health TU-split seam) so
+    /// Application.cpp stays under the 1000-line architecture gate.
+    void applySceneCamera(const harmonia::scene::SceneLoader::SceneConfig& sceneConfig);
     void dispatchLightCull(VkCommandBuffer cmd, const sm::float4x4& proj, const sm::float4x4& view) noexcept;
     void submitAsyncCompute(VkCommandBuffer cmd,
                             const harmonia::app::RenderTarget& target,

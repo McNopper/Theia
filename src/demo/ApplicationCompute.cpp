@@ -220,4 +220,40 @@ void Application::submitAsyncCompute(VkCommandBuffer cmd,
     m_prevViewProjValid = true;
 }
 
+// Camera placement for a freshly loaded scene. The vfov and ev100 fallbacks are
+// Hyperion-parity (kCornellVfovDeg = 39.1f and the shared PhysicalCamera{} default):
+// a `[camera] reference = "presets/..."` that does not resolve must land on the SAME
+// value Hyperion picks, or the two engines render behind different lenses/exposures
+// (C4 emitter row 31 vs 43; 50x exposure divergence). Split out of onSceneLoaded so
+// Application.cpp stays under the 1000-line architecture gate.
+void Application::applySceneCamera(const harmonia::scene::SceneLoader::SceneConfig& sceneConfig) {
+    if (sceneConfig.cameraPos && sceneConfig.cameraAt) {
+        m_camera.position = *sceneConfig.cameraPos;
+        m_camera.target = *sceneConfig.cameraAt;
+        m_camera.up = sceneConfig.cameraUp.value_or(sm::float3{0.0f, 1.0f, 0.0f});
+        // VFOV parity with Hyperion (sibling of the camera-ev fallback fix): when a
+        // scene's `[camera] reference` preset cannot resolve (staged scenes ship without
+        // presets/), fall back to the SAME constant Hyperion uses - kCornellVfovDeg
+        // 39.1f (Hyperion Application.cpp:19/248). The previous value_or(45.0f) put the
+        // two renderers behind different lenses on preset-less scenes (C4 emitter row
+        // 31 vs 43, vertical align corr 0.366) - recorded as C4 residual #3 in
+        // Harmonia/PLAN.md; scenes with an inline vfov (C1-C3) are unaffected.
+        m_camera.vfovDeg = sceneConfig.cameraVfov.value_or(39.1f);
+    }
+    // Physical camera exposure - shared factory from harmonia::renderer::Camera.
+    // Fallback parity with Hyperion's buildCamera (ground truth): apply fromEv100 ONLY
+    // when the scene carries cameraEv100, else keep the shared PhysicalCamera{} struct
+    // default. The previous `value_or(7.0f)` diverged the two engines by 50x whenever a
+    // scene's `[camera] reference = "presets/..."` failed to resolve (staged scenes ship
+    // without presets/ - the staged C4 qualification fixture hit exactly this), making
+    // the cross-renderer parity gate unpassable. Scenes with an explicit ev100 (C1-C3:
+    // inline `ev100 = 7`) are unaffected.
+    m_camera.physical = harmonia::renderer::Camera::PhysicalCamera{};
+    if (sceneConfig.cameraEv100) {
+        m_camera.physical = harmonia::renderer::Camera::PhysicalCamera::fromEv100(*sceneConfig.cameraEv100);
+    }
+    // Reset camera controller orientation to match the new target.
+    const sm::float3 dir = sm::normalize(m_camera.target - m_camera.position);
+    CameraController::directionToYawPitch(dir, m_camCtrl.yaw, m_camCtrl.pitch);
+}
 } // namespace theia
