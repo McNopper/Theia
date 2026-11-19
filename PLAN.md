@@ -83,6 +83,46 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     unbiased via reject->replay, efficiency-only). Target list therefore unchanged:
     conditional `biasCorrectionMode` fix on gate evidence; hybrid Gap B/A per ae00516.
 
+  **Owner decision (2026-11-19): NO full acceptance ladder - scope proof instead.**
+  The owner rejected the ~11h single acceptance ladder ("we will not do this,
+  otherwise we drop this feature"), so acceptance is sought on the owner's recorded
+  perceptual bar, backed by the following scope proof of what f5c71e7 can affect:
+  - *C1/C2/C3 are provably unaffected*: each pins `vertical_field_of_view` inline in
+    its `[camera]` block (43.0 / inline / inline), so `value_or(...)` never evaluates
+    the fallback on those paths. The ONLY src/ commit after their accepted correctness
+    records is f5c71e7 (src/demo/Application.cpp); every later commit touches PLAN.md
+    only. => their recorded verdicts transfer; re-running them would re-render
+    bit-identical images.
+  - *C4 is the ONLY affected case*: its `[camera]` carries no inline vfov and instead
+    references `presets/openpbr_studio_near.camera.toml`, and staged qualification
+    scenes ship WITHOUT `presets/` - proven by the loader warning in the candidate log
+    (`SceneLoader: malformed render preset reference 'presets/preview.render.toml'`)
+    and by the source comment at Application.cpp L369-376 ("staged scenes ship without
+    presets/ - the staged C4 qualification fixture hit exactly this"). The preset's own
+    `vertical_field_of_view = 50` therefore never reaches C4; the fallback (45 -> 39.1)
+    is what C4's projection is built from.
+  - *References are NOT the cost and are NOT invalidated in substance*: they are
+    rendered by **Hyperion** (`render_hyperion`, qualify_sms L307/L312), which is
+    untouched by f5c71e7 and already carries kCornellVfovDeg = 39.1; a full 4096-spp
+    C4 reference ladder costs ~12s (logs 06:13:59 -> 06:14:11, 4.8 s/frame). Only the
+    harness's provenance dict (which hashes Theia's exe too) flags them stale.
+  - *Where the ~11h actually goes*: `stage_correctness` = modes(2) x frames(3) x
+    seeds(4) = 24 Theia renders per case; measured from the recorded log timestamps -
+    512f ~4.5min, 2048f ~19min, 8192f ~78min each. C4 alone is therefore ~6.8h in
+    local mode and ~13.6h with reuse - i.e. the ladder cost IS the C4 candidate
+    sweep, not the references.
+  - *Acceptance substitution (owner's own recorded law):* "if from a perceptual
+    perspective one does not see a difference, I accept." Perceptual re-measure needs
+    ONE post-fix 8192f C4 render (single seed, ~78min, one GPU app) and is directly
+    comparable to the verified pre-fix baseline just reproduced on this HEAD's files:
+    C4 tm_mean 5.039/255, SSIM 0.7629 (recorded failing) vs C1/C2/C3/DRAGON
+    1.227/0.799/1.542/1.352 (accepted, invisible) vs the measured noise floor
+    tm 0.357, SSIM 0.966.
+  - *Explicitly NOT verified by this decision*: the harness's 2%-energy gate at 8192f
+    with pooled 4-seed standard error (`ENERGY_TOLERANCE`, `BIAS_GATE_FRAMES`) is NOT
+    run - no `--stage correctness` verdict exists for any case post-f5c71e7. This
+    entry exists so the absence of that gate can never be mistaken for a pass.
+
 **Living source of truth for outstanding work.** Shipped items are removed from the work
 lists; the shipped record is the *Baseline* below and `git log`. Only outstanding work is
 tracked here.
