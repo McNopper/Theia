@@ -559,6 +559,49 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     old/new. Note C1-C3/C4 are transmission/coat content, so they are the natural
     home for that case.
 
+  **Gap A - MANDATORY PRE-EDIT RE-READ COMPLETE (2026-11-19): DQLin/ReSTIR_PT
+  `Shift.slang` fetched and read end-to-end. It CHANGES the shape of the task.**
+  - *What the reference actually does for a hybrid shift of ANY k* (`Shift.slang`):
+    1. `traceHybridShiftRays` -> `traceRandomReplayPathHybridSimple(dstPrimaryHit,
+       dstPrimarySd, ray, pathFlags, initRandomSeed, dstRcPrevVertexHit,
+       dstRcPrevVertexWo)` - a **full-prefix replay** driven by the record's own
+       random seed + path flags, stopping just before the reconnection vertex.
+    2. `computeShiftedIntegrandHybrid`: for `rcVertexLength == 1` (k=2) it uses
+       `Tp = 1` and the PRIMARY as the previous vertex; otherwise
+       `Tp = rcData.pathThroughput`, `prev = rcData.rcPrevHit / rcPrevWo`.
+    3. Both cases then make ONE call to `computeShiftedIntegrandReconnection(...,
+       useHybridShift = true, useCachedJacobian = rcVertexLength > 1)`, passing the
+       **previous-vertex** `ShadingData` in the slot the k=2 case gives the primary.
+  - *THE KEY FINDING:* **the reconnection formula is already N-generic.** Because the
+    previous vertex is passed in rather than hard-coded as the primary, the connection
+    edge (y_{k-1} -> x_k) and its Jacobian are identical for k=2,3,4,... So Gap A is
+    NOT a new Jacobian - it is (a) RECORD GROWTH so y_{k-1} and the prefix throughput
+    exist for larger k, and (b) a prefix replay generalised past one hop.
+  - *The generic Jacobian the reference computes* (and what we already have for k=3):
+    `J = (dstCos/shifted_dist2) / (srcCos/original_dist2)` (geometry ratio of the
+    connection edge) `x dstPDF1/srcPDF1` (edge scatter pdf) `x
+    dstRcVertexScatterPdf/srcRcVertexScatterPdf` **only when**
+    `!isRcVertexFinal && !isRcVertexEscapedVertex`. Guards: `isJacobianInvalid`
+    (<=0 / NaN / Inf) -> reject; the distance condition is tested on the **SHIFTED**
+    displacement (`sqrt(shifted_dist2) >= nearFieldDistance`), not the original; any
+    delta on either side of the edge -> reject; optional unbiased
+    `rejectShiftBasedOnJacobian`.
+  - *Design consequence:* the reference stores `(pathFlags, initRandomSeed)` and
+    RE-TRACES the prefix; our plan stores a **bounded hop array** (direction + pdf +
+    geomG source/reverse per hop) and replays it - two encodings of the same prefix.
+    The reference's `useCachedJacobian = rcVertexLength > 1` confirms the k>2 path is
+    expected to use CAPTURED pdfs (matching our `pdfInK` / cached-Jacobian fields)
+    rather than re-evaluating them at shift time.
+  - *Therefore Gap A's code list is unchanged in scope but sharper in content:*
+    (1) `kMaxHybridK` knob (default = today's cap, parameter-driven, no silent change);
+    (2) `ReconnectionCapture` hop array + the PathReservoir/register budget check the
+    plan already demands; (3) generalise `tryReconnectionShiftK3` into an N-hop prefix
+    replay that yields y_{k-1} + prefix throughput, then reuse the EXISTING
+    connection-edge machinery verbatim (no new Jacobian); (4) `THEIA_SHIFT_MASK` bit2
+    for k=4 observability.
+  - *Not yet started - no Gap A code exists.* This entry is the plan-before-edit read
+    the plan required.
+
     the plan asks for.
 
 **Living source of truth for outstanding work.** Shipped items are removed from the work
