@@ -654,6 +654,24 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     parity 320x240 budget) and the DI/PT analytic-light **ownership gate** as a shared
     contract instead of two per-renderer knobs. Scene parsing, camera defaults,
     emissive synthesis, near/far, jitter, exposure and tonemap are now characterised
+
+  **Cross-renderer audit - EXECUTION 4 (2026-11-19): resolution contract + DI/PT
+  ownership gate - BACKLOG CLEARED.**
+  | seam | verdict | evidence |
+  |---|---|---|
+  | window resolution default | **DUPLICATED (same class as camera defaults)** | Theia `main.cpp` L16-17 `config.width = 1024; config.height = 768;` vs Hyperion `main.cpp` L25-26 the SAME two values as two independent copies. Aspect feeds the projection matrix, so one drifting silently changes framing with no shared test to catch it. (The PARITY budget 320x240 is shared - Harmonia `validation_manifest.toml` + `qualify_sms.RESOLUTION` - so only the default window is duplicated.) |
+  | DI/PT analytic-light ownership gate | **THEIA-ONLY BY DESIGN** | `setRestirDiActive(giActive() && (m_useRestirDi || m_useRestirPt))` at Theia `Application.cpp` L217/L642 gates the forward pass's analytic RectLight proxies so ReSTIR DI/PT owns that term without double-counting (`Application.hpp` L171). Hyperion has **zero** such code - it is a pure emissive-triangle path tracer with no analytic proxies - so there is nothing for it to gate |
+  - *Reading:* the ownership gate is not a parity gap (there is no counterpart term in
+    Hyperion), but the double-counting risk it guards exists ONLY in Theia and is
+    covered only by the cross-renderer gate, not by any shared unit test.
+  - ***Audit backlog CLEARED.*** Every seam in the charter (2eaa230) is now
+    characterised across executions 1-4: estimator, BSDF, scene parsing, emissive
+    synthesis, camera defaults, analytic lights, near/far, jitter, exposure, tonemap,
+    resolution, ownership gate. **Two rows remain DUPLICATED-AND-UNTESTED** - camera
+    defaults (execution 1) and window resolution (this pass): two private constants
+    each, no cross-check. Both are the audit session's option (a) hoist into Harmonia
+    vs (b) keep renderer-specific + assert parity.
+
     (executions 1-3).
 
   **Gap A - MANDATORY PRE-EDIT RE-READ COMPLETE (2026-11-19): DQLin/ReSTIR_PT
