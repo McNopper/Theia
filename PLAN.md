@@ -631,6 +631,30 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
   - *Queue now unblocked (tree clean):* Gap A stage 2 -> hybrid fixture ROI -> 2e
     remaining sections + galleries -> final receipts -> audit hoist/assert (owner).
 
+  **OWNER DECISION (2026-11-19): HOIST the duplicated constants into Harmonia
+  (charter option (a)). Decision MADE - implementation pending, queued after Gap A stage 2.**
+  - The owner was offered hoist / assert-only / both / defer for the audit's two
+    **DUPLICATED-AND-UNTESTED** rows and chose **hoist**: one definition, so drift
+    becomes structurally impossible rather than merely detectable.
+  - *Scope as decided:* the missing-key defaults that currently exist twice -
+    the camera vfov fallback (`Theia ApplicationCompute.cpp` `value_or(39.1f)` vs
+    `Hyperion Application.cpp value_or(kCornellVfovDeg)` where `kCornellVfovDeg = 39.1f`)
+    and the window defaults (`Theia main.cpp` L16-17 vs `Hyperion main.cpp` L25-26,
+    both `1024x768`) - move to shared Harmonia constants read by BOTH Applications.
+  - *Why this is not a behaviour change:* every value stays exactly what it is today
+    (39.1f / 1024 / 768), so all renders remain bit-identical; what disappears is the
+    second copy. The ev100 handling (a conditional, not a constant) is already
+    written identically in both and is covered by the same read; it joins the hoist
+    only if a single shared helper is created rather than constants alone.
+  - *Reason it matters (the two defects this session):* ev100 50x and vfov 5.9 deg
+    were exactly this class - two private fallbacks drifting apart, invisible to every
+    shared-estimator test, surfacing only in the cross-renderer gate. A human had to
+    correct one of the two; after the hoist there is nothing to correct.
+  - *Deliberately NOT started yet:* the tree is clean and the build is green as of
+    `33ac8bd`, but the instruction queue puts Gap A stage 2 first, and the hoist spans
+    THREE repos (Harmonia + Theia + Hyperion) needing rebuilds of each. Implementing
+    it after stage 2 keeps each verification attributable.
+
   **CROSS-RENDERER DIVERGENCE AUDIT (2026-11-19) - owner-initiated, PRIORITY SESSION.**
   Owner hypothesis: if Hyperion/Theia/Harmonia do not actually call the same functions,
   renderer parity is unachievable and we would be "trying to achieve something which is
