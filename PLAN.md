@@ -385,6 +385,50 @@ deterministic delta, estimator unbiased. Remaining:
   fixture battery green. GPU receipts strictly serial; every step keeps commits
   local (no push).
 
+  **Gap C progress (2026-11-19) - prep complete, observation GPU-queued, mask
+  semantics corrected.**
+  - *Fixture STAGED* (STAGING PASS, exit 0) into
+    `build/sms-qualification/scenes/HYBRID/hybrid_k3.scene.toml` by replicating
+    `qualify_sms.prepare_run_dir` (copy each `scene_references` entry, rewrite
+    absolute). Verified: both material libraries resolve, **no relative library
+    refs left**, and inline `vertical_field_of_view` / `ev100` / `max_depth` are
+    present - so the fixture is structurally immune to BOTH recorded camera
+    fallback defects (3f27122, f5c71e7) and can be judged without re-opening them.
+  - *Runner* `tools/qualify_gap_c.py` (980a2bd, arms corrected in e204d02) renders
+    Hyperion reference + mask arms **sequentially** (one GPU app) at the gate's own
+    calibration budget (320x240, 256spp/256f), then: B knob-live -> A k3-fires ->
+    C hybrid arm gate-clean vs Hyperion (`compare_renders --gate all`, exit code IS
+    the verdict) -> D mask2-vs-mask3 probe. Distinct exits: 3 = fixture never
+    reached k=3, 4 = mask does not reach the estimator - neither can read as a pass.
+  - ***THEIA_SHIFT_MASK reading corrected before the observation ran.*** Read back
+    from `gi.comp.slang`: `reconnectShiftEnabled` is tested ONLY as `& 2u` at L1573
+    (bit1 selects hybrid vs reconnection mode) and `!= 0` at L2456/2463/2474
+    (zero = replay-only); **`& 1u` is never evaluated**, and the shift BODY
+    dispatches on the captured `kLevel` (L2464-2467), deliberately NOT on the mask
+    (L2457-2462). Therefore **mask 2 == mask 3 functionally and no "k3-only" mask
+    exists**; the first draft of the runner had mapped mask2 to "k3-only", which
+    would have made its arms-separate check fail permanently and misreport a
+    healthy fixture as broken. Real arms: mask1 = reconnection (unconditional first
+    secondary hit -> k=2 body), mask3 = hybrid (first pair passing alpha_min/d_min
+    -> adaptive k; this fixture's design forces captureTarget=1 -> kLevel 2 ->
+    the k=3 body), mask0 = replay.
+  - *Documentation discrepancy recorded (doc-only, no behavior change):* the
+    declaration comment `gi.comp.slang` L56-59 and `Application.cpp` L96-99 (plus
+    its `k2= k3=` log line) and `gi.comp.slang` L1560 "(bit0 clear...)" describe
+    independent feature bits the shader does not consume (the code branches on
+    bit1; L1568 gets it right). `AGENTS.md`'s description - 0 = replay,
+    1 = reconnection, 2/3 = hybrid, body chosen by kLevel - is the accurate one.
+    The in-source comment fix is **deferred to the next build window**: the running
+    C4 render holds `theia.exe`, and touching sources changes provenance /
+    executable hashes.
+  - *Battery membership (its ROI) still NOT added*: the ROI must be derived from a
+    probe render the way C4's was (local-vs-reuse difference map), never guessed -
+    so no `CASES` entry was written. Remaining receipt step, not an omission.
+  - Receipts so far: ruff 0 (family `tools/` contract), `py_compile` 0,
+    missing-render guard exit 2. **Renders not run** - GPU serial, queued behind the
+    post-vfov-fix C4 sanity render; cost 4 Theia x 256f + 1 Hyperion.
+
+
 **Stream compaction** (§6.2.2) — **LANDED 2026-11-09.** The GI pass split into
 three kernels sharing one module/push-layout: `main` (emit — neighbour gates +
 inline shift attempts, results stored per pixel; replay jobs appended to an
