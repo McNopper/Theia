@@ -150,6 +150,39 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     78min. The 512f-first rule therefore avoids an unnecessary overnight job while
     keeping the escalation path intact.
 
+  **C4 POST-FIX VERDICT (2026-11-19 16:34) - PASS on the owner's perceptual bar.**
+  Render: `theia.exe` built post-f5c71e7 (13:33) over
+  `scenes/C4/c4_dragon_area_light.scene.toml`, 320x240, `--offscreen-frames 512`,
+  `--rng-seed 17`, `--sms-mode local` -> `c4_vfov_sanity.exr`, RENDER_EXIT=0.
+  Scored by `c4_postfix_verdict.py --frames 512` -> VERDICT_EXIT=0.
+
+  | metric | pre-fix | post-fix | 512f noise floor | bar |
+  |---|---|---|---|---|
+  | emitter row-mode | 43 | **31 = reference (ALIGNED)** | - | 31 |
+  | emitter band lum | 0.0000 (DARK) | **0.0438, ratio 0.998 (LIT)** | ref 0.0438 | - |
+  | band SSIM | 0.2348 | **1.0000** | - | - |
+  | qualify ROI energy ratio | 0.901 | **0.996** | - | - |
+  | tm_mean/255 | 5.094 (8.4x noise) | **0.703 (1.2x noise)** | 0.605 | <3 INVISIBLE |
+  | SSIM | 0.7602 | **0.9611** | ceiling 0.9540 | - |
+  | lum_hist_corr | 0.9996 | **1.0000** | - | - |
+
+  - *Interpretation:* the vfov fallback (f5c71e7) was the cause of C4's perceptual
+    failure - the emitter now lands on the reference row and the band energy
+    matches to 0.2%, so the black-band composition defect is gone. tm_mean fell
+    from 8.4x its own noise floor to 1.2x, and SSIM now sits ABOVE the measured
+    noise ceiling (0.9540), i.e. the remaining difference is Monte-Carlo noise.
+  - *Escalation rule NOT triggered:* the recorded borderline band was tm 1-3
+    (-> run the 8192f render); 0.703 is below it, so no overnight render was run.
+  - *Strict-AND numbers at this budget (reference, not a claim of the harness
+    gate):* mean_diff 0.381/120, rel_mse 0.0436/250, SSIM 0.9611/0.6,
+    lum_hist 1.0000/0.8. The thresholds are calibrated for 256f, and per e457997
+    the harness's own 8192f/4-seed 2% energy gate remains **NOT run** - this entry
+    closes C4 on the owner's perceptual bar only, and does not convert the absent
+    energy gate into a pass.
+  - C1/C2/C3/DRAGON remain on their recorded verdicts (scope proof, e457997); their
+    images are provably unchanged by f5c71e7 (inline vfov / resolvable preset).
+
+
 **Living source of truth for outstanding work.** Shipped items are removed from the work
 lists; the shipped record is the *Baseline* below and `git log`. Only outstanding work is
 tracked here.
