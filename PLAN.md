@@ -594,6 +594,33 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     link/commit) are closed FIRST so this session starts from a clean tree; no new
     feature work is started ahead of it.
 
+  **Cross-renderer audit - EXECUTION 1 (2026-11-19): three seams checked, base problem
+  now characterised exactly (charter 2eaa230, step 1 of n).**
+  | seam | verdict | evidence |
+  |---|---|---|
+  | estimator | **SHARED** | `integrateSurface` called by Theia `gi.comp` L1675 AND Hyperion `closesthit.slang` L277, same Harmonia `path_integrator.slang` |
+  | BSDF | **SHARED** | both `import bsdf` (Harmonia `sampleBSDF/evalBSDF/pdfBSDF`) |
+  | scene parsing | **SHARED** | `Harmonia/SceneLoader.cpp` L523 -> `aether::SceneParser::parse()` (single TOML reader; vendored into all three builds) |
+  | emissive triangles + CDF | **SHARED** | both call `harmonia::scene_rt::buildEmissiveData` / `buildEmissiveCdf` (`Scene.cpp` Theia L147/L164, Hyperion L145/L156) |
+  | **camera defaults** | **DUPLICATED, UNSYNCED** | Harmonia's SceneLoader applies **no** camera default at all (grep for `cameraVfov/cameraEv100/vfov` in SceneLoader: zero hits); Theia `ApplicationCompute.cpp` L258 `value_or(39.1f)` vs Hyperion `Application.cpp` L248 `value_or(kCornellVfovDeg)` - **two independent constants** |
+  | analytic light synthesis | **Theia-only** | `synthesizeEmissiveLights(...)` at Theia `Scene.cpp` L131 has no Hyperion counterpart (Hyperion is a pure emissive-triangle path tracer; Theia's forward pass needs RectLight proxies, gated by the DI/PT ownership knob) |
+  - *The base problem, stated as precisely as the evidence allows:* parsing is shared,
+    but the **interpretation** - what a MISSING key means - is decided twice, in two
+    files, by two independent constants, with **no test asserting they agree**. Both
+    parity defects root-caused this session (ev100 50x, vfov 5.9 deg) were exactly
+    this: not shared-math errors, but two private fallbacks drifting apart. They read
+    39.1 today only because a human corrected one of them.
+  - *First concrete remediation candidate (for the audit session to adjudicate):* hoist
+    camera assembly - pose, vfov fallback, ev100 handling - into Harmonia
+    (e.g. `harmonia::renderer::Camera::assembleCamera(...)` called by BOTH
+    Applications), so "absent vfov -> 39.1" has ONE definition; alternatively keep
+    them renderer-specific and add a cross-renderer assertion that the assembled
+    camera matches for every qualification scene. Owner to choose per the charter's
+    option (a) vs (b).
+  - *Not yet checked (audit backlog):* tonemap/working-space parameter assembly,
+    resolution + camera-jitter contract, near/far derivation, exposure application,
+    and the analytic-light ownership gate as a shared contract.
+
   **Gap A - MANDATORY PRE-EDIT RE-READ COMPLETE (2026-11-19): DQLin/ReSTIR_PT
   `Shift.slang` fetched and read end-to-end. It CHANGES the shape of the task.**
   - *What the reference actually does for a hybrid shift of ANY k* (`Shift.slang`):
