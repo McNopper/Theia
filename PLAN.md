@@ -421,6 +421,64 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     else (distance test, cap, shift guards) is untouched. Acceptance stays as written:
     Gap-C fixture must still reach k=3 - now measurable with `tools/qualify_gap_c.py`,
     whose k-differential readout is exactly the "old/new k distribution" instrument
+
+  **Gap B - SITE MAP + ARCHITECTURE CONSTRAINT (2026-11-19, plan-before-edit).**
+  The reads above pinned WHAT to compute; mapping the code pinned WHERE, and it
+  overturns an assumption in the original Gap-B text ("persist the pair's alphas
+  into the capture decision"): **only ONE of the two pair alphas exists at the
+  decision point.**
+  - *The ordering, line by line:*
+    - `gi.comp` L1318 `bs = sampleBSDF(primary.mat, ...)` - lobe at the primary is
+      known before the walk.
+    - `gi.comp` L1433 loop; L1466 `makeSurfaceHit` -> `surf`;
+      **L1572-1588 the hybrid capture gate** (`pairRough` from `curRough`/`prevRough`
+      + `farField`) -> sets `state.captureTarget`; L1590 `prevRough = <current
+      material>`.
+    - `gi.comp` L1626 `integrateSurface(...)`.
+    - `path_integrator` L596 `++state.surfaceCount`; L597-598
+      `captureHere = captureRe && !reCaptured && surfaceCount == captureTarget + 1`;
+      **L608 `if (captureHere) { rec.tri/env }` - consumed BEFORE the sample**;
+      **L615 `bsdfSample = sampleBSDF(...)` - the lobe at THIS vertex**; L641-650
+      `if (captureHere) { rec.omegaK/pdfOmegaK; reCaptured = 1 }`.
+  - *Consequence:* `captureTarget` must be settled before `integrateSurface` runs
+    for that vertex (L608 needs `captureHere` first), yet the paper's alpha at that
+    vertex (`min(alpha_{k-1}, alpha_k) >= alpha_min`, alpha_k = "the lobe chosen to
+    sample x_{k+1}") is only produced at L615 - i.e. **after** the decision point.
+    Deferring the gate to the next loop iteration cannot work either: `captureHere`
+    for vertex k has already been evaluated by then, so the record would attach at
+    the wrong vertex.
+  - *Chosen design - move the DECISION, not the criterion (paper-faithful, no
+    shortcut):*
+    1. `BSDFSample` (Harmonia `shaders/bsdf_shared.slang` L4-19) gains `float
+       lobeAlpha`, written by the sampler: GGX/conductor/specular -> that lobe's own
+       roughness; **diffuse -> 1.0**; **delta/mirror -> 0.0** (the choices recorded
+       above; the threshold is a *per-lobe GGX* threshold).
+    2. `PathState` gains `sampledAlphaPrev` (written after every sample - primary
+       site L1318 and the shared continuation after L615) and `arrivalDist`
+       (written in `gi.comp` from `h.dist` before L1626).
+    3. Move the hybrid pair decision from `gi.comp` L1572-1591 to `path_integrator`
+       **immediately after L616**, where BOTH lobes exist:
+       `pairRough = (min(sampledAlphaPrev, lobeAlpha) >= 0.2) && arrivalDist >= 0.1`,
+       computing `captureHere` there and moving the L608 block to just after it
+       (locals `capTri`/`capEnv` stay in scope; the two early returns at L617-622 /
+       L634-637 only skip record writes that were already unusable - `reCaptured`
+       stays 0, so `gi.comp` L1649 never harvests them - behaviour-identical).
+    4. Reconnection mode (`hybridMode == false`, unconditional k=2) is untouched, as
+       is the distance/cap/shift-guard machinery (shift guards stay material-based,
+       per the reads above).
+  - *Why this is safe for the family:* the whole decision is inside
+    `captureRe != 0u`, which is 0 on every non-GI-ENH path (Hyperion and Theia's
+    non-capturing renders), so those paths are bit-identical by construction.
+    Blast radius = Harmonia `bsdf_shared.slang` + the sampler + `path_integrator.slang`
+    + Theia `gi.comp.slang`.
+  - *Acceptance (unchanged from the original Gap-B text), instruments now ready:*
+    Gap-C fixture must still reach k=3 -> `tools/qualify_gap_c.py` reports the k
+    differential directly (A/B/D readout); module suite 64/64; C1-C4 battery
+    re-cert; and a **disagreement case** (material proxy vs sampled alpha) must be
+    demonstrated on record - i.e. a vertex where `specularRoughAnisoIor.x` and the
+    sampled lobe's alpha differ (a multi-lobe material: diffuse+coat/GGX), reported
+    old/new k distribution.
+
     the plan asks for.
 
 **Living source of truth for outstanding work.** Shipped items are removed from the work
