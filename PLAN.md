@@ -53,6 +53,36 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     on the existing scenes; every step plan-before-edit and GPU-serial; commits only,
     no push until the owner says.
 
+  **Audit addendum (2026-11-19, full side-by-side vs the official code):**
+  - *Merge algebra*: PSMS `Reservoir.merge` (`w = misW*lum(F)*M*W` + `finalizeGRIS:
+    w/lum(F)`) and RTXDI's `FinalizeResampling(pi, piSum)` are the same algebra as our
+    `combineTwoReservoirs` (`w = p_hat_at_cur*W_src*M_src`, `W = w_sum/(M*p_hat)`) -
+    ours is Bitterli 2020 Alg. 5 verbatim; PSMS's pairwise-defensive weights
+    (`ReSTIRCommon.slang`) reduce to it at J=1 (our DI is J=1). DONATED-SAMPLE shift
+    parity confirmed: all three re-evaluate the donated sample at the receiving
+    surface (`shiftPathSMS` / `RAB_TargetPdfForSurface` / our `evalReservoirSample`).
+  - *SMS reciprocal estimator*: PSMS `invProb = invProbEstimate/probBound` with a
+    canonical uniqueness gate == our `smsConditionalWeight(trials, prior-mixture mass)`
+    with `sameSmsRoot(..., kSmsRootDirectionTolerance)` (the earlier grep miss is
+    corrected: the gate exists at sms_compute L262). Region probability is
+    BIT-EQUAL: theirs `(2k+1)^2/N^2 = 9/256`, ours `width^2/resolution^2 = 9/256`.
+    The prior mixture is internally consistent in ours: `smsSamplePrior` (sampler) and
+    `smsPriorRegionProbabilities` (reciprocal denominator) use the SAME
+    kSmsPriorAlpha and function - self-consistent => unbiased (alpha 0.8 vs their
+    default 0.5 is an efficiency knob only).
+  - *Trial-cap*: PSMS caps at 128 and counts the cap on exhaustion (slight
+    under-count of hard receivers - THEIR bias, not ours); ours continues queue-batched
+    until `sameSmsRoot` succeeds (no exhaustion bias).
+  - *Spatial source age*: theirs same-frame sequential chain, ours prev-frame buffer
+    + candidateHash duplication guard - age-equivalent under the static-camera
+    qualification; architectural difference recorded.
+  - *CONCLUSION*: after this audit the ONLY cited, converged-bias-producing divergence
+    that remains in our stack is the missing RAY_TRACED per-source conservative
+    visibility in the DI/PT merges (RTXDI doc: BASIC "does NOT correct the bias
+    completely"), plus the recorded hybrid-shift SELECTION gaps (alpha-proxy/k-cap -
+    unbiased via reject->replay, efficiency-only). Target list therefore unchanged:
+    conditional `biasCorrectionMode` fix on gate evidence; hybrid Gap B/A per ae00516.
+
 **Living source of truth for outstanding work.** Shipped items are removed from the work
 lists; the shipped record is the *Baseline* below and `git log`. Only outstanding work is
 tracked here.
