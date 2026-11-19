@@ -274,6 +274,47 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     0.6/0.8 - at a higher budget they are conservative, which is recorded rather
     than silently reinterpreted.
 
+  **Gap C budget probe (2026-11-19, 4096spp/4096f): condition C is UNMEETABLE for
+  this fixture - measured, not assumed. OWNER DECISION REQUIRED.**
+  - *Scaling probe* (second seeds at each budget, all non-degenerate):
+
+    | budget | pair | mean_diff | Rel-MSE | SSIM | tm_mean | gate |
+    |---|---|---|---|---|---|---|
+    | 256 | ref-vs-ref (own noise) | 2342.1 | 18292.8 | 0.7773 | 8.026 | FAIL |
+    | 256 | ref-vs-cand | 2097.4 | 1062.3 | 0.7866 | 7.088 | FAIL |
+    | 4096 | ref-vs-ref (own noise) | 1458.8 | **4.72** | **0.9066** | 2.081 | FAIL |
+    | 4096 | ref-vs-cand | 1198.0 | **3.11** | **0.9184** | 1.834 | FAIL |
+    | 4096 | cand-vs-cand (own noise) | 527.1 | **1.38** | **0.9357** | 1.320 | FAIL |
+
+    At 4096, **three of four metrics PASS** for both the reference against itself and
+    the cross pair; only `mean_diff` fails. The cross pair beats the reference's own
+    noise on **all four** metrics at **both** budgets (2097 < 2342, 1198 < 1458,
+    Rel-MSE 3.11 < 4.72, SSIM 0.9184 > 0.9066, tm 1.834 < 2.081).
+  - *Why `mean_diff` cannot be reached:* 16x the samples improved it only 1.60x
+    (reference) / 2.32x (candidate), i.e. ~N^-0.17 and ~N^-0.30 instead of N^-0.5 -
+    firefly-dominated heavy tails. `p99_diff` is **36397 for Hyperion against
+    ITSELF** at 4096, versus 23316 for the cross pair (the cross tail is the SMALLER
+    one), so the error lives in rare bright pixels from the polished plate/emitter,
+    not in a spatial mismatch. Fitting N^-0.17, pushing the reference's own
+    `mean_diff` from 1458 to 120 needs ~2e6x the samples - not reachable.
+  - *Therefore:* plan ae00516's condition C ("k3-only arm must stay gate-clean vs
+    Hyperion") **cannot be satisfied by ANY arm at any practical budget**, including
+    the shift-free `replay` arm - the fixture's own noise floor sits above the
+    threshold. By the family's OWN gate methodology (AGENTS: each threshold sits
+    strictly ABOVE the measured clean noise envelope), 120 is mis-set *for this
+    fixture*: its clean envelope is 1458 at 4096.
+  - *Conditions A/B/D remain MET and are unaffected* (k=3 fires at max|d| 90.845;
+    mask live; mask2 == mask3 exactly).
+  - *Resolution needs an OWNER DECISION* - three options, none taken unilaterally:
+    (1) **accept the noise-envelope criterion** - cross pair <= reference's own noise
+    on all four metrics at two budgets (the statistically correct comparison; changes
+    no threshold, but IS a different acceptance basis than the plan's literal words);
+    (2) **re-tune the fixture's emitter intensity** (geometry/roughness design
+    untouched, so the pair-1-fails/pair-2-qualifies premise holds) until the clean
+    envelope falls under 120, then re-run - a fixture change to an already-committed
+    scene; (3) raise the budget - **ruled out by measurement** (2e6x samples).
+
+
 
 
 
