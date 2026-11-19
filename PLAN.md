@@ -10,6 +10,49 @@ dev/gi-sms-restir branch is retired; its full history is `git log` and the Basel
 
 **Known follow-ups:** the `qualify_sms.py` equal-time timing acceptance is `CLOSED 2026-11-18` - per-seed bounded re-land at the UNCHANGED +-5% budget (the pilot-derived frame count drifted with per-run GPU throughput and pushed seeds out of budget, reporting timing-inconclusive despite separated quality numbers; C2 re-run evidence: all 6 mode/target timing flags True vs all False historically, so the stage exit is now decided by the quality numbers alone, ruff clean, commit `4d5501b`). The README gallery convention still needs a refresh whenever estimator-affecting changes ship (SMS is default-on, so glass-bearing scenes shift noise realizations).
 
+**Research receipt + conditional plan (2026-11-19): converged-bias fix inventory from
+the reference implementations** (recorded while the post-`16e9ae4` C4 correctness
+battery runs; no code written yet - plan-before-edit holds until the verdict):
+- *NVIDIA RTXDI* (`Doc/NoiseAndBias.md` + `RTXDI-Library/Include/Rtxdi/DI/
+  TemporalResampling.hlsli`): three-level `biasCorrectionMode` - OFF =
+  `FinalizeResampling(state, 1.0, M)` (1/M, explicitly biased); BASIC = re-evaluate
+  the selected sample's target PDF at the current surface AND at the temporal source
+  surface (`piSum += temporalP * prevM`) = GRIS normalization, which their doc states
+  "does not correct the bias completely"; **RAY_TRACED = BASIC + a per-source
+  conservative-visibility test (`RAB_GetTemporalConservativeVisibility`, zeroing
+  `temporalP` when the sample could not have been produced at the source) - the
+  documented "complete correction"**. Their doc also mandates correct temporal data
+  (prev G-buffer, `RAB_TranslateLightIndex`, prev-frame visibility), caps history
+  (`min(PackedMaxM, maxHistoryLength * M)`), and names visibility-reuse shortcuts as
+  UNCORRECTABLE accepted bias.
+- *PSMS-ReSTIR* (our C-track paper, `PSMSReSTIR/TemporalResampling.cs.slang`):
+  `temporalMISWeight = (temporalM*temporal_pHat)/(temporalM*temporal_pHat +
+  centralM*luminance(Tp2))` where `Tp2 = shiftPathSMS(...)` re-evaluates the donated
+  sample at the current surface through the SMS shift; `finalizeGRIS()`; history cap
+  `temporalHistoryLength`. i.e. **BASIC-level GRIS + shift admissibility, no
+  ray-traced visibility** - consistent with the paper validating by RMSE-at-equal-time
+  rather than tight converged-energy gates.
+- *Ours* (`gi.comp restirDiDirect` + path reservoir): BASIC-equivalent already
+  (`evalReservoirSample` per candidate at the primary; `W = w_sum/(M*p_hat)` L1167;
+  env balance-heuristic MIS L1195; `prev.M = min(prev.M, kRestirMCap)` L1083 =
+  the same history cap family; reject -> full-replay fallback = unbiased-by-fallback
+  on the shift side). **The one documented gap vs RTXDI: no per-source conservative
+  visibility during the merge** - we only trace the final single shadow ray (L1199).
+*Conditional acceptance (decided by the running C4 correctness verdict):*
+  - **C4 gate GREEN** -> record receipts; the RAY_TRACED step stays an optional
+    hardening candidate (owner decision), research recorded only.
+  - **C4 gate FAIL** -> implement a parameter-driven `biasCorrectionMode`
+    (0 = off / 1 = basic = today's behavior / 2 = ray_traced) over the temporal and
+    spatial merges of `restirDiDirect`: for the merged source(s), re-run the target-PDF
+    evaluation at the SOURCE reservoir's surface and zero it when a conservative
+    visibility ray (one per source, reusing the fresh-visibility/age tracking like
+    RTXDI's `temporalSampleHasFreshVisibility`) shows the sample was not generatable
+    there. Knob default = 1 (bit-identical to today; no silent semantic change), the
+    qualification runs both levels. Acceptance: C4 local+reuse @8192f within +-2%,
+    C1-C3 + DRAGON re-cert unchanged-green, module suite 64/64, k2-only bit-identity
+    on the existing scenes; every step plan-before-edit and GPU-serial; commits only,
+    no push until the owner says.
+
 **Living source of truth for outstanding work.** Shipped items are removed from the work
 lists; the shipped record is the *Baseline* below and `git log`. Only outstanding work is
 tracked here.
