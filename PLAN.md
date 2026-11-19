@@ -600,6 +600,37 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     connection-edge machinery verbatim (no new Jacobian); (4) `THEIA_SHIFT_MASK` bit2
     for k=4 observability.
   - *Not yet started - no Gap A code exists.* This entry is the plan-before-edit read
+
+  **Gap A - RECORD-GROWTH BUDGET CHECK (2026-11-19, the plan's precondition before
+  any hop-array code). Measured from the source, not estimated.**
+  - *Where the record lives:* `ReconnectionCapture` is a member of `PathReservoir`
+    (`gi.comp` L146-155: `g, rngKey, rngIndex, W, w_sum, M, candidateHash, rec`), and
+    the shift sites copy it into registers per neighbour - `const ReconnectionCapture
+    rec = neighbor.rec` at L1913 / L2074 / L2283. Path-reservoir neighbours:
+    **`kPathSpatialNeighbors = 3`** (L330). (The DI reservoir's `kSpatialNeighbors = 5`
+    at L1110 carries no `rec`.)
+  - *Today's record* is 29 fields (~248 B of payload before struct padding, which
+    the existing "40-byte pitfall" note in `gi.comp` warns can add float3 alignment):
+    the k=2/k=3 edge fields, the x_k surface identity (pos/normal/geoNormal/tangent/
+    uv/material), two `NeeEventCapture` events, and - for k=3 only - **one** hop
+    (`omegaHop1, dist2Hop1, geomGHop1Source, geomGHop1Reverse` = 24 B) plus the
+    k=3 reconnection edge (`omegaInK, pdfInK, dist2InK, geomGInK*` = 28 B).
+  - *Growth model:* hops needed = **k - 2** (k=3 -> 1 hop, k=4 -> 2 hops), and one hop
+    is exactly `direction + dist2 + geomG source + geomG reverse` = 24 B (the same
+    four fields the k=3 path already stores). Therefore:
+      - **`kMaxHybridK = 3` (the default, today's cap) -> hop array of 1 -> the struct
+        is byte-identical to today. Zero growth at default**, which is what
+        "default keeps today's behaviour" means in storage terms as well as semantics.
+      - `kMaxHybridK = 4` -> +24 B per record: PathReservoir 3 neighbours x 24 B =
+        **+72 B per pixel's neighbourhood read per frame** (~5.5 MB/frame at 320x240,
+        ~0.6% of a 12 GB frame budget) and **+6 registers per neighbour copy** at the
+        three shift sites.
+  - *Verdict:* the growth is comfortably affordable and, more importantly, **free at
+    the default** - so Gap A's hop array can be added as a parameter-sized array
+    (`kMaxHybridK - 2` entries) without changing the default record, the buffer layout
+    or the register footprint. No budget blocker; the remaining Gap A work is the code
+    itself (knob, array, N-hop replay generalising `tryReconnectionShiftK3`, mask bit2).
+
     the plan required.
 
     the plan asks for.
