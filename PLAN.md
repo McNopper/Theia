@@ -421,6 +421,7 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     else (distance test, cap, shift guards) is untouched. Acceptance stays as written:
     Gap-C fixture must still reach k=3 - now measurable with `tools/qualify_gap_c.py`,
     whose k-differential readout is exactly the "old/new k distribution" instrument
+    the plan asks for.
 
   **Gap B - SITE MAP + ARCHITECTURE CONSTRAINT (2026-11-19, plan-before-edit).**
   The reads above pinned WHAT to compute; mapping the code pinned WHERE, and it
@@ -621,21 +622,6 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     resolution + camera-jitter contract, near/far derivation, exposure application,
     and the analytic-light ownership gate as a shared contract.
 
-  **Cross-renderer audit - EXECUTION 3 (2026-11-19): tonemap and exposure.**
-  | seam | verdict | evidence |
-  |---|---|---|
-  | exposure computation | **SHARED** | both derive it from the shared `harmonia::renderer::Camera::PhysicalCamera` (Theia `ApplicationCompute.cpp` L46 / `ForwardRenderer.cpp` L184, L393 read `m_camera.physical.exposure()`; Hyperion `Application.cpp` L239 builds it with the same `fromEv100`); the formula itself is documented once in shared `common.slang` L16: `exposure = 1 / (1.2 * 2^EV100)` |
-  | tonemap | **SHARED (host-owned), with a structural difference** | Theia does not configure a tonemapper at all - `Application.hpp` L34 states "the host owns window/context/swapchain/HDR image/**tonemap**/present", i.e. the shared `harmonia::app::App::createToneMapper` + `ToneMapStagePass` (Harmonia `App.cpp` L41-L51, L329) own it. Hyperion ALSO forwards `tonemapper()` into its own config (`Application.cpp` L210, `PathTracer.cpp` L136) - same shared `harmonia::Tonemapper` enum, but a second copy of the plumbing |
-  - *Reading:* both rows are SHARED at the computation level, so neither can drift
-    numerically. The Hyperion-side extra forwarding is structural only; it is flagged
-    for the audit session rather than called a defect, because nothing in the receipts
-    shows a tonemap difference (the perceptual gate would have caught one).
-  - *Backlog after this pass:* the resolution contract (width/height defaults and the
-    parity 320x240 budget) and the DI/PT analytic-light **ownership gate** as a shared
-    contract instead of two per-renderer knobs. Scene parsing, camera defaults,
-    emissive synthesis, near/far, jitter, exposure and tonemap are now characterised
-    (executions 1-3).
-
   **Cross-renderer audit - EXECUTION 2 (2026-11-19): near/far and the jitter contract.**
   | seam | verdict | evidence |
   |---|---|---|
@@ -654,6 +640,21 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     analytic-light ownership gate as a shared (rather than per-renderer) contract.
     Scene parsing, camera defaults, emissive synthesis, near/far and the estimator
     itself are now all characterised (execution 1 + this pass).
+
+  **Cross-renderer audit - EXECUTION 3 (2026-11-19): tonemap and exposure.**
+  | seam | verdict | evidence |
+  |---|---|---|
+  | exposure computation | **SHARED** | both derive it from the shared `harmonia::renderer::Camera::PhysicalCamera` (Theia `ApplicationCompute.cpp` L46 / `ForwardRenderer.cpp` L184, L393 read `m_camera.physical.exposure()`; Hyperion `Application.cpp` L239 builds it with the same `fromEv100`); the formula itself is documented once in shared `common.slang` L16: `exposure = 1 / (1.2 * 2^EV100)` |
+  | tonemap | **SHARED (host-owned), with a structural difference** | Theia does not configure a tonemapper at all - `Application.hpp` L34 states "the host owns window/context/swapchain/HDR image/**tonemap**/present", i.e. the shared `harmonia::app::App::createToneMapper` + `ToneMapStagePass` (Harmonia `App.cpp` L41-L51, L329) own it. Hyperion ALSO forwards `tonemapper()` into its own config (`Application.cpp` L210, `PathTracer.cpp` L136) - same shared `harmonia::Tonemapper` enum, but a second copy of the plumbing |
+  - *Reading:* both rows are SHARED at the computation level, so neither can drift
+    numerically. The Hyperion-side extra forwarding is structural only; it is flagged
+    for the audit session rather than called a defect, because nothing in the receipts
+    shows a tonemap difference (the perceptual gate would have caught one).
+  - *Backlog after this pass:* the resolution contract (width/height defaults and the
+    parity 320x240 budget) and the DI/PT analytic-light **ownership gate** as a shared
+    contract instead of two per-renderer knobs. Scene parsing, camera defaults,
+    emissive synthesis, near/far, jitter, exposure and tonemap are now characterised
+    (executions 1-3).
 
   **Gap A - MANDATORY PRE-EDIT RE-READ COMPLETE (2026-11-19): DQLin/ReSTIR_PT
   `Shift.slang` fetched and read end-to-end. It CHANGES the shape of the task.**
@@ -696,6 +697,7 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     connection-edge machinery verbatim (no new Jacobian); (4) `THEIA_SHIFT_MASK` bit2
     for k=4 observability.
   - *Not yet started - no Gap A code exists.* This entry is the plan-before-edit read
+    the plan required.
 
   **Gap A - RECORD-GROWTH BUDGET CHECK (2026-11-19, the plan's precondition before
   any hop-array code). Measured from the source, not estimated.**
@@ -805,10 +807,6 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     build + verifier alone), then the replay/weight/Jacobian/footprint products, then
     bit2, and only then raise the knob - each step default-inert so a regression can
     never be attributed to "the cap changed".
-
-    the plan required.
-
-    the plan asks for.
 
 **Living source of truth for outstanding work.** Shipped items are removed from the work
 lists; the shipped record is the *Baseline* below and `git log`. Only outstanding work is
