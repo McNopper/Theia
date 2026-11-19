@@ -314,9 +314,50 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     envelope falls under 120, then re-run - a fixture change to an already-committed
     scene; (3) raise the budget - **ruled out by measurement** (2e6x samples).
 
+  **OWNER DECISION (2026-11-19): condition C resolved by the NOISE-ENVELOPE
+  criterion. Gap C = SATISFIED. Acceptance-basis amendment, no threshold changed.**
+  The owner was offered three options (noise-envelope / re-tune the fixture emitter /
+  leave unmet) and chose the noise-envelope criterion:
+    *"the Theia-vs-Hyperion gap must be <= Hyperion's own self-noise on all four
+     gated metrics."*
+  - *Why this is the correct comparison rather than a loosened gate:* the ground
+    truth itself is noisy here, so the meaningful question is whether the candidate
+    disagrees with Hyperion by MORE than Hyperion disagrees with itself. No numeric
+    threshold (120 / 250 / 0.6 / 0.8) was altered, and no metric was dropped - the
+    amendment replaces one absolute test with its noise-referenced form, which the
+    family's own methodology implies (a threshold must sit above the clean envelope;
+    for this fixture it cannot).
+  - *Evidence, Gap C final:*
+    - **A - k=3 body FIRES: PASS** - reconnection(mask1) vs hybrid(mask3) pixel
+      max|d| **90.845032** (fixture premise proven: pair 1 fails, pair 2 qualifies,
+      captureTarget advances).
+    - **B - mask reaches the estimator: PASS** - replay(mask0) vs reconnection(mask1)
+      max|d| **90.845032**.
+    - **D - mask2 == mask3: PASS** - max|d| **0.000000**, independently confirming
+      the bit0 reading behind e204d02.
+    - **C - noise envelope (both budgets):**
 
+      | budget | metric | ref self-noise | cross gap | better? |
+      |---|---|---|---|---|
+      | 256 | mean_diff | 2342.1 | 2097.4 | cross |
+      | 256 | Rel-MSE | 18292.8 | 1062.3 | cross |
+      | 256 | SSIM | 0.7773 | 0.7866 | cross |
+      | 256 | tm_mean | 8.026 | 7.088 | cross |
+      | 4096 | mean_diff | 1458.8 | 1198.0 | cross |
+      | 4096 | Rel-MSE | 4.72 | 3.11 | cross |
+      | 4096 | SSIM | 0.9066 | 0.9184 | cross |
+      | 4096 | tm_mean | 2.081 | 1.834 | cross |
 
-
+      The cross pair is inside Hyperion's self-noise on **every metric at every
+      budget** (and the shift-free replay arm scores identically: tm 7.088 vs
+      7.089), so no excess disagreement is attributable to the k=3 shift.
+  - *Receipts chain:* fixture staged (STAGING PASS) + camera fix `2088350` + probe
+    PASS (909256 B, 99.8% nonzero) + instrument fix `aa27f1e` (negative control
+    exit 5) + observations `469d624`/`0fa222e`.
+  - *What Gap B inherits:* the k=3 body is now OBSERVED FIRING on this fixture, and
+    `tools/qualify_gap_c.py` is the ready instrument for Gap B's own acceptance
+    clause ("the criteria change must not silently change WHICH k fires - report
+    old/new k distribution via the mask differential").
 
 **Living source of truth for outstanding work.** Shipped items are removed from the work
 lists; the shipped record is the *Baseline* below and `git log`. Only outstanding work is
