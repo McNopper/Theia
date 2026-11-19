@@ -58,6 +58,10 @@ cbuffer GiPC {
                                            //   bit1 (2) = k>=3 hybrid reconnection shift
                                            // Step-through debug: THEIA_SHIFT_MASK.
                                             // (0 = replay-only; A/B via THEIA_NO_RECONNECTION)
+    uint     biasCorrectionMode;        // GI-ENH: ReSTIR DI merge bias correction
+                                        // 0 = off (1/M finalize), 1 = basic (today),
+                                        // 2 = ray_traced (+ per-source conservative
+                                        // visibility). THEIA_BIAS_CORRECTION.
     uint     smsEnabled;
     uint     materialLodEnabled;          // PERF8 (RTXPT §7): 1 = material-LOD tier active (interactive);
                                           // 0 = estimator-pure capture — full material everywhere
@@ -1013,6 +1017,35 @@ void combineTwoReservoirs(inout Reservoir r_dst, Reservoir r_src,
     }
 }
 
+/// GI-ENH bias level 2 (RTXDI RAY_TRACED, its documented "complete correction"):
+/// a donated sample the SOURCE surface cannot see was not generatable there, so its
+/// target PDF must be zeroed instead of merged - one visibility ray per merged source.
+/// Env samples carry a unit direction in samplePoint (see evalReservoirSample), emissive
+/// ones a world-space point. The offset is taken ALONG the ray so no source-side shading
+/// frame is needed. The source-side BSDF/facing term is deliberately NOT evaluated: the
+/// source surface's material is not stored anywhere (RTXDI has RAB surfaces, we do not)
+/// and a proxy would violate the no-hacks law - this is the VISIBILITY half of
+/// RAY_TRACED, i.e. exactly the "one documented gap vs RTXDI" the research receipt names.
+bool sourceConservativeVisible(float3 srcPos, uint lightIdx, float3 samplePoint) {
+    float3 toTarget;
+    float tMax;
+    if (lightIdx == kReservoirEnv) {
+        toTarget = normalize(samplePoint);   // env: samplePoint holds the direction
+        tMax = kInf;
+    } else {
+        toTarget = samplePoint - srcPos;
+        const float d = length(toTarget);
+        if (d <= 1.0e-6) {
+            return true;                     // degenerate: nothing to occlude
+        }
+        toTarget /= d;
+        tMax = d - 2.0 * kRayEpsilon;
+    }
+    const float3 origin = srcPos + toTarget * kRayEpsilon;
+    TheiaTracer tracer;
+    return tracer.traceTransmittance(origin, toTarget, max(tMax, 0.0)) > 0.0;
+}
+
 /// A4/GI2 ReSTIR DI direct-lighting estimate for the primary surface.
 /// Runs initial-candidate RIS via the power CDF + env importance CDF, temporal reuse,
 /// spatial reuse, computes the unbiased weight W, traces ONE shadow ray, and returns
@@ -1082,10 +1115,19 @@ float4 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
             if (prev.lightIdx != kReservoirEmpty && prev.M > 0u) {
                 prev.M = min(prev.M, kRestirMCap); // cap history length to bound temporal bias
                 RestirSampleEval pe = evalReservoirSample(primary, prev.lightIdx, prev.samplePoint, prev.sampleNormal);
-                if (pe.valid) {
-                    combineTwoReservoirs(r, prev, pe.p_hat, rng);
+                // GI-ENH bias correction: level 0 = RTXDI OFF (1/M finalize, no target-PDF
+                // re-evaluation); level 1 = basic = today (p_hat unchanged, no extra RNG or
+                // ray drawn - bit-identical); level 2 = + per-source conservative visibility.
+                const float pMerge = (biasCorrectionMode == 0u) ? 1.0 : pe.p_hat;
+                bool generatable = true;
+                if (biasCorrectionMode == 2u && pe.valid) {
+                    const float3 srcPos = t_giBuffer.Load(int3(prevCoord.x, prevCoord.y, 0)).xyz;
+                    generatable = sourceConservativeVisible(srcPos, prev.lightIdx, prev.samplePoint);
+                }
+                if (pe.valid && generatable) {
+                    combineTwoReservoirs(r, prev, pMerge, rng);
                 } else {
-                    r.M += prev.M; // account for history even if its sample is now invalid
+                    r.M += prev.M; // account for history even if invalid / not generatable
                 }
             }
         }
@@ -1155,10 +1197,17 @@ float4 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
                 neighbor.M = min(neighbor.M, kRestirMCap);
                 RestirSampleEval ne = evalReservoirSample(primary, neighbor.lightIdx,
                                                           neighbor.samplePoint, neighbor.sampleNormal);
-                if (ne.valid) {
-                    combineTwoReservoirs(r, neighbor, ne.p_hat, rng);
+                // GI-ENH bias correction - same three levels as the temporal merge.
+                const float pMergeN = (biasCorrectionMode == 0u) ? 1.0 : ne.p_hat;
+                bool generatableN = true;
+                if (biasCorrectionMode == 2u && ne.valid) {
+                    generatableN = sourceConservativeVisible(nWorldPos, neighbor.lightIdx,
+                                                             neighbor.samplePoint);
+                }
+                if (ne.valid && generatableN) {
+                    combineTwoReservoirs(r, neighbor, pMergeN, rng);
                 } else {
-                    r.M += neighbor.M; // account for history even if its sample is now invalid
+                    r.M += neighbor.M; // account for history even if invalid / not generatable
                 }
             }
         }

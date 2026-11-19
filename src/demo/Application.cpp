@@ -111,6 +111,9 @@ bool Application::onInitialize() {
                                          (m_reconnectShiftEnabled & 1u) != 0u,
                                          (m_reconnectShiftEnabled & 2u) != 0u);
         }
+        // GI-ENH bias correction (THEIA_BIAS_CORRECTION) - parsed in
+        // ApplicationCompute.cpp so this TU stays under the 1000-line gate.
+        parseBiasCorrectionEnv();
         // PERF8 debug A/B: THEIA_MATERIAL_LOD=0|1 forces the material-LOD tier
         // (default = interactive on, estimator-pure capture off).
         if (const auto lodRaw = harmonia::core::getEnvString("THEIA_MATERIAL_LOD")) {

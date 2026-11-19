@@ -124,6 +124,9 @@ class Application final : public harmonia::app::App,
     /// Extracted from onSceneLoaded (Extract Method, the Code-health TU-split seam) so
     /// Application.cpp stays under the 1000-line architecture gate.
     void applySceneCamera(const harmonia::scene::SceneLoader::SceneConfig& sceneConfig);
+    /// GI-ENH: parse THEIA_BIAS_CORRECTION (0 = off / 1 = basic = today / 2 = ray_traced).
+    /// Extracted into ApplicationCompute.cpp for the same reason as applySceneCamera.
+    void parseBiasCorrectionEnv();
     void dispatchLightCull(VkCommandBuffer cmd, const sm::float4x4& proj, const sm::float4x4& view) noexcept;
     void submitAsyncCompute(VkCommandBuffer cmd,
                             const harmonia::app::RenderTarget& target,
@@ -187,6 +190,11 @@ class Application final : public harmonia::app::App,
     /// GI-ENH (a): reconnection shift feature mask (THEIA_NO_RECONNECTION=0 / THEIA_SHIFT_MASK).
     /// bit0 = k=2 shift, bit1 = k>=3 shift. 0 = replay-only.
     std::uint32_t m_reconnectShiftEnabled = 3u;
+    /// GI-ENH bias-correction level over the ReSTIR DI temporal/spatial merges
+    /// (THEIA_BIAS_CORRECTION): 0 = off (1/M finalize, explicitly biased - RTXDI's OFF),
+    /// 1 = basic = today's behaviour (default), 2 = ray_traced = basic + a per-source
+    /// conservative visibility test (RTXDI's documented "complete correction").
+    std::uint32_t m_biasCorrectionMode = 1u;
     /// PERF8 (material LOD): -1 = auto (interactive on / estimator-pure capture off),
     /// 0/1 = forced by THEIA_MATERIAL_LOD (debug A/B harness).
     int m_forceMaterialLod = -1;

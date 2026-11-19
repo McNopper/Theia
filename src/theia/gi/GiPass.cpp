@@ -662,6 +662,7 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         .restirPtPathEnabled = (params.useRestirPtPath && m_pathReservoirBuf[0].isValid()) ? 1u : 0u,
         .fireflyClampEnabled = params.fireflyClampEnabled ? 1u : 0u,
         .reconnectShiftEnabled = params.reconnectShiftEnabled,
+        .biasCorrectionMode = params.biasCorrectionMode,
         .smsEnabled = m_smsFrameActive ? 1U : 0U,
         .materialLodEnabled = params.materialLodEnabled ? 1u : 0u,
         .radianceCacheEnabled = params.radianceCacheEnabled ? 1u : 0u,

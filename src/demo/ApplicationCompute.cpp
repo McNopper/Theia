@@ -7,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <slang-math/slang-math.hpp>
 #include <string>
 #include <tuple>
@@ -19,6 +20,21 @@
 #include "theia/camera/CameraJitter.hpp"
 
 namespace theia {
+
+// GI-ENH bias correction (THEIA_BIAS_CORRECTION): RTXDI's three-level biasCorrectionMode.
+// 0 = off (1/M finalize, explicitly biased), 1 = basic = today's behaviour (the default,
+// bit-identical), 2 = ray_traced = basic + a per-source conservative visibility test in
+// the ReSTIR DI temporal/spatial merges. Lives here so Application.cpp stays under the
+// 1000-line architecture gate (same Extract Method reason as applySceneCamera).
+void Application::parseBiasCorrectionEnv() {
+    if (const auto biasRaw = harmonia::core::getEnvString("THEIA_BIAS_CORRECTION")) {
+        m_biasCorrectionMode = static_cast<std::uint32_t>(std::strtoul(biasRaw->c_str(), nullptr, 0));
+        if (m_biasCorrectionMode > 2u) {
+            m_biasCorrectionMode = 2u;
+        }
+        harmonia::core::Logger::info("THEIA_BIAS_CORRECTION = {}", m_biasCorrectionMode);
+    }
+}
 
 GiPass::FrameParams Application::buildGiFrameParams(const sm::float4x4& view,
                                                     const sm::float4x4& curViewProj) const noexcept {
@@ -40,6 +56,7 @@ GiPass::FrameParams Application::buildGiFrameParams(const sm::float4x4& view,
     gp.useRestirPtPath = m_useRestirPtPath && m_useRestirPt;
     gp.fireflyClampEnabled = !m_pureEstimatorCapture;
     gp.reconnectShiftEnabled = m_reconnectShiftEnabled;
+    gp.biasCorrectionMode = m_biasCorrectionMode;
     gp.motionVectorView = VK_NULL_HANDLE;
     // PERF8 (material LOD): two-tier — interactive ON, estimator-pure capture OFF
     // (convergence litmus); THEIA_MATERIAL_LOD=0|1 forces the mode for A/B.
