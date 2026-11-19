@@ -590,6 +590,47 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     Ceramic vertices changing). Pending the C4 comparison - static evidence only
     until then, deliberately not claimed as a demonstration.
 
+  **Gap B battery regression - COMPLETE (2026-11-19 21:05) + biasCorrectionMode
+  RECEIPT (Theia `700e479`). Tree clean.**
+  - *How the C4 run survived its own harness:* the `battery_c4` shell was **SIGTERM'd by
+    its own timeout** (twice this session - 3000 s earlier, then 7200 s), but the child
+    `theia` process outlived it and **finished at 20:50:26**, writing
+    `gapb_regress/C4_local_512_17.exr` (358 141 B) as an orphan. The comparison was
+    therefore run separately (CPU only). GPU was verified free (2 %) before the next
+    stage; no second GPU app was ever started.
+  - *Results - the pattern is exactly what the [Ceramic] analysis predicted:*
+
+    | case | baseline | pixel max&#124;d&#124; | pixel mean&#124;d&#124; | verdict |
+    |---|---|---|---|---|
+    | C1 / C2 / C3 | stored 512f seed17 | **0** | **0** | bit-identical |
+    | **C4** | `c4_vfov_sanity.exr` | **0.00252** | 6.27e-07 | **CHANGED** |
+
+  - *C4's change is imperceptible* (`compare_renders`, new vs pre-Gap-B baseline):
+    **tm_mean 0.000/255** against a 512f noise floor of **0.605** and a bar of 3.0;
+    **SSIM 0.999999** against the 0.9540 noise ceiling; **mean_diff 0.000** (threshold
+    120); Rel-MSE 0.000000 (250); max_diff 0.553 with **p99 0.001**; PSNR 95.31 dB;
+    ictec_dE mean 0.0000 / max 0.1214; black_frac identical; **gate PASS, exit 0**.
+    => Gap B changed C4 by an amount far below the scene's own sampling noise while
+    leaving C1-C3 bit-identical - i.e. it did exactly what it was designed to do and
+    nothing more. **Every recorded C1-C4 verdict still holds.**
+  - ***Dynamic half of the [Ceramic] disagreement case - DEMONSTRATED:*** the change
+    appears in **C4 alone**, which is the only case containing `Ceramic` (the only
+    material where material-proxy 0.08 and diffuse-sample 1.0 fall on opposite sides of
+    `kAlphaMin`), and in no other case. Static half: 2a0b3f5; dynamic half: here.
+  - ***biasCorrectionMode (`700e479`) - full verification chain on the post-Gap-A
+    build:*** link **T_BUILD=0** (theia.exe 21:06:11); **test_arch ARCH=0**
+    (Application.cpp 994/1000); clang-format 22.1.3 clean (5 files); structural
+    verifier **28/28 VERIFY_EXIT=0**; **Harmonia suite H_CTEST=0**; **Theia suite
+    100% of 67 (T_CTEST=0)**; `qualify_gap_c.py` **k3 FIRES 90.845032, mask LIVE,
+    mask2 vs mask3 = 0.000000**, every arm statistic identical to the pre-knob run to
+    6 dp => the default level is behaviour-neutral. Level 2 (ray_traced) is **NOT yet
+    exercised** - it needs `THEIA_BIAS_CORRECTION=2` renders and is not claimed as
+    verified.
+  - Condition C of Gap C stays the noise-limited one, judged by the owner's
+    noise-envelope criterion (0fbcb0b), unchanged by this pass.
+  - *Queue now unblocked (tree clean):* Gap A stage 2 -> hybrid fixture ROI -> 2e
+    remaining sections + galleries -> final receipts -> audit hoist/assert (owner).
+
   **CROSS-RENDERER DIVERGENCE AUDIT (2026-11-19) - owner-initiated, PRIORITY SESSION.**
   Owner hypothesis: if Hyperion/Theia/Harmonia do not actually call the same functions,
   renderer parity is unachievable and we would be "trying to achieve something which is
