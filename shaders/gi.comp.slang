@@ -1637,10 +1637,10 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
             hopCaptured = true;
             const float3 dX1X2 = h.worldPos - primary.position;
             const float3 x1ToX2 = normalize(dX1X2);
-            state.rec.omegaHop1 = normalize(dir); // direction x_1 → x_2
-            state.rec.dist2Hop1 = max(dot(dX1X2, dX1X2), 1.0e-12);
-            state.rec.geomGHop1Source = max(dot(h.shadingNormal, -x1ToX2), 0.0) / state.rec.dist2Hop1;
-            state.rec.geomGHop1Reverse = max(dot(primary.normal, x1ToX2), 0.0) / state.rec.dist2Hop1;
+            state.rec.hopDir[0] = normalize(dir); // direction x_1 → x_2
+            state.rec.hopDist2[0] = max(dot(dX1X2, dX1X2), 1.0e-12);
+            state.rec.hopGSource[0] = max(dot(h.shadingNormal, -x1ToX2), 0.0) / state.rec.hopDist2[0];
+            state.rec.hopGReverse[0] = max(dot(primary.normal, x1ToX2), 0.0) / state.rec.hopDist2[0];
             state.rec.omegaInK = normalize(state.nextDirection); // direction x_2 → x_3
             state.rec.pdfInK = state.lastBsdfPdf; // p_s(ω_2 | x_2)
             x2Pos = h.worldPos;
@@ -1663,7 +1663,6 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
                 const float3 x1ToXk = normalize(h.worldPos - primary.position);
                 state.rec.geomGSource = max(dot(h.shadingNormal, -x1ToXk), 0.0) / state.rec.dist2X1Xk;
                 state.rec.geomGReverse = max(dot(primary.normal, x1ToXk), 0.0) / state.rec.dist2X1Xk;
-                state.rec.kLevel = 1u;
             } else {
                 // GI-ENH k≥3: reconnection edge = x_2 → x_k (hop is replayed).
                 const float3 dX2Xk = h.worldPos - x2Pos;
@@ -1671,8 +1670,8 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
                 state.rec.dist2InK = max(dot(dX2Xk, dX2Xk), 1.0e-12);
                 state.rec.geomGInKSource = max(dot(h.shadingNormal, -x2ToXk), 0.0) / state.rec.dist2InK;
                 state.rec.geomGInKReverse = max(dot(x2Normal, x2ToXk), 0.0) / state.rec.dist2InK;
-                state.rec.kLevel = 2u;
             }
+            state.rec.kLevel = state.captureTarget + 1u;
             // The suffix divisor: the FULL prefix throughput at x_k (w_1·w_2, post-RR —
             // everything the walk adds beyond x_2's own emission/NEE terms is weighted by
             // exactly this), so the cached suffix is pure incident radiance with no
@@ -2098,7 +2097,7 @@ bool tryReconnectionShiftK3(SurfaceHit primary, PathReservoir neighbor, float ad
     }
 
     // ── Replay: x'_1 → x'_2 in the source's hop direction ω_1. ──
-    const float3 hopDir = normalize(rec.omegaHop1);
+    const float3 hopDir = normalize(rec.hopDir[0]);
     const float3 hopOrigin = primary.position + primary.geoNormal * kRayEpsilon;
     TheiaTracer tracer;
     GiHit h2 = traceClosestHit(hopOrigin, hopDir, kInf, kRayEpsilon);
@@ -2156,7 +2155,7 @@ bool tryReconnectionShiftK3(SurfaceHit primary, PathReservoir neighbor, float ad
     const float3 toCamN = normalize(primary.position - cameraPos.xyz);
     const float distCam2 = max(dot(primary.position - cameraPos.xyz, primary.position - cameraPos.xyz), 1.0e-6);
     const float rPri2 = distCam2 * max(dot(primary.normal, -toCamN), 0.0) * (1.0 / (4.0 * kPi));
-    const float footprint1 = 1.0 / max(rec.pdfEdgeIn * rec.geomGHop1Source, 1.0e-20);   // hop
+    const float footprint1 = 1.0 / max(rec.pdfEdgeIn * rec.hopGSource[0], 1.0e-20);   // hop
     const float footprint2 = 1.0 / max(rec.pdfInK * rec.geomGInKSource, 1.0e-20);       // reconnection edge
     const float footprint3 = 1.0 / max(rec.pdfOmegaK * rec.geomGInKReverse, 1.0e-20);   // continuation
     const float roughK = saturate(surfK.mat.specularRoughAnisoIor.x);
@@ -2244,12 +2243,12 @@ bool tryReconnectionShiftK3(SurfaceHit primary, PathReservoir neighbor, float ad
     const float distHop2 = max(distHop2Max, 1.0e-12);
     const float geomGTargetHop = max(dot(h2.shadingNormal, -hopDir), 0.0) / distHop2;
     const float geomGTargetEdge = max(dot(surfK.normal, woK), 0.0) / max(distXk * distXk, 1.0e-12);
-    const float jacEndDenom = rec.pdfEdgeIn * rec.geomGHop1Source * rec.pdfInK * rec.geomGInKSource;
+    const float jacEndDenom = rec.pdfEdgeIn * rec.hopGSource[0] * rec.pdfInK * rec.geomGInKSource;
     const float jacEnd = (pdfY1 * geomGTargetHop * pdfY2 * geomGTargetEdge) /
                          max(jacEndDenom, 1.0e-20);
     const float jacCont = jacEnd * pdfYk / max(rec.pdfOmegaK, 1.0e-20);
     // Reject (not clamp) on degenerate Jacobian inputs — see reconnectionJacobianValid.
-    if (!reconnectionJacobianValid(jacEnd, jacEndDenom, rec.dist2Hop1)) {
+    if (!reconnectionJacobianValid(jacEnd, jacEndDenom, rec.hopDist2[0])) {
         return false;
     }
     if (!reconnectionJacobianValid(jacCont, rec.pdfOmegaK, rec.dist2InK)) {
@@ -2463,7 +2462,7 @@ void restirPtEmit(SurfaceHit primary, uint2 px, float adaptiveClamp, inout RngSt
             if (reconnectShiftEnabled != 0u) {
                 if (neighbor.rec.kLevel == 1u) {
                     vShift = tryReconnectionShift(primary, neighbor, adaptiveClamp, rng, gShift);
-                } else if (neighbor.rec.kLevel >= 2u) {
+                } else if (neighbor.rec.kLevel == 2u) {
                     vShift = tryReconnectionShiftK3(primary, neighbor, adaptiveClamp, rng, gShift);
                 }
             }
