@@ -479,6 +479,39 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     sampled lobe's alpha differ (a multi-lobe material: diffuse+coat/GGX), reported
     old/new k distribution.
 
+  **Gap B STEP 1 LANDED (2026-11-19, Harmonia 4d44983): `BSDFSample.lobeAlpha`.**
+  - `BSDFSample` gains `float lobeAlpha` = the **linear roughness of the lobe
+    ACTUALLY SAMPLED** at that vertex; `sampleBSDF` writes it at every exit:
+    default = today's material proxy (inert - any path that does not set it keeps
+    prior behaviour), then the selected lobe overrides it: base specular + rough
+    transmission -> `effSpecRough`, coat -> `coatRough`, diffuse/subsurface/sheen/
+    diffuse-trans -> **1.0**, and all **10 delta sites** -> **0.0**.
+  - Units stay LINEAR ROUGHNESS so the existing `kAlphaMin = 0.2` comparison is
+    unchanged - **no threshold, gate or metric value was touched**.
+  - Nothing consumes the field yet, so the commit is behaviour-neutral by
+    construction; step 2 threads it (PathState.sampledAlphaPrev + arrivalDist) and
+    moves the hybrid pair decision after the sample, per the site map above.
+  - Receipts: Harmonia `cmake --build` **BUILD_EXIT=0**; full suite **185/185**
+    (CTEST_EXIT=0; the only skip is DN3M4 with HARMONIA_DN3M4_DIR unset, by design).
+
+  **Architecture-gate repair (2026-11-19, Theia 110f6c8): `test_arch` back to green.**
+  - `test_arch` was failing: `HEADER SIZE src/demo/Application.cpp (1018 lines;
+    limit 1000)`. Attribution measured, not assumed: the file was **already 1011
+    lines before** `f5c71e7` (so the gate was red before today's vfov fix, which
+    merely deepened it to 1018).
+  - Fix = Extract Method into the existing TU-split sibling (the seam the
+    Code-health verdict already sanctioned): the whole camera-placement block of
+    `Application::onSceneLoaded` - static pos/at/up, the Hyperion-parity
+    `value_or(39.1f)`, the `fromEv100` fallback and the controller orientation
+    reset - moved verbatim into `Application::applySceneCamera`
+    (declared in `Application.hpp`, which already names `SceneConfig` at L98, so no
+    include was added).
+  - `Application.cpp` **1018 -> 991**, `ApplicationCompute.cpp` 261, `Application.hpp` 254;
+    script-verified as a pure move (28 lines extracted, both fallbacks present in
+    the sibling, exactly one call/declaration/definition).
+  - Receipts: **BUILD_EXIT=0**, **test_arch 1/1 PASSED** (was Failed),
+    **suite 100% of 67** (SUITE_EXIT=0), **clang-format 22.1.3 clean** on all three.
+
     the plan asks for.
 
 **Living source of truth for outstanding work.** Shipped items are removed from the work
