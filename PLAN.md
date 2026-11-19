@@ -182,6 +182,53 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
   - C1/C2/C3/DRAGON remain on their recorded verdicts (scope proof, e457997); their
     images are provably unchanged by f5c71e7 (inline vfov / resolvable preset).
 
+  **Gap C observation run 2026-11-19 16:38 - INVALID and RETRACTED (vacuous PASS),
+  root cause found: the fixture camera faces away from its own content.**
+  - *What happened:* `tools/qualify_gap_c.py` printed
+    `GAP C RESULT: PASS (mask live=True, k3 fires=True, gate=True)` - all five
+    frames (Hyperion reference + mask 0/1/2/3) were **exactly zero**
+    (min = max = std = 0, one unique pixel value, 1887-byte EXRs vs ~359KB for real
+    content; renders took 1.2-1.5s for 256 frames). The gate passed because 0 vs 0
+    satisfies every strict-AND threshold, so NOTHING was observed. **No GAP-C
+    result is recorded; the pass is retracted.**
+  - *Two instrument defects made it possible, both fixed in `aa27f1e`:*
+    (1) differencing used whole-file **sha256** - EXR headers carry metadata, so
+    pixel-identical renders hash differently, which is why LIVE/FIRES/UNEXPECTED
+    were reported off header bytes; decisions now use PIXEL max|d| via
+    `compare_renders.load_exr`. (2) there was **no content precondition** - the
+    family gate cannot catch two black images. A precondition now rejects any
+    frame with max==0 or std==0 BEFORE comparing (new exit 5). Receipts: ruff 0
+    for the file and the whole `tools/` dir, py_compile 0, and the NEGATIVE
+    CONTROL - re-running `--skip-render` over those very EXRs gives exit 5 with
+    all five frames flagged DEGENERATE.
+  - *Root cause of the black frames (proven from source, not inferred):*
+    `theia/scene/SceneLoader.cpp` L234 sets
+    `cfg.cameraAt = pos + (rot * float3{0,0,-1})`, so forward = rot x (0,0,-1).
+    For the fixture's `translate [0, 1.6, 2.4]`, `rotate_x -32`, `rotate_y 180`:
+    forward = Ry(180) * Rx(-32) * (0,0,-1) = **(0, -0.5299, +0.8480)** - down and
+    toward **+z**, i.e. away from every object (all content is at z <= 2, camera at
+    z = 2.4). Floor hit: t = 1.6/0.5299 = 3.02 -> z = 2.4 + 3.02*0.848 = **4.96,
+    beyond the floor's z <= 3.0 edge** -> pure black environment in BOTH renderers
+    (they agree, hence a trivially-passing gate). Scene load itself was fine
+    (`loaded 'hybrid_k3.scene.toml'`, `12 emissive triangle(s)`, `Scene built
+    (BLAS+TLAS)`); only the framing was wrong.
+  - *Planned fix (plan-before-edit):* `rotate_y: 180.0 -> 0.0` in
+    `Harmonia/tests/assets/sms/hybrid_k3.scene.toml`. With rotate_y 0 the forward
+    vector becomes (0, -0.5299, -0.8480): the ray reaches y = 0.1 at t = 2.83,
+    z = 0.0 - **exactly the plate's top centre**, so primary = the polished plate,
+    then wall (z = -2.4), floor, emitter - precisely the `camera -> plate -> wall ->
+    floor -> emitter` chain the fixture header documents for `max_depth 6`.
+    The alternative (move the camera to z = -2.4 keeping rotate_y 180) is REJECTED:
+    it would place the camera **inside the wall** (wall spans z in [-2.5, -2.3],
+    y in [0, 2.4]).
+  - *Lesson recorded:* the fixture's static validation (80d15eb) checked references
+    and structure but cannot check FRAMING - a fixture is only validated once a
+    render is non-degenerate, which is exactly what the new exit-5 precondition
+    now enforces.
+  - Next: apply the fix, re-stage, cheap probe render (must be non-black), then
+    re-run the full Gap C differential.
+
+
 
 **Living source of truth for outstanding work.** Shipped items are removed from the work
 lists; the shipped record is the *Baseline* below and `git log`. Only outstanding work is
