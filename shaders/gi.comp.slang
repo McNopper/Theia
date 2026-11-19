@@ -1249,6 +1249,11 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
     state.captureRe = captureRe ? 1u : 0u;
     state.reCaptured = 0u;
     state.surfaceCount = 0u;
+    // Gap B: the hybrid criteria and their inputs (site map: Theia/PLAN.md b4fd92a).
+    state.captureHybridMode = (reconnectShiftEnabled & 2u) != 0u ? 1u : 0u;
+    state.sampledAlphaPrev = saturate(primary.mat.specularRoughAnisoIor.x); // material default;
+    //   overwritten by the primary's actual sampled lobe below (a pass-through primary keeps it)
+    state.arrivalDist = 0.0;
     // GI-ENH: the reconnection vertex x_k is chosen by the paper's TWO criteria, at the
     // FIRST pair (x_{k-1}, x_k) that satisfies both (ReSTIR PT Enhanced p.3):
     //   (i)  roughness   min(alpha_{x_{k-1}}, alpha_{x_k}) >= alpha_min   (both vertices)
@@ -1261,9 +1266,9 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
     // kCaptureNone = "no qualifying pair yet": captureTarget + 1 then wraps to 0xFFFFFFFF,
     // which can never equal surfaceCount (>= 1 inside integrateSurface), so nothing is
     // captured and the path falls back to replay.
-    // NB the paper specifies alpha "from the path's sampled lobes"; this uses the material
-    // roughness as a proxy (the sampled-lobe alpha is not tracked per vertex here).
-    const uint kCaptureNone = 0xFFFFFFFEu;
+    // Gap B: the pairwise criteria themselves now use the SAMPLED lobe alphas and live
+    // in integrateSurface (Theia/PLAN.md b4fd92a); the sentinel moved to file scope in
+    // path_integrator.slang so both gates read the same value.
     state.captureTarget = kCaptureNone;
     state.disableRR = disableRR ? 1u : 0u; // GI-ENH §6.2.4: skip RR during replay
     state.rec = makeEmptyReconnectionCapture();
@@ -1325,6 +1330,8 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
             state.rec.pdfEdgeIn = bs.isDelta ? 1.0e30 : bs.pdf;
             state.rec.flags |= bs.isDelta ? 0u : 16u;
             state.rec.flags |= bs.entersMedium ? 0u : 32u;
+            // Gap B: the primary's sampled-lobe alpha feeds the first pair test.
+            state.sampledAlphaPrev = bs.lobeAlpha;
         }
         // Shadow-terminator consistency at the primary vertex (Chiang 2019, see Harmonia
         // bsdf_shared.slang): the continuation throughput carries the same microstructure
@@ -1393,7 +1400,6 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
     uint bounce = 0u;
     // Paper criterion (i) is PAIRWISE: min(alpha_{x_{k-1}}, alpha_{x_k}) >= alpha_min. Track
     // the previous vertex so each candidate x_k can be tested together with its predecessor.
-    float prevRough = saturate(primary.mat.specularRoughAnisoIor.x);
     bool hopCaptured = false;
     float3 x2Pos = 0.0.xxx;
     float3 x2Normal = 0.0.xxx;
@@ -1567,27 +1573,19 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
         //   Reference constants (Params.slang): alpha_min = specularRoughnessThreshold = 0.2,
         //   d_min = nearFieldDistance = 0.1. bit1 selects Hybrid, else Reconnection - matching
         //   the reference, where kShiftStrategy is ONE mode per render pass.
-        //   NB the paper specifies alpha "from the path's sampled lobes"; this uses the
-        //   material roughness as a proxy (sampled-lobe alpha is not tracked per vertex).
+        //   Gap B: the pairwise test itself now runs in the shared integrateSurface over the
+        //   SAMPLED lobe alphas (Theia/PLAN.md b4fd92a); only this unconditional
+        //   reconnection branch still decides at arrival time.
         {
-            const bool hybridMode = (reconnectShiftEnabled & 2u) != 0u;
-            if (!hybridMode) {
-                // Reconnection mode: unconditional first secondary hit (k = 2).
+            // Gap B: only RECONNECTION mode still decides here - unconditional first
+            // secondary hit (k = 2). The HYBRID half moved into the shared
+            // integrateSurface: its pairwise test needs THIS vertex's sampled-lobe alpha,
+            // which sampleBSDF has not produced yet at arrival (Theia/PLAN.md b4fd92a).
+            if (state.captureHybridMode == 0u) {
                 if (state.captureTarget == kCaptureNone && state.surfaceCount < 1u) {
                     state.captureTarget = state.surfaceCount;
                 }
-            } else if (state.captureTarget == kCaptureNone && state.surfaceCount < 2u) {
-                // Hybrid mode: first qualifying pair (adaptive k, capped at k = 3).
-                const float curRough = saturate(surf.mat.specularRoughAnisoIor.x);
-                const float kAlphaMin = 0.2F;
-                const float kDMin = 0.1F;
-                const bool pairRough = (curRough >= kAlphaMin) && (prevRough >= kAlphaMin);
-                const bool farField = h.dist >= kDMin;
-                if (pairRough && farField) {
-                    state.captureTarget = state.surfaceCount;
-                }
             }
-            prevRough = saturate(surf.mat.specularRoughAnisoIor.x);
         }
         // ── GI-NRC radiance-cache QUERY ────────────────────────────────────────
         // A diffuse secondary hit beyond the first may terminate with its cell's
@@ -1622,6 +1620,8 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
             snapThr[snapCount] = state.throughput;
             ++snapCount;
         }
+        // Gap B: distance for the hybrid pair test the shared integrator runs below.
+        state.arrivalDist = h.dist;
         state.depth = bounce + primaryCharge;
         integrateSurface(tracer, surf,
             emissiveTriangleCount, emissiveTriangles, emissiveCdf,
