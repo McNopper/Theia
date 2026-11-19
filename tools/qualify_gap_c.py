@@ -25,6 +25,11 @@ TRUE mask semantics, read from the shader (this is what the contract maps onto):
   kLevel 2 -> the k=3 body), and mask 0 = replay baseline.
 
 Checks and what each proves:
+  0. CONTENT PRECONDITION (exit 5): every frame - reference and all arms - must be
+     non-degenerate (max > 0 and std > 0). The family strict-AND gate CANNOT catch
+     two identical black images (0 vs 0 passes every threshold), so degenerate
+     frames invalidate the whole observation. This exists because a first run
+     produced five all-zero EXRs and reported a vacuous PASS.
   A. mask1 vs mask3 DIFFER  -> the k=3 body fires. The fixture's whole design is
      that hybrid must capture at pair 2 (k=3) where reconnection unconditionally
      captures at k=2; if the arms are identical, the criteria never advanced past
@@ -37,11 +42,15 @@ Checks and what each proves:
      independently read); any difference would CONTRADICT this reading and is
      flagged loudly.
 
-No invented thresholds: "differs" is byte identity (sha256) + mean_diff, resting
-on the recorded run-to-run pixel reproducibility of multi-frame captures
-(Theia/PLAN.md), and correctness uses the family gate verbatim -
+No invented thresholds: "differs" = PIXEL max|d| > 0 - never whole-file hashes.
+EXR headers carry metadata, so pixel-identical renders hash differently: a sha256
+basis reported LIVE/FIRES/UNEXPECTED on frames that were all exactly zero. The
+decision rests on the recorded run-to-run pixel reproducibility of multi-frame
+captures (Theia/PLAN.md), and correctness uses the family gate verbatim -
 compare_renders.py --gate all (mean_diff<=120, rel_mse<=250, SSIM>=0.6,
 lum_hist>=0.8), whose exit code IS the gate (return 0 if passed else 1).
+Exit codes: 0 pass, 1 gate fail, 2 missing input/render, 3 k=3 never fires,
+4 mask dead, 5 degenerate (all-zero/uniform) frame content.
 
 Budget = the gate's own calibration budget (AGENTS.md: 320x240 / 256 spp / 256
 frames) - the thresholds are budget-specific, so every arm renders at it.
@@ -51,12 +60,16 @@ GPU discipline: all renders run SEQUENTIALLY inside this one process.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(r"C:\Development\GitHub") / "Harmonia" / "tools"))
+from compare_renders import load_exr
+
+import numpy as np
 
 GITHUB = Path(r"C:\Development\GitHub")
 STAGED = (GITHUB / "Theia" / "build" / "sms-qualification" / "scenes" / "HYBRID"
@@ -70,8 +83,32 @@ COMPARE = GITHUB / "Harmonia" / "tools" / "compare_renders.py"
 ARMS: dict[str, int] = {"reconnection_k2": 1, "hybrid_k3": 3, "replay": 0, "hybrid_bit0": 2}
 
 
-def sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def pixels(path: Path) -> np.ndarray:
+    """Pixel content of an EXR - the ONLY basis for a differencing decision.
+
+    Whole-file sha256 must never decide a differential: EXR headers carry
+    metadata, so two pixel-identical renders hash differently and would be
+    reported as 'differing'. (That bug reported LIVE/FIRES/UNEXPECTED on
+    frames that were all exactly zero.)
+    """
+    return load_exr(path)
+
+
+def content_state(arr: np.ndarray) -> tuple[bool, str]:
+    """Reject degenerate frames BEFORE any comparison.
+
+    The family strict-AND gate cannot catch two identical black images (0 vs 0
+    passes every threshold), so a non-degenerate-content assertion is the
+    instrument's own precondition.
+    """
+    lo, hi = float(arr.min()), float(arr.max())
+    spread = float(arr.std())
+    ok = hi > 0.0 and spread > 0.0
+    return ok, f"min {lo:.6f} max {hi:.6f} std {spread:.6f}"
+
+
+def pixel_delta(a: np.ndarray, b: np.ndarray) -> float:
+    return float(np.abs(a - b).max())
 
 
 def run_exe(label: str, exe: Path, args: list[str], out: Path,
@@ -171,28 +208,45 @@ def main() -> int:
     print("Gap C checks (Theia/PLAN.md verification plan ae00516)")
     print("=" * 74)
 
-    h = {name: sha256(path) for name, path in arms.items()}
-    h_ref = sha256(ref)
+    # Content precondition: the strict-AND gate cannot catch two identical black
+    # images (0 vs 0 passes every threshold), so degenerate frames make every
+    # downstream number meaningless. Assert non-degenerate BEFORE any diff.
+    frames: dict[str, np.ndarray] = {"reference": pixels(ref)}
+    frames.update({name: pixels(path) for name, path in arms.items()})
 
+    print(f"{'frame':16s} {'min':>10s} {'max':>10s} {'std':>10s}  state")
+    degenerate = []
+    for name, arr in frames.items():
+        ok_c, detail = content_state(arr)
+        print(f"{name:16s} {detail}  {'OK' if ok_c else 'DEGENERATE'}")
+        if not ok_c:
+            degenerate.append(name)
+    if degenerate:
+        print("\nGAP C RESULT: FAIL - degenerate frame(s): "
+              + ", ".join(degenerate))
+        print("The renders produced no image content, so no differential and no")
+        print("gate result derived from them is meaningful (0 vs 0 passes every")
+        print("threshold). Fix the fixture/render before observing anything.")
+        return 5
+
+    # PIXEL-based differencing (never file hashes: EXR headers carry metadata).
     # B first: without a live knob, A's outcome is uninterpretable.
-    ok_b = h["replay"] != h["reconnection_k2"]
-    print("B. mask REACHES estimator : replay(mask0) vs reconnection(mask1) "
-          f"identical = {h['replay'] == h['reconnection_k2']}"
-          f"  -> {'LIVE' if ok_b else 'DEAD KNOB (differential uninterpretable)'}")
-    print(f"   sha256 replay={h['replay'][:16]}  k2={h['reconnection_k2'][:16]}")
+    d_b = pixel_delta(frames["replay"], frames["reconnection_k2"])
+    ok_b = d_b > 0.0
+    print(f"\nB. mask REACHES estimator : replay(mask0) vs reconnection(mask1) "
+          f"max|d| = {d_b:.6f}  -> {'LIVE' if ok_b else 'DEAD KNOB (differential uninterpretable)'}")
 
-    ok_a = h["reconnection_k2"] != h["hybrid_k3"]
-    print("A. k3 body FIRES          : reconnection(mask1) vs hybrid(mask3) "
-          f"identical = {h['reconnection_k2'] == h['hybrid_k3']}"
-          f"  -> {'FIRES' if ok_a else 'NEVER FIRES (Gap C premise fails)'}")
-    print(f"   sha256 k2={h['reconnection_k2'][:16]}  hybrid={h['hybrid_k3'][:16]}")
-    print(f"   reference sha256={h_ref[:16]}")
+    d_a = pixel_delta(frames["reconnection_k2"], frames["hybrid_k3"])
+    ok_a = d_a > 0.0
+    print(f"A. k3 body FIRES          : reconnection(mask1) vs hybrid(mask3) "
+          f"max|d| = {d_a:.6f}  -> {'FIRES' if ok_a else 'NEVER FIRES (Gap C premise fails)'}")
 
     # D: mask2 must equal mask3 (bit0 is not independently read) - a difference
     # would contradict the shader reading above and must be surfaced, not buried.
-    bit0_same = h["hybrid_bit0"] == h["hybrid_k3"]
-    print("D. mask2 vs mask3 (bit0)  : identical = "
-          f"{bit0_same}  -> {'as predicted (bit0 not independently read)' if bit0_same else 'UNEXPECTED - contradicts the shader reading'}")
+    d_d = pixel_delta(frames["hybrid_bit0"], frames["hybrid_k3"])
+    bit0_same = d_d == 0.0
+    print(f"D. mask2 vs mask3 (bit0)  : max|d| = {d_d:.6f}  -> "
+          f"{'as predicted (bit0 not independently read)' if bit0_same else 'UNEXPECTED - contradicts the shader reading'}")
 
     print("\nC. hybrid(k3-capable) arm gate-clean vs Hyperion (family strict-AND gate):")
     c_pass, c_detail = gate(ref, arms["hybrid_k3"])
@@ -203,11 +257,10 @@ def main() -> int:
         p, detail = gate(ref, arms[name])
         print(f"   {name:16s} {'PASS' if p else 'FAIL'}  {detail}")
 
-    print("\n   pairwise mean_diff (1/255):")
+    print("\n   pairwise pixel max|d| (1/255-scale linear EXR):")
     for a, b in (("reconnection_k2", "hybrid_k3"), ("replay", "reconnection_k2"),
                  ("hybrid_bit0", "hybrid_k3")):
-        _, detail = gate(arms[a], arms[b])
-        print(f"   {a:16s} vs {b:14s} {detail}")
+        print(f"   {a:16s} vs {b:14s} {pixel_delta(frames[a], frames[b]):.6f}")
 
     print()
     if not ok_b:
