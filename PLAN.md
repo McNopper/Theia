@@ -560,6 +560,36 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     old/new. Note C1-C3/C4 are transmission/coat content, so they are the natural
     home for that case.
 
+  **Gap B material-vs-sampled-alpha disagreement case - STATIC HALF (2026-11-19).**
+  Every material in the qualification battery was scanned against `kAlphaMin = 0.2`
+  (linear roughness), comparing the OLD rule (`specularRoughAnisoIor.x` = material
+    proxy, what the capture gate used before Gap B) with the NEW rule (alpha of the
+    lobe `sampleBSDF` actually draws):
+
+  | material | proxy | proxy verdict | selectable sampled lobes -> alpha | disagree? |
+  |---|---|---|---|---|
+  | DiffuseFloor / Wall | 1.0 / 1.0 | pass | diffuse 1.0, specular same side | no |
+  | Floor (C4) | 0.55 | pass | diffuse 1.0, specular 0.55 | no |
+  | RoughGold | 0.30 | pass | metal/specular 0.30 | no |
+  | GlassDelta / GlassAbsorbing / Gem | 0.0 | fail | delta transmission -> 0.0 | no |
+  | PolishedMetal (hybrid_k3) | 0.05 | fail | metal 0.05 | no |
+  | **Ceramic (C4 teapot)** | **0.08** | **fail** | **diffuse -> 1.0 (pass)**, coat 0.04, specular `effSpecRough` (base 0.08, coat-modulated, still < 0.2) | **YES** |
+
+  - *Why Ceramic is the only one:* it is genuinely multi-lobe - `base_metalness = 0.0`,
+    `base_weight = 1.0`, `coat_weight = 1.0`, `coat_roughness = 0.04` - so a diffuse
+    sample at a teapot vertex carries alpha **1.0 (qualifies)** while the material
+    proxy reads **0.08 (rejects)**. The old rule therefore rejected EVERY pair at a
+    Ceramic vertex regardless of which lobe was drawn; the new rule accepts diffuse
+    samples and still rejects coat (0.04) and specular (`effSpecRough`, base 0.08)
+    samples. Every other
+    material in the battery falls on the same side of 0.2 for both rules, so Gap B is
+    a no-op for them - which is exactly what the C1-C3 bit-identical regression
+    already showed.
+  - *Dynamic half still owed:* demonstrate the disagreement on a render (C4's k
+    distribution old/new via the mask differential, or the C4 battery delta showing
+    Ceramic vertices changing). Pending the C4 comparison - static evidence only
+    until then, deliberately not claimed as a demonstration.
+
   **CROSS-RENDERER DIVERGENCE AUDIT (2026-11-19) - owner-initiated, PRIORITY SESSION.**
   Owner hypothesis: if Hyperion/Theia/Harmonia do not actually call the same functions,
   renderer parity is unachievable and we would be "trying to achieve something which is
