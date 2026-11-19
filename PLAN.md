@@ -359,6 +359,70 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     clause ("the criteria change must not silently change WHICH k fires - report
     old/new k distribution via the mask differential").
 
+  **Gap B - MANDATORY PRE-EDIT READS COMPLETE (2026-11-19). They confirm the
+  paper-faithful design and CORRECT one claim in this plan.**
+  - *Papers identified (the plan cited "the Enhanced paper" without pinning it):*
+    - **ReSTIR PT Enhanced: Algorithmic Advances for Faster and More Robust ReSTIR
+      Path Tracing** - Daqi Lin, Markus Kettunen, Chris Wyman, PACMCGIT,
+      doi 10.1145/3804494 (2026). This is the "Enhanced" paper.
+    - **Generalized Resampled Importance Sampling: Foundations of ReSTIR**
+      (Wyman et al., SIGGRAPH 2022) sections 7.5 "Connectability Conditions" and
+      7.6 "Extending Paths with Lobe Indices" - the lobe-specific criterion's
+      canonical formulation.
+  - *The convention the plan asked to pin, verbatim:*
+    - ReSTIR PT Enhanced 2.3: "a roughness threshold
+      min(alpha_{x_{k-1}}, alpha_{x_k}) >= alpha_min **(with alpha from the path's
+      sampled lobes)**".
+    - Foundations 7.5: "**Lobe-specific connectability** ... we propose the same for
+      shift mappings: **we examine the roughness of just the selected lobe**."
+    - Foundations 7.6: "we test if vertex x is sufficiently rough **by examining the
+      roughness of the lobe chosen to sample vertex x+1**. We treat **NEE-sampled
+      vertices as rough if at least one of their BRDF lobes** is sufficiently rough."
+    - Threshold: "A **per-lobe GGX** roughness threshold of 0.2 generally works well."
+  - *CORRECTION to this plan's premise:* the plan says "**the reference uses the
+    sampled lobe**". The reference's CODE does not - DQLin's `PathTracer.handleHit`
+    computes `isCurrentVertexClassifiedAsRough = kSeparatePathBSDF ?
+    hasRoughComponent(sd, threshold) : classifyAsRough(sd, threshold)`, i.e. both
+    branches are **material/shading-data based**, and `isLastVertexClassifiedAsRough`
+    is likewise `classifyAsRough(sd, ...)` (with `!path.isSpecularBounce()` folded in
+    only under `kSeparatePathBSDF`). So:
+      - the **paper** says sampled lobe;
+      - the **reference implementation** uses the material proxy - the same proxy
+        we use today;
+      - i.e. our current capture gate is *reference-faithful* but *paper-divergent*.
+    Gap B is therefore a PAPER-FIDELITY gap, and the objective ("use the algorithm
+    from the papers") is what drives it - the reference code is not authoritative
+    here. (For contrast, ReSTIR BDPT states the opposite choice explicitly:
+    "returns roughness of the material (not just the sampled BSDF lobe)", so this is
+    a genuine per-paper choice, not a settled convention.)
+  - *Our own `BSDFSample` (Harmonia `shaders/bsdf_shared.slang` L4-8) has NO lobe
+    classification* - only `bool isDelta`. The plan's third read ("`BSDFSample` for
+    an existing lobe classification") therefore comes back NEGATIVE: the sampled-lobe
+    identity is not tracked anywhere in the shared BSDF, so Gap B must add it (the
+    plan already anticipated adding `sampledAlpha` to PathState; this pins that the
+    classification itself starts at `sampleBSDF`).
+  - *Diffuse-lobe alpha - the explicit recorded choice the plan demanded:* the
+    threshold is specified as a **per-lobe GGX** threshold of 0.2; a diffuse lobe is
+    not GGX and is rougher than any GGX lobe, so **diffuse samples carry alpha = 1.0
+    and always satisfy alpha_min = 0.2**. Delta/mirror lobes carry **alpha = 0**
+    (never qualify) - consistent with the Enhanced paper's "delta/mirror bounces have
+    zero footprint". Conductor/GGX/specular lobes carry their own per-lobe alpha.
+  - *NEE-sampled vertex case:* **N/A by architecture** (already recorded): this
+    estimator's path edges are BSDF-sampled exclusively - NEE is a shadow-ray term in
+    `integrateSurface` - so the Foundations 7.6 "NEE-sampled vertices" rule has no
+    vertex to apply to.
+  - *Shift-side guards:* unchanged - stay material-roughness (plan default), and this
+    is consistent with the reference, whose invertibility checks read
+    `isLastVertexAcceptableForRcPrev = isLastVertexClassifiedAsRough` (material-based).
+    Recorded either way as the plan required.
+  - *Design consequence for the edit (next step, plan-before-edit still applies):*
+    capture gates read per-vertex `sampledAlpha` (set where `sampleBSDF`'s result is
+    consumed - primary site + the shared `integrateSurface` continuation); everything
+    else (distance test, cap, shift guards) is untouched. Acceptance stays as written:
+    Gap-C fixture must still reach k=3 - now measurable with `tools/qualify_gap_c.py`,
+    whose k-differential readout is exactly the "old/new k distribution" instrument
+    the plan asks for.
+
 **Living source of truth for outstanding work.** Shipped items are removed from the work
 lists; the shipped record is the *Baseline* below and `git log`. Only outstanding work is
 tracked here.
