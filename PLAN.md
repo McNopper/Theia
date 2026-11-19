@@ -655,6 +655,49 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     THREE repos (Harmonia + Theia + Hyperion) needing rebuilds of each. Implementing
     it after stage 2 keeps each verification attributable.
 
+  **Audit addendum (2026-11-19, found at the session pause - RECORDED, NOT IMPLEMENTED):**
+  a further camera divergence the 1-4 passes had not covered. Hyperion falls back to
+  **Cornell-scene constants** when a scene omits camera placement: `camPos =
+  config.cameraPos.value_or(kCornellCamPos)` and `camAt = ...value_or(kCornellCamTarget)`
+  (`Application.cpp` L241-242, constants at L17-18), plus an **unconditional**
+  `.focusDist = kCornellFocusDist` (L253). Theia has **no** position/target fallback at
+  all - `applySceneCamera` only writes the camera **when BOTH `cameraPos` and
+  `cameraAt` are present** (`Application.cpp` L247), otherwise it keeps its internal
+  defaults. *Risk assessment recorded honestly:* every qualification scene carries an
+  inline `[camera] translate`, so the fallback is unexercised on the battery; and
+  Hyperion pins `.lensRadius = 0.0f` (pinhole) at L252, so `focusDist` cannot affect a
+  render. Flagged for the audit session's adjudication, NOT implemented here.
+
+  **SESSION PAUSE (2026-11-19 21:17) - RESUME FROM HERE.**
+  - *State at pause:* all five repos **clean** (Theia 45 unpushed, Harmonia 20
+    unpushed, Hyperion/Aether/slang-math 0); **nothing pushed**; **no GPU job running**
+    (`theia 0`, `hyperion 0`, GPU 2%); `theia.exe` **21:06:11** = Gap A stage 1 +
+    `biasCorrectionMode` + all doc commits. `hyperion.exe` unchanged (2026-11-16).
+  - *Green receipts at pause:* Harmonia suite **H_CTEST=0**, Theia **100% of 67**,
+    **test_arch ARCH=0**, `qualify_gap_c.py` k3 FIRES 90.845032 / mask LIVE /
+    mask2-vs-mask3 0.000000, structural verifier **28/28**, clang-format clean.
+  - *Closed this session:* C4 perceptual PASS (8049b63), DN3-M4 (c7770f6/1b27c2a),
+    Gap C SATISFIED (0fbcb0b), arch gate (110f6c8), Gap B steps 1-2 (4d44983,
+    b79beb6, a478208), **Gap B battery regression complete** (33ac8bd: C1-C3
+    bit-identical, C4 changed only where `[Ceramic]` lives, tm 0.000 vs noise 0.605),
+    **`biasCorrectionMode` shipped** (700e479, level 2 NOT yet exercised), cross-renderer
+    audit executions 1-4 with backlog cleared (1602c91/d21f19f/6995cf9/0108882),
+    hoist decision (d268d5b).
+  - *NEXT, in dependency order:* **(1) implement the owner's HOIST decision (d268d5b)**
+    - the objective now mandates shared code explicitly, and NO edits for it have been
+    made yet. Feasibility already proven: both local builds set
+    `FETCHCONTENT_SOURCE_DIR_HARMONIA=C:/Development/GitHub/Harmonia`, so Harmonia
+    header changes reach Theia AND Hyperion (no pinned clone). Sites mapped: Harmonia
+    `AppConfig.hpp` L29-30 (add shared 1024x768), Harmonia `Camera.hpp` (add
+    `kDefaultVfovDeg = 39.1f`), Theia `main.cpp` L16-17, Hyperion `main.cpp` L25-26,
+    Theia `ApplicationCompute.cpp` L258 + its stale comment (L251-257), Hyperion
+    `Application.cpp` L19 + L248. Decide first whether the scope also covers the
+    position/target fallback in the addendum above.
+    **(2)** Gap A stage 2 (design b772a81; knob not safe past 3 until it lands).
+    **(3)** hybrid fixture battery ROI. **(4)** 2e report: temporal stability,
+    equal-time comparison, both galleries, final receipts. **(5)** exercise
+    `biasCorrectionMode` level 2 (`THEIA_BIAS_CORRECTION=2`).
+
   **CROSS-RENDERER DIVERGENCE AUDIT (2026-11-19) - owner-initiated, PRIORITY SESSION.**
   Owner hypothesis: if Hyperion/Theia/Harmonia do not actually call the same functions,
   renderer parity is unachievable and we would be "trying to achieve something which is
