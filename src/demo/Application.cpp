@@ -105,11 +105,12 @@ bool Application::onInitialize() {
             }
         }
         if (const auto shiftMaskRaw = harmonia::core::getEnvString("THEIA_SHIFT_MASK")) {
-            m_reconnectShiftEnabled = static_cast<std::uint32_t>(std::strtoul(shiftMaskRaw->c_str(), nullptr, 0)) & 3u;
-            harmonia::core::Logger::info("THEIA_SHIFT_MASK = {} (k2={} k3={})",
+            m_reconnectShiftEnabled = static_cast<std::uint32_t>(std::strtoul(shiftMaskRaw->c_str(), nullptr, 0)) & 7u;
+            harmonia::core::Logger::info("THEIA_SHIFT_MASK = {} (k2={} k3={} k4={})",
                                          m_reconnectShiftEnabled,
                                          (m_reconnectShiftEnabled & 1u) != 0u,
-                                         (m_reconnectShiftEnabled & 2u) != 0u);
+                                         (m_reconnectShiftEnabled & 2u) != 0u,
+                                         (m_reconnectShiftEnabled & 4u) != 0u);
         }
         // GI-ENH bias correction (THEIA_BIAS_CORRECTION) - parsed in
         // ApplicationCompute.cpp so this TU stays under the 1000-line gate.

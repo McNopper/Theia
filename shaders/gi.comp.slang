@@ -56,7 +56,8 @@ cbuffer GiPC {
     uint     reconnectShiftEnabled;        // GI-ENH (a) feature mask (0 = replay-only):
                                            //   bit0 (1) = k=2 reconnection shift
                                            //   bit1 (2) = k>=3 hybrid reconnection shift
-                                           // Step-through debug: THEIA_SHIFT_MASK.
+                                           //   bit2 (4) = k>=4 hybrid shift (Gap A; only reachable with
+                                           //             kMaxHybridK >= 4) - step-through debug: THEIA_SHIFT_MASK.
                                             // (0 = replay-only; A/B via THEIA_NO_RECONNECTION)
     uint     biasCorrectionMode;        // GI-ENH: ReSTIR DI merge bias correction
                                         // 0 = off (1/M finalize), 1 = basic (today),
@@ -2150,33 +2151,60 @@ bool tryReconnectionShiftK3(SurfaceHit primary, PathReservoir neighbor, float ad
         return false;
     }
 
-    // ── Replay: x'_1 → x'_2 in the source's hop direction ω_1. ──
-    const float3 hopDir = normalize(rec.hopDir[0]);
-    const float3 hopOrigin = primary.position + primary.geoNormal * kRayEpsilon;
+    // ── N-hop prefix replay (Gap A stage 2b): walk the recorded hops x'_1 -> ... -> x'_{k-1}
+    // in the source's hop directions. At kHopCapacity == 1 this replays exactly one hop and
+    // every accumulator below collapses to the old single-hop expression, in the same float
+    // operation order - so raising kMaxHybridK is the only thing that can change output.
+    const uint hopCount = min(rec.kLevel - 1u, kHopCapacity);
+    if (hopCount == 0u) {
+        return false; // kLevel >= 2 is guarded above and kHopCapacity >= 1, so unreachable
+    }
     TheiaTracer tracer;
-    GiHit h2 = traceClosestHit(hopOrigin, hopDir, kInf, kRayEpsilon);
-    if (!h2.hit) {
-        return false;
-    }
-    SurfaceHit surf2 = makeSurfaceHit(h2, -hopDir);
-
-    // Eligibility at x'_2: non-delta edge, no medium, roughness guard.
-    const float rough2 = saturate(surf2.mat.specularRoughAnisoIor.x);
-    if (rough2 < 0.2) {
-        return false;
-    }
-
-    // ── Prefix-side distance condition (the PREFIX half the reference checks per
-    // replay vertex: PathTracer.slang `isFarField = |origin - prevOrigin| >=
-    // nearFieldDistance` + the connect-eligibility gate `DistanceCondition &&
-    // !isFarField -> cannot connect`). The CONNECTION edge already rejects
-    // near-field below (distXk); the HOP edge must too — symmetric with the
-    // capture-side gate (`h.dist >= kDMin`, hybrid pair selection) and with the
-    // 1/dist^2 Jacobian term (geomGTargetHop) that a sub-dMin hop would blow up.
-    // Reject (not clamp) → the unbiased replay fallback, as every other gate here.
-    const float distHop2Max = dot(h2.worldPos - primary.position, h2.worldPos - primary.position);
-    if (distHop2Max < 0.1F * 0.1F) {   // d_min = nearFieldDistance (Params.slang), squared
-        return false;
+    SurfaceHit hopFrom = primary;      // origin surface of the hop being replayed
+    SurfaceHit surf2 = primary;        // last replayed surface = connection origin below
+    float3 wHop = 1.0.xxx;             // prod_j of the target-side hop weights
+    float jacHopNum = 1.0;             // prod_j (pdfY_j * geomGTarget_j)
+    float jacHopDen = 1.0;             // prod_j (hopPdf_j * hopGSource_j)
+    float footprintHop = 1.0e30;       // min_j 1/(hopPdf_j * hopGSource_j)
+    float minHopDist2 = 1.0e30;        // min_j |hop j|^2 - coincident-vertex guard
+    for (uint j = 0u; j < hopCount; ++j) {
+        const float3 hopDir_j = normalize(rec.hopDir[j]);
+        const float3 hopOrigin_j = hopFrom.position + hopFrom.geoNormal * kRayEpsilon;
+        GiHit hj = traceClosestHit(hopOrigin_j, hopDir_j, kInf, kRayEpsilon);
+        if (!hj.hit) {
+            return false;
+        }
+        SurfaceHit surfJ = makeSurfaceHit(hj, -hopDir_j);
+        // Per-hop eligibility: the same two gates the single-hop code applied, now at every
+        // replayed vertex (roughness guard + the prefix far-field test).
+        if (saturate(surfJ.mat.specularRoughAnisoIor.x) < 0.2) {
+            return false;
+        }
+        const float dHop_j = dot(hj.worldPos - hopFrom.position, hj.worldPos - hopFrom.position);
+        if (dHop_j < 0.1F * 0.1F) {   // d_min = nearFieldDistance (Params.slang), squared
+            return false;
+        }
+        // Target-side weight of this hop, evaluated at its ORIGIN surface toward hopDir_j.
+        const float pdfY_j = max(pdfBSDF(hopFrom.mat, hopFrom.wo, hopDir_j,
+            hopFrom.normal, hopFrom.T, hopFrom.B, hopFrom.coatN, hopFrom.coatT, hopFrom.coatB,
+            hopFrom.backface), 1.0e-10);
+        const float3 f_j = evalBSDF(hopFrom.mat, hopFrom.wo, hopDir_j,
+            hopFrom.normal, hopFrom.T, hopFrom.B, hopFrom.coatN, hopFrom.coatT, hopFrom.coatB,
+            hopFrom.backface);
+        float gHop_j;
+        const float fTerm_j = shadowTerminatorFactor(hopFrom.normal, hopFrom.geoNormal,
+                                                     hopDir_j, gHop_j);
+        if (fTerm_j <= 0.0) {
+            return false;
+        }
+        wHop *= f_j * max(dot(hopDir_j, hopFrom.normal), 0.0) * (fTerm_j / pdfY_j);
+        // Telescoping terms for THIS hop: destination geometry over source density.
+        jacHopNum *= pdfY_j * (max(dot(hj.shadingNormal, -hopDir_j), 0.0) / max(dHop_j, 1.0e-12));
+        jacHopDen *= rec.hopPdf[j] * rec.hopGSource[j];
+        footprintHop = min(footprintHop, 1.0 / max(rec.hopPdf[j] * rec.hopGSource[j], 1.0e-20));
+        minHopDist2 = min(minHopDist2, rec.hopDist2[j]);
+        hopFrom = surfJ;   // the next hop starts here
+        surf2 = surfJ;     // the connection origin is the LAST replayed surface
     }
 
     // ── Rebuild x_k's surface (same as k=2). ──
@@ -2209,7 +2237,7 @@ bool tryReconnectionShiftK3(SurfaceHit primary, PathReservoir neighbor, float ad
     const float3 toCamN = normalize(primary.position - cameraPos.xyz);
     const float distCam2 = max(dot(primary.position - cameraPos.xyz, primary.position - cameraPos.xyz), 1.0e-6);
     const float rPri2 = distCam2 * max(dot(primary.normal, -toCamN), 0.0) * (1.0 / (4.0 * kPi));
-    const float footprint1 = 1.0 / max(rec.pdfEdgeIn * rec.hopGSource[0], 1.0e-20);   // hop
+    const float footprint1 = footprintHop;   // min over hops (Gap A); == old single hop
     const float footprint2 = 1.0 / max(rec.pdfInK * rec.geomGInKSource, 1.0e-20);       // reconnection edge
     const float footprint3 = 1.0 / max(rec.pdfOmegaK * rec.geomGInKReverse, 1.0e-20);   // continuation
     const float roughK = saturate(surfK.mat.specularRoughAnisoIor.x);
@@ -2229,17 +2257,6 @@ bool tryReconnectionShiftK3(SurfaceHit primary, PathReservoir neighbor, float ad
         return false;
     }
 
-    // ── Target-side hop weight at x'_1 (direction ω_1 → x'_2). ──
-    const float pdfY1 = max(pdfBSDF(primary.mat, primary.wo, hopDir,
-        primary.normal, primary.T, primary.B, primary.coatN, primary.coatT, primary.coatB, primary.backface), 1.0e-10);
-    const float3 f1 = evalBSDF(primary.mat, primary.wo, hopDir,
-        primary.normal, primary.T, primary.B, primary.coatN, primary.coatT, primary.coatB, primary.backface);
-    float gPrim1;
-    const float fTerm1 = shadowTerminatorFactor(primary.normal, primary.geoNormal, hopDir, gPrim1);
-    if (fTerm1 <= 0.0) {
-        return false;
-    }
-    const float3 wHop = f1 * max(dot(hopDir, primary.normal), 0.0) * (fTerm1 / pdfY1);
 
     // ── Target-side reconnection-edge weight at x'_2 (direction ω_2 → x_k). ──
     const float pdfY2 = max(pdfBSDF(surf2.mat, surf2.wo, wp,
@@ -2294,15 +2311,15 @@ bool tryReconnectionShiftK3(SurfaceHit primary, PathReservoir neighbor, float ad
     // G-target terms computed at shift time (destination cosine / dist², same measure).
     // Technique split as in k=2: the k = d (NEE) terms take jacEnd, the continuation past
     // x_k takes jacCont carrying p^y_k(ω_k)/p^x_k(ω_k) (paper Eq. 2, k = d ⇒ p^x_k ≡ 1).
-    const float distHop2 = max(distHop2Max, 1.0e-12);
-    const float geomGTargetHop = max(dot(h2.shadingNormal, -hopDir), 0.0) / distHop2;
     const float geomGTargetEdge = max(dot(surfK.normal, woK), 0.0) / max(distXk * distXk, 1.0e-12);
-    const float jacEndDenom = rec.pdfEdgeIn * rec.hopGSource[0] * rec.pdfInK * rec.geomGInKSource;
-    const float jacEnd = (pdfY1 * geomGTargetHop * pdfY2 * geomGTargetEdge) /
-                         max(jacEndDenom, 1.0e-20);
+    // Gap A: products over ALL replayed hops (single hop => identical to the old
+    // `pdfEdgeIn * hopGSource[0]` and `pdfY1 * geomGTargetHop`, same operand order).
+    const float jacEndDenom = jacHopDen * rec.pdfInK * rec.geomGInKSource;
+    const float jacEnd = (jacHopNum * pdfY2 * geomGTargetEdge) / max(jacEndDenom, 1.0e-20);
+
     const float jacCont = jacEnd * pdfYk / max(rec.pdfOmegaK, 1.0e-20);
     // Reject (not clamp) on degenerate Jacobian inputs — see reconnectionJacobianValid.
-    if (!reconnectionJacobianValid(jacEnd, jacEndDenom, rec.hopDist2[0])) {
+    if (!reconnectionJacobianValid(jacEnd, jacEndDenom, minHopDist2)) {
         return false;
     }
     if (!reconnectionJacobianValid(jacCont, rec.pdfOmegaK, rec.dist2InK)) {
@@ -2516,7 +2533,8 @@ void restirPtEmit(SurfaceHit primary, uint2 px, float adaptiveClamp, inout RngSt
             if (reconnectShiftEnabled != 0u) {
                 if (neighbor.rec.kLevel == 1u) {
                     vShift = tryReconnectionShift(primary, neighbor, adaptiveClamp, rng, gShift);
-                } else if (neighbor.rec.kLevel == 2u) {
+            } else if (neighbor.rec.kLevel == 2u ||
+                       (neighbor.rec.kLevel >= 3u && (reconnectShiftEnabled & 4u) != 0u)) {
                     vShift = tryReconnectionShiftK3(primary, neighbor, adaptiveClamp, rng, gShift);
                 }
             }
