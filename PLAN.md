@@ -826,6 +826,48 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     receipts; hybrid battery ROI (candidate recorded above); audit position/target scope
     (fragment above).
 
+  **Gap A k=4 CORRECTNESS GATE (2026-11-20) - PASS, the k=4 OBSERVED honest limit
+  closed.**
+  - *What was owed:* the k=4 OBSERVED receipt recorded "it does NOT yet prove the k=4
+    result is correct (no Hyperion gate was applied to this fixture - its own noise
+    envelope has not been measured)". This is that gate, as a repo tool:
+    `tools/qualify_k4.py` (ruff check 0, ruff format 0; 6 SEQUENTIAL renders: Hyperion
+    ref seed17 + ref2 seed18 for a LIVE envelope, Theia masks 0/1/3/7 on the staged
+    `hybrid_k4` fixture, 320x240 / 256spp/256f / seed 17).
+  - *Checks and results:*
+    - **B mask LIVE** - replay(0) vs reconnection_k2(1) max|d| **22.240713**;
+    - **A k=4 FIRES** - k4_fallback(3, bit2 clear: k4 -> unbiased replay) vs k4(7,
+      bit2 set: N-hop body) max|d| **0.006322** - reproducing the earlier
+      observation's 0.006321669 exactly (deterministic, same seed/budget);
+    - **C CORRECTNESS under the owner's noise-envelope criterion (0fbcb0b) with the
+      envelope measured LIVE in-run** (ref seed17 vs seed18):
+
+      | metric | envelope | k4 arm | k4_fallback | k2 arm | replay |
+      |---|---|---|---|---|---|
+      | mean_diff | 2212.903 | **2003.768** | 2003.768 | 2003.866 | 2003.776 |
+      | rel_mse | 15701.66 | **1054.58** | 1054.58 | 1054.59 | 1054.59 |
+      | ssim (>=) | 0.7742 | **0.7836** | 0.7836 | 0.7836 | 0.7836 |
+      | tm_mean | 8.219 | **7.237** | 7.237 | 7.237 | 7.237 |
+
+      **k4 arm 4/4 WITHIN; k4_fallback arm 4/4 WITHIN** (gated too: if the
+      bit2-clear fallback arm were outside the envelope, the k4 pass would be
+      uninterpretable); context arms k2/replay also within.
+  - *Mechanical gate reported as context:* strict-AND FAILs for every arm incl.
+    ref-vs-ref - the recorded condition-C property of this fixture family (same as
+    hybrid_k3), not a k=4 property; verdict rests on the owner's criterion.
+  - ***Receipt:* `GAP A k=4 GATE: PASS` exit 0** - the N-hop body runs AND its result
+    sits inside Hyperion's own sampling noise on all four metrics. Gap A's acceptance
+    chain is now complete: stage 1/2a/2b landed with inertness receipts -> k=4
+    observed (mask differential) -> k=4 correct (this gate).
+  - *Pairwise deltas (context):* replay vs k4 0.249032; k4_fallback vs k4 0.006322;
+    replay vs reconnection_k2 22.240713 - the k=2 arm moves this fixture far more
+    than the k=4 body does, and the k=4 body's whole footprint is the 9-pixel band
+    the observation found.
+  - *Still owed after this:* 2e temporal-stability / equal-time / both galleries +
+    final receipts; owner decisions: hybrid battery ROI (candidate recorded),
+    audit position/target scope (fragment above), biasCorrectionMode level-0
+    knob semantics (options recorded in the level-2 receipt above).
+
   **SESSION PAUSE (2026-11-19 21:17) - RESUME FROM HERE.**
   - *State at pause:* all five repos **clean** (Theia 45 unpushed, Harmonia 20
     unpushed, Hyperion/Aether/slang-math 0); **nothing pushed**; **no GPU job running**
