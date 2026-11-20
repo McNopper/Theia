@@ -729,6 +729,36 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     fixture - its own noise envelope has not been measured) and it does not cover the
     battery/ROI receipts. Those remain owed.
 
+  **Hybrid fixture battery ROI - DERIVATION BLOCKED on the recorded method + CANDIDATE
+  PRODUCED. OWNER DECISION REQUIRED (an ROI is a gate parameter).**
+  - *The recorded method returns nothing here:* `qualify_sms` derives C4's ROI from "the
+    512-frame local-vs-reuse difference map". Running exactly that on `hybrid_k3`
+    (512f / seed 17, both modes) gives **difference mass 0.000000, peak 0.000000,
+    0 of 76 800 nonzero pixels** - i.e. `reuse` produced a **byte-identical** image to
+    `local`, so there is no region to window.
+  - *Not a misconfiguration - verified, not assumed:* the logs show the two modes really
+    engaged differently - local logs "SMS mode local - one independent frozen receiver per
+    pixel", reuse logs "SMS mode local plus experimental spatial reuse", and
+    `Application.cpp` sets `.smsSpatialReuse = m_smsMode == SmsMode::Reuse` (L197/L637).
+    So on THIS fixture spatial reuse contributes nothing measurable at this budget -
+    a property of the fixture (single emitter, 12 emissive triangles, deterministic
+    selection), not a broken flag. (C4 does show reuse engaging - 0.82% of pixels differ.)
+  - *Candidate from data already on disk (no new renders):* the window where the **k=3
+    hybrid shift itself** changes the result - mask1 (k2-only) vs mask3 (hybrid) from the
+    `qualify_gap_c` run: difference mass 263.61, peak 89.99, **8 203 of 76 800 nonzero**,
+    peak at normalised (0.5234, 0.0187) - the specular plate band.
+    **Candidate: `"HYBRID": {"scene": "hybrid_k3.scene.toml", "roi": [0.323, 0.0, 0.723, 0.3]}`**
+    covering 48.4 % of that shift's difference mass.
+  - *Why this is put to the owner rather than adopted:* the ROI decides which pixels the
+    correctness energy gate averages over, so choosing its derivation is a **gate/parameter
+    decision** (family law), and it differs from the method the plan records. The
+    mask-differential derivation is arguably better matched to what this fixture is FOR
+    (it windows the k=3 shift's own footprint), but the substitution must be an owner call.
+  - *Alternatives for the owner:* (a) accept the mask-differential ROI above;
+    (b) keep the recorded method and accept that this fixture has no reuse-active window
+    (i.e. drop the receipt for it); (c) re-derive from a different signal (e.g. SMS-event
+    diagnostics via `THEIA_SMS_DIAGNOSTICS=1`) which would need a new tool.
+
   all - `applySceneCamera` only writes the camera **when BOTH `cameraPos` and
   `cameraAt` are present** (`Application.cpp` L247), otherwise it keeps its internal
   defaults. *Risk assessment recorded honestly:* every qualification scene carries an
