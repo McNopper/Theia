@@ -1303,6 +1303,8 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
     state.sampledAlphaPrev = saturate(primary.mat.specularRoughAnisoIor.x); // material default;
     //   overwritten by the primary's actual sampled lobe below (a pass-through primary keeps it)
     state.arrivalDist = 0.0;
+    state.prevPosition = primary.position; // Gap A: origin of the first hop /
+    state.prevNormal = primary.normal;     // predecessor of the first edge
     // GI-ENH: the reconnection vertex x_k is chosen by the paper's TWO criteria, at the
     // FIRST pair (x_{k-1}, x_k) that satisfies both (ReSTIR PT Enhanced p.3):
     //   (i)  roughness   min(alpha_{x_{k-1}}, alpha_{x_k}) >= alpha_min   (both vertices)
@@ -1447,11 +1449,8 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
     const uint bounces = max(maxDepth, 1u) - primaryCharge;
     const uint maxIters = bounces + kMaxNullInteractions;
     uint bounce = 0u;
-    // Paper criterion (i) is PAIRWISE: min(alpha_{x_{k-1}}, alpha_{x_k}) >= alpha_min. Track
-    // the previous vertex so each candidate x_k can be tested together with its predecessor.
-    bool hopCaptured = false;
-    float3 x2Pos = 0.0.xxx;
-    float3 x2Normal = 0.0.xxx;
+    // Gap A: the previous vertex is tracked in state.prevPosition/prevNormal (origin of
+    // the next hop / predecessor of the reconnection edge), replacing these locals.
     // PERF8 (RTXPT §7): ray-class material LOD state. The RAY CLASS is chosen at
     // spawn ("the ray-generation shader chooses the ray class"): the primary's
     // continuation is full-material when spawned from a delta/near-specular vertex;
@@ -1671,6 +1670,23 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
         }
         // Gap B: distance for the hybrid pair test the shared integrator runs below.
         state.arrivalDist = h.dist;
+        // Gap A stage 2: capture hop[bounce] at ARRIVAL, not after integrateSurface.
+        // The hop's SOURCE pdf is state.lastBsdfPdf (the pdf at the origin vertex) and
+        // is only valid before this vertex's integrateSurface overwrites it - the old
+        // post-integrate capture could therefore only ever store hop 0's edge pdf.
+        // At kHopCapacity == 1 this is byte-for-byte the old bounce-0 hop.
+        if (captureRe && bounce < kHopCapacity) {
+            const float3 hopOrigin = state.prevPosition;
+            const float3 dHop = h.worldPos - hopOrigin;
+            const float3 hopAxis = normalize(dHop);
+            state.rec.hopDir[bounce] = normalize(dir);
+            state.rec.hopPdf[bounce] = state.lastBsdfPdf;
+            state.rec.hopDist2[bounce] = max(dot(dHop, dHop), 1.0e-12);
+            state.rec.hopGSource[bounce] = max(dot(h.shadingNormal, -hopAxis), 0.0) /
+                                          state.rec.hopDist2[bounce];
+            state.rec.hopGReverse[bounce] = max(dot(state.prevNormal, hopAxis), 0.0) /
+                                            state.rec.hopDist2[bounce];
+        }
         state.depth = bounce + primaryCharge;
         integrateSurface(tracer, surf,
             emissiveTriangleCount, emissiveTriangles, emissiveCdf,
@@ -1680,21 +1696,6 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
         if (smsEnabled!=0u)
             smsAdvancePathSurface(smsPath,surf,state,h.geoNormal,uint2(h.instanceIndex,h.materialIdx),
                 remainingDepth,currentSmsReceiver);
-        // GI-ENH k≥3: capture the hop (x_1 → x_2) at bounce 0 — direction, geometry, and
-        // the reconnection-edge direction/pdf from x_2's BSDF sample.
-        if (captureRe && bounce == 0u && !hopCaptured) {
-            hopCaptured = true;
-            const float3 dX1X2 = h.worldPos - primary.position;
-            const float3 x1ToX2 = normalize(dX1X2);
-            state.rec.hopDir[0] = normalize(dir); // direction x_1 → x_2
-            state.rec.hopDist2[0] = max(dot(dX1X2, dX1X2), 1.0e-12);
-            state.rec.hopGSource[0] = max(dot(h.shadingNormal, -x1ToX2), 0.0) / state.rec.hopDist2[0];
-            state.rec.hopGReverse[0] = max(dot(primary.normal, x1ToX2), 0.0) / state.rec.hopDist2[0];
-            state.rec.omegaInK = normalize(state.nextDirection); // direction x_2 → x_3
-            state.rec.pdfInK = state.lastBsdfPdf; // p_s(ω_2 | x_2)
-            x2Pos = h.worldPos;
-            x2Normal = h.shadingNormal;
-        }
         if (captureRe && !recHarvested && state.reCaptured != 0u) {
             // GI-ENH (a): harvest x_k's raw surface identity (rebuilt exactly at shift
             // time) + the walk's radiance level after x_k's own emission/NEE terms.
@@ -1714,11 +1715,11 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
                 state.rec.geomGReverse = max(dot(primary.normal, x1ToXk), 0.0) / state.rec.dist2X1Xk;
             } else {
                 // GI-ENH k≥3: reconnection edge = x_2 → x_k (hop is replayed).
-                const float3 dX2Xk = h.worldPos - x2Pos;
+                const float3 dX2Xk = h.worldPos - state.prevPosition;
                 const float3 x2ToXk = normalize(dX2Xk);
                 state.rec.dist2InK = max(dot(dX2Xk, dX2Xk), 1.0e-12);
                 state.rec.geomGInKSource = max(dot(h.shadingNormal, -x2ToXk), 0.0) / state.rec.dist2InK;
-                state.rec.geomGInKReverse = max(dot(x2Normal, x2ToXk), 0.0) / state.rec.dist2InK;
+                state.rec.geomGInKReverse = max(dot(state.prevNormal, x2ToXk), 0.0) / state.rec.dist2InK;
             }
             state.rec.kLevel = state.captureTarget + 1u;
             // The suffix divisor: the FULL prefix throughput at x_k (w_1·w_2, post-RR —
@@ -1729,6 +1730,10 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
             state.rec.flags |= (min(state.throughput.x, min(state.throughput.y, state.throughput.z)) > 0.0) ? 4u : 0u;
             recRadianceAfterXk = state.radiance;
         }
+        // Gap A stage 2: THIS vertex becomes the origin of the next hop and the
+        // predecessor of the next reconnection edge - read at the next arrival.
+        state.prevPosition = h.worldPos;
+        state.prevNormal = h.shadingNormal;
 
         if (state.terminated) {
             break;
