@@ -1001,6 +1001,42 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     bit2, and only then raise the knob - each step default-inert so a regression can
     never be attributed to "the cap changed".
 
+  **Gap A STAGE 2a LANDED (2026-11-20) - the capture side. Harmonia `d9182ce`,
+  Theia `1e817f2`. DEFAULT-INERT, verified.**
+  - *Why the capture had to MOVE (the timing constraint the design predicted):* a hop's
+    **source pdf** is `state.lastBsdfPdf` at its ORIGIN vertex, and that value survives
+    only until the current vertex's `integrateSurface` overwrites it. The old capture
+    ran after `integrateSurface`, so it could store hop 0's edge pdf and nothing else.
+    The capture now runs at **ARRIVAL** (after the `arrivalDist` feed, before
+    `integrateSurface` - order asserted by the verifier: arrival 1671 < capture 1677 <
+    integrateSurface 1690) and generalises to `bounce < kHopCapacity`.
+  - *What landed:* `ReconnectionCapture.hopPdf[kHopCapacity]` (the per-hop source pdf the
+    telescoping denominator needs - the 28 B/hop correction of 3c9e418); `PathState.
+    prevPosition/prevNormal` seeded to the primary and advanced **after** the harvest
+    reads them; the **reconnection edge** (`omegaInK/pdfInK`) captured inside
+    `integrateSurface` right where `captureTarget` is set, gated `captureTarget != 0`,
+    so the edge is **x_{k-1} -> x_k for ANY k** instead of being hard-wired to the
+    bounce-0 vertex (correct only for k=3); harvest reads `prevPosition/prevNormal`;
+    dead `x2Pos/x2Normal/hopCaptured` removed together with the **orphaned `prevRough`
+    PAIRWISE comment Gap B left behind** when it deleted that variable.
+  - *Inertness, measured not asserted:* `qualify_gap_c.py` on the hybrid fixture (the
+    scene where k=3 actually fires) reports **every statistic identical to the
+    pre-change run** - reference max 3848.851562 / std 77.901085; k2 arm max
+    2160.647949 / std 27.346701; **k3 FIRES 90.845032**; mask LIVE 90.845032;
+    **mask2 vs mask3 0.000000**; tm 7.088/7.089. At `kHopCapacity == 1` every value
+    the new code produces equals the old code's byte-for-byte.
+  - *Receipts:* **Harmonia BUILD=0**, **Theia BUILD=0**; verifier **36/36
+    VERIFY_EXIT=0** (brace balance 63/63 and 299/299, all five reconnection-edge
+    fields intact, `kMaxHybridK` still 3, dispatch still `kLevel == 2u`); suites
+    **Harmonia 0** and **Theia 0**.
+  - ***Still owed for stage 2 (2b/2c):*** the **N-hop prefix replay** in
+    `tryReconnectionShiftK3` (loop `hopCount = kLevel - 1`, per-hop eligibility,
+    `wHop` product, `jacEndDenom`/numerator products, footprint `min` over hops), the
+    `THEIA_SHIFT_MASK` **bit2** dispatch for k=4, and **only then** raising
+    `kMaxHybridK` to 4 - which is what makes the k=4 acceptance (mask differential)
+    runnable. Nothing about k>=4 is reachable yet, so the knob remains unsafe to raise,
+    exactly as recorded.
+
 **Living source of truth for outstanding work.** Shipped items are removed from the work
 lists; the shipped record is the *Baseline* below and `git log`. Only outstanding work is
 tracked here.
