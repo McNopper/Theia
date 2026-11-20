@@ -60,9 +60,12 @@ cbuffer GiPC {
                                            //             kMaxHybridK >= 4) - step-through debug: THEIA_SHIFT_MASK.
                                             // (0 = replay-only; A/B via THEIA_NO_RECONNECTION)
     uint     biasCorrectionMode;        // GI-ENH: ReSTIR DI merge bias correction
-                                        // 0 = off (1/M finalize), 1 = basic (today),
-                                        // 2 = ray_traced (+ per-source conservative
-                                        // visibility). THEIA_BIAS_CORRECTION.
+                                        // 0 = RTXDI OFF = BIT-IDENTICAL to 1 (the
+                                        // default computes RTXDI's OFF formula -
+                                        // see ApplicationCompute.cpp), 1 = today,
+                                        // 2 = + per-source conservative visibility
+                                        // (RAY_TRACED's visibility half).
+                                        // THEIA_BIAS_CORRECTION.
     uint     smsEnabled;
     uint     materialLodEnabled;          // PERF8 (RTXPT §7): 1 = material-LOD tier active (interactive);
                                           // 0 = estimator-pure capture — full material everywhere
@@ -1116,10 +1119,14 @@ float4 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
             if (prev.lightIdx != kReservoirEmpty && prev.M > 0u) {
                 prev.M = min(prev.M, kRestirMCap); // cap history length to bound temporal bias
                 RestirSampleEval pe = evalReservoirSample(primary, prev.lightIdx, prev.samplePoint, prev.sampleNormal);
-                // GI-ENH bias correction: level 0 = RTXDI OFF (1/M finalize, no target-PDF
-                // re-evaluation); level 1 = basic = today (p_hat unchanged, no extra RNG or
-                // ray drawn - bit-identical); level 2 = + per-source conservative visibility.
-                const float pMerge = (biasCorrectionMode == 0u) ? 1.0 : pe.p_hat;
+                // GI-ENH bias correction (RTXDI source, DIResamplingFunctions.hlsli
+                // commit 0cfd439): OFF keeps this target-pdf re-evaluation in EVERY
+                // mode - only the finalize differs - so level 0 == level 1 == today's
+                // formula here (owner 2026-11-20: the old pMerge = 1.0 invented a mode
+                // no reference implementation has and measured 1.355e34 output; fixed
+                // by aliasing, not by keeping a landmine). Level 2 = + the visibility
+                // test below; level 1 draws no extra RNG or ray (bit-identical).
+                const float pMerge = pe.p_hat;
                 bool generatable = true;
                 if (biasCorrectionMode == 2u && pe.valid) {
                     const float3 srcPos = t_giBuffer.Load(int3(prevCoord.x, prevCoord.y, 0)).xyz;
@@ -1198,8 +1205,9 @@ float4 restirDiDirect(SurfaceHit primary, uint2 px, inout RngState rng) {
                 neighbor.M = min(neighbor.M, kRestirMCap);
                 RestirSampleEval ne = evalReservoirSample(primary, neighbor.lightIdx,
                                                           neighbor.samplePoint, neighbor.sampleNormal);
-                // GI-ENH bias correction - same three levels as the temporal merge.
-                const float pMergeN = (biasCorrectionMode == 0u) ? 1.0 : ne.p_hat;
+                // GI-ENH bias correction - same levels as the temporal merge (0 == 1
+                // by the RTXDI OFF correspondence above; 2 adds the visibility test).
+                const float pMergeN = ne.p_hat;
                 bool generatableN = true;
                 if (biasCorrectionMode == 2u && ne.valid) {
                     generatableN = sourceConservativeVisible(nWorldPos, neighbor.lightIdx,

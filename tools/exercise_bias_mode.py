@@ -26,11 +26,14 @@ WHAT OUR SHIPPED KNOB ACTUALLY COMPUTES (gi.comp restirDiDirect):
   level 2     : level 1 + sourceConservativeVisible() per merged temporal/spatial
                source - the VISIBILITY half of RAY_TRACED (the piSum half is absent;
                recorded as the second gap when this run was taken).
-  level 0     : pMerge forced to 1.0 - drops p_hat from the MERGE weight, which no
-               reference algorithm does (RTXDI keeps weightAtCurrent in OFF too) and
-               which compounds w_sum_prev/p_hat_prev every temporal frame. MEASURED
-               EXPLODED (see FINDING below) - recorded in PLAN + owner decision
-               pending; does NOT gate this instrument's level-2 receipt.
+  level 0     : POST-FIX (owner decision 2026-11-20, "Faithful: 0 aliases the
+                default"): the divergent pMerge = 1.0 branch is DELETED - RTXDI's OFF
+                keeps weightAtCurrent in the merge in every mode, and its OFF
+                finalize IS what level 1 computes, so 0 renders BIT-IDENTICAL to 1.
+                The PRE-fix level 0 measured 1.355e34 (PLAN "LEVEL-2 EXERCISED");
+                this instrument now VERIFIES the alias (level0 vs level1 max|d| = 0
+                expected - reported below as FIX VERIFIED, or as the EXPLODED
+                finding if a build still carries the pre-fix branch).
 
 Checks and what each proves:
   0. CONTENT PRECONDITION (exit 5): every frame non-degenerate - the strict-AND
@@ -395,32 +398,48 @@ def main() -> int:
     for name in (*ARMS,):
         print(f"   {name:18s} {'PASS' if bool(cross[name]['gate']) else 'FAIL'}")
 
-    # FINDING: level 0's structural explosion (reported loudly, not gated here).
+    # Level-0 status: PRE-fix EXPLOSION vs POST-fix alias (owner 2026-11-20).
     l0 = frames["level0"].astype(np.float64)
     l1 = frames["level1"].astype(np.float64)
     rf = frames["reference"].astype(np.float64)
-    per_frame = (float(l0.max()) / max(float(l1.max()), 1e-30)) ** (1.0 / args.frames)
-    print("\nFINDING - level 0 output is EXPLODED (structural, not a threshold call):")
-    print(
-        f"   max level0 {float(l0.max()):.6e}  vs level1 {float(l1.max()):.6e}"
-        f"  vs ref {float(rf.max()):.6e}"
-    )
-    print(
-        f"   implied per-frame growth over {args.frames}f: {per_frame:.3f}x"
-        f"  (level0 vs level1 differing pixels: "
-        f"{int((np.abs(l0 - l1).max(axis=2) > 0).sum())}/{l1.shape[0] * l1.shape[1]})"
-    )
-    print(
-        "   mechanism: pMerge=1.0 drops p_hat from the merge weight, so each temporal"
-    )
-    print(
-        "   hop adds w_sum_prev/p_hat_prev with nothing to cancel it; RTXDI's OFF mode"
-    )
-    print(
-        "   KEEPS weightAtCurrent in the merge (source read, see module header). This"
-    )
-    print("   mode matches no reference algorithm. NOT gated here (level-2 receipt):")
-    print("   recorded in PLAN + put to the owner for a knob-semantics decision.")
+    d0 = float(np.abs(l0 - l1).max())
+    if d0 > 0.0:
+        per_frame = (float(l0.max()) / max(float(l1.max()), 1e-30)) ** (
+            1.0 / args.frames
+        )
+        print(
+            "\nFINDING - level 0 output is EXPLODED (structural, not a threshold call):"
+        )
+        print(
+            f"   max level0 {float(l0.max()):.6e}  vs level1 {float(l1.max()):.6e}"
+            f"  vs ref {float(rf.max()):.6e}"
+        )
+        print(
+            f"   implied per-frame growth over {args.frames}f: {per_frame:.3f}x"
+            f"  (level0 vs level1 differing pixels: "
+            f"{int((np.abs(l0 - l1).max(axis=2) > 0).sum())}/{l1.shape[0] * l1.shape[1]})"
+        )
+        print(
+            "   mechanism: pMerge=1.0 drops p_hat from the merge weight, so each temporal"
+        )
+        print(
+            "   hop adds w_sum_prev/p_hat_prev with nothing to cancel it; RTXDI's OFF mode"
+        )
+        print(
+            "   KEEPS weightAtCurrent in the merge (source read, see module header). This"
+        )
+        print(
+            "   mode matches no reference algorithm. NOT gated here (level-2 receipt):"
+        )
+        print(
+            "   this build still carries the PRE-fix branch the owner chose to remove."
+        )
+    else:
+        print("\nLEVEL-0 FIX VERIFIED - level 0 aliases the default (max|d| = 0):")
+        print("   faithful RTXDI-OFF implementation (owner decision 2026-11-20): OFF's")
+        print("   finalize is exactly what level 1 computes, so the two levels render")
+        print("   pixel-identical and the pre-fix 1.355e34 branch is gone from the")
+        print(f"   shader (level0 vs level1: 0 differing pixels, max|d| = {d0:.7f}).")
 
     print()
     if not fires:
@@ -439,8 +458,12 @@ def main() -> int:
         f"RESULT: LEVEL-2 RECEIPT PASS  (parse={parse_ok}, control=default==level1, "
         f"fires max|d|={d_c:.7f}, envelope 4/4={d_pass})"
     )
-    print("       LEVEL-0 FINDING: EXPLODED - structural defect recorded, owner")
-    print("       decision pending (does not gate this receipt).")
+    if d0 > 0.0:
+        print("       LEVEL-0 FINDING: EXPLODED - this build still carries the pre-fix")
+        print("       branch (owner decision: faithful alias; recorded in PLAN).")
+    else:
+        print("       LEVEL-0: alias verified (max|d| = 0) - faithful RTXDI-OFF fix in")
+        print("       effect; the pre-fix 1.355e34 branch is gone.")
     return 0
 
 

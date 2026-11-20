@@ -38,8 +38,15 @@ namespace {
     namespace fs = std::filesystem;
     dirOut = fs::temp_directory_path() / "theia_anim_tlas_test";
     fs::create_directories(dirOut);
+    // Camera-presence contract (owner 2026-11-20): the loadable scene carries a
+    // placement (SceneLoader rejects camera-less scenes).
     constexpr std::string_view kScene = R"toml([animation_clock]
 fps = 30
+
+[camera]
+translate = [0.0, 1.0, 4.0]
+rotate_x = -10.0
+rotate_y = 0.0
 
 [[mesh]]
 name = "ball"

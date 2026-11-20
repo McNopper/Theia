@@ -21,10 +21,18 @@
 
 namespace theia {
 
-// GI-ENH bias correction (THEIA_BIAS_CORRECTION): RTXDI's three-level biasCorrectionMode.
-// 0 = off (1/M finalize, explicitly biased), 1 = basic = today's behaviour (the default,
-// bit-identical), 2 = ray_traced = basic + a per-source conservative visibility test in
-// the ReSTIR DI temporal/spatial merges. Lives here so Application.cpp stays under the
+// GI-ENH bias correction (THEIA_BIAS_CORRECTION): RTXDI's three-level
+// biasCorrectionMode, corrected against the reference source
+// (DIResamplingFunctions.hlsli, commit 0cfd439 - Theia/PLAN "LEVEL-2 EXERCISED"):
+// RTXDI's OFF finalize IS FinalizeResampling(state, 1.0, state.M) = w_sum/(p_hat*M),
+// exactly what level 1 computes. 0 = RTXDI OFF = BIT-IDENTICAL to the default here
+// (owner decision 2026-11-20: the pre-fix level 0 dropped the merge's target-pdf
+// weight, matched NO reference mode and measured 1.355e34 output - fixed by
+// aliasing instead of inventing a mode); 1 = today's behaviour (the default,
+// bit-identical; RTXDI-OFF-form, historically labeled "basic" - RTXDI's real BASIC
+// piSum normalization is a recorded unimplemented gap); 2 = basic + a per-source
+// conservative visibility test in the ReSTIR DI temporal/spatial merges (the
+// RAY_TRACED visibility half). Lives here so Application.cpp stays under the
 // 1000-line architecture gate (same Extract Method reason as applySceneCamera).
 void Application::parseBiasCorrectionEnv() {
     if (const auto biasRaw = harmonia::core::getEnvString("THEIA_BIAS_CORRECTION")) {
@@ -244,6 +252,11 @@ void Application::submitAsyncCompute(VkCommandBuffer cmd,
 // (C4 emitter row 31 vs 43; 50x exposure divergence). Split out of onSceneLoaded so
 // Application.cpp stays under the 1000-line architecture gate.
 void Application::applySceneCamera(const harmonia::scene::SceneLoader::SceneConfig& sceneConfig) {
+    // Camera-presence contract (owner ruling 2026-11-20): SceneLoader refuses any
+    // scene without placement, so this gate always holds for loaded scenes - the
+    // "keep internal defaults otherwise" path is unreachable now, and no scene can
+    // render a silent default view (the audit's position/target row, resolved by
+    // making presence a shared load requirement rather than a per-renderer choice).
     if (sceneConfig.cameraPos && sceneConfig.cameraAt) {
         m_camera.position = *sceneConfig.cameraPos;
         m_camera.target = *sceneConfig.cameraAt;
