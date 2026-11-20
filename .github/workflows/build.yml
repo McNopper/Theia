@@ -275,19 +275,49 @@ jobs:
           test -e "$SDK_ROOT/lib/libSDL3.so" && test -e "$SDK_ROOT/include/SDL3/SDL.h"
           echo "VULKAN_SDK=$SDK_ROOT (SDL3 bridged)"
 
-      # clang-cl may or may not ship on the runner image; like the SDK, a
-      # PATH change from choco is not inherited by later steps. (Linux uses
+      # clang-cl may or may not ship on the runner image; PATH changes are not
+      # inherited by later steps, so they go through GITHUB_ENV. (Linux uses
       # the image's g++, proven in WSL - no install needed.)
       - name: Ensure clang-cl
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          if (Get-Command clang-cl -ErrorAction SilentlyContinue) {
-            Write-Output 'clang-cl present on image'
-          } else {
-            choco install -y llvm
-            "PATH=C:\Program Files\LLVM\bin;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          # MSVC 14.52 (VS 18) headers hard-require Clang >= 22 (STL1000:
+          # "Unexpected compiler version"). The image's standalone LLVM drifts
+          # independently (windows-latest shipped Clang 20 on 2026-11-20 and every
+          # windows leg went red), so resolve a >=22 toolchain explicitly: prefer
+          # VS 18's bundled LLVM - the family's local dev toolchain, 22.1.3, the
+          # same number clang-format is pinned to in the lint job - else install
+          # the pinned official toolchain tarball. Either way the chosen bin dir
+          # goes first on PATH via GITHUB_ENV, shadowing the image's older clang-cl.
+          $min = [version]'22.0.0'
+          $pin = '22.1.3'
+          $exe = $null
+          foreach ($edition in 'Enterprise','Community','BuildTools') {
+            $hit = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\*\$edition\VC\Tools\Llvm\x64\bin\clang-cl.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($hit) { $exe = $hit.FullName; break }
           }
+          $ver = $null
+          if ($exe) {
+            $m = [regex]::Match(((& $exe --version) -join ' '), 'clang version (\d+)\.(\d+)\.(\d+)')
+            if ($m.Success) { $ver = [version]"$($m.Groups[1].Value).$($m.Groups[2].Value).$($m.Groups[3].Value)" }
+          }
+          if ($exe -and $ver -ge $min) {
+            Write-Output "using VS-bundled clang-cl $ver : $exe"
+            $dir = Split-Path $exe
+          } else {
+            Write-Output "VS-bundled clang-cl unavailable or older than $min (ver=$ver) - installing pinned LLVM $pin"
+            $dest = Join-Path $env:TEMP "llvm-$pin"
+            $tar = Join-Path $env:TEMP "clang-llvm-$pin.tar.xz"
+            if (-not (Test-Path (Join-Path $dest 'bin\clang-cl.exe'))) {
+              Invoke-WebRequest -Uri "https://github.com/llvm/llvm-project/releases/download/llvmorg-$pin/clang+llvm-$pin-x86_64-pc-windows-msvc.tar.xz" -OutFile $tar -UseBasicParsing
+              New-Item -ItemType Directory -Path $dest -Force | Out-Null
+              tar -xf $tar -C $dest
+            }
+            $dir = Join-Path $dest 'bin'
+          }
+          "$dir;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          & (Join-Path $dir 'clang-cl.exe') --version
 
       - uses: actions/cache@v4
         with:
