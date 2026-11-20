@@ -173,7 +173,7 @@ EXIT_VIOLATIONS = 1
 EXIT_USAGE = 2
 EXIT_SKIP = 77
 
-CHECK_ARCH_VERSION = "1.5.0"
+CHECK_ARCH_VERSION = "1.5.1"
 
 INCLUDE_RE = re.compile(r'^\s*#\s*include\s*([<"])([^>"]+)[>"]', re.MULTILINE)
 ARCH_BLOCK_RE = re.compile(r"```arch[ \t]*\r?\n(.*?)```", re.DOTALL)
