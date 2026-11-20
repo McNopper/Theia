@@ -868,6 +868,135 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     audit position/target scope (fragment above), biasCorrectionMode level-0
     knob semantics (options recorded in the level-2 receipt above).
 
+  **OWNER DECISIONS CONSUMED (2026-11-20, question round) + CAMERA PRESENCE CONTRACT
+  - rulings verbatim + PLAN BEFORE EDIT.** Baseline: Theia `5f87de5`, Harmonia `c67c5b0`,
+  Hyperion `5efe43f`.
+  - *Decision 1 - biasCorrectionMode level 0:* owner chose **"Faithful: 0 aliases the
+    default"** - implement level 0 exactly as RTXDI's OFF (`FinalizeResampling(1.0,
+    M)`, which IS what level 1 computes), i.e. the two `pMerge/pMergeN` ternaries in
+    `gi.comp` collapse to the unconditional target-pdf weight, 0 becomes
+    bit-identical to 1, the measured 1.355e34 explosion disappears, and comments get
+    corrected (default = RTXDI-OFF-form, not BASIC; BASIC/piSum stays a recorded
+    unimplemented gap). Edit plan recorded in the level-2 receipt options above;
+    default (1) untouched structurally -> qualify_gap_c arm stats must stay
+    identical (receipt).
+  - *Decision 2 - hybrid battery ROI:* owner chose **"Accept mask-differential ROI"**
+    - `[0.323, 0.0, 0.723, 0.3]` (derivation + coverage in 6873e3a) adopted into
+    `qualify_sms.py` CASES as the `HYBRID` case; the method substitution is now
+    sanctioned, no longer a pending candidate.
+  - *Decision 3 - audit camera row:* superseded mid-answer by the stronger rulings
+    below (owner: "remove Hyperion's fallback" -> then "both renderers always need
+    at least one camera; it's a bug" + the architecture split).
+  - *Owner ruling 1:* **"if hyperion does not need a camera is a bug. both hyperion
+    and theia always need at least one camera in the scene."**
+  - *Owner ruling 2 (architecture split):* **"the idea is, that hyperion is the
+    offline renderer, and theia the real-time one. harmonia is the common code.
+    aether for the file format. in general, most code should be in aether for the
+    scene and harmonia of the engine behaviour. theia and hyperion should be small,
+    implementing only the features which are true to their purpose. so, something
+    like the camera issue can be considered as a bug."**
+  - *Design that follows from both rulings:* the REQUIREMENT is engine behaviour ->
+    enforced ONCE in Harmonia's `SceneLoader::load` (the single door every scene
+    takes: `App.cpp` L566 -> `onSceneLoaded`), NOT per renderer. The FORMAT stays
+    permissive in Aether - `feature_matrix`/`skinned*` remain valid camera-less
+    format fixtures (aether `SceneParser` + its tests never render); the loader
+    rejects them instead. Mirrors the H-05 working-color-space guard: precise
+    diagnostic + `std::unexpected(VK_ERROR_INITIALIZATION_FAILED)`.
+  - *Survey before committing to the shape (measured, not assumed):* 44 scene files
+    carry complete placement (translate + rotate_x/y inline or resolvable preset);
+    the 4 camera-less files are Aether format-test-only; the node-camera fixtures
+    (camera_orbit/skinned_orbit) carry `node` PLUS static translate/rotate as
+    preview; C4's preset reference is resolve-on-site with full inline placement.
+    So the contract `(cameraPos && cameraAt)` rejects NOTHING that renders today.
+  - *Edits (exact):*
+    1. **Harmonia `src/harmonia/scene/SceneLoader.cpp`** - after
+       `applyCamera(desc->camera, cfg)` (L538): `if (!(cfg.cameraPos && cfg.cameraAt))`
+       -> Logger::error naming the file + the remedy (translate AND rotation,
+       inline or preset) + `std::unexpected(VK_ERROR_INITIALIZATION_FAILED)`.
+       AFTER the working-color-space check (H-05 tests keep failing on color space,
+       intent preserved), BEFORE mesh import.
+    2. **Harmonia `SceneLoader.hpp`** - SceneConfig comment L57-59: static pos/at
+       stop being "fallback/preview" and become the REQUIRED preview the contract
+       enforces (node cameras re-place on top).
+    3. **Hyperion `src/demo/Application.cpp`** - delete `kCornellCamPos`,
+       `kCornellCamTarget`, `kCornellFocusDist` (L17-19) and the two
+       `value_or` fallbacks (L240-241; single caller L152 always comes from the
+       loader, so `*config.cameraPos`/`*config.cameraAt` is contract-guaranteed);
+       `.focusDist` becomes `sm::length(camAt - camPos)` - scene-derived, inert at
+       the pinned `lensRadius = 0` (pinhole) but no longer a private constant.
+    4. **Theia `ApplicationCompute.cpp`** - comment only: the `if (cameraPos &&
+       cameraAt)` gate is now contract-guaranteed upstream; no behavior change
+       (Theia never had a private default VIEW - it kept internal defaults, which
+       the shared rejection now makes unreachable for loads).
+    5. **Test fixtures gain `[camera]`** (scenes must have cameras - the fixtures
+       adapt to the contract, the contract does not bend): Harmonia
+       `tests/integration/test_scene_loader.cpp` (skinSceneToml + morphSceneToml
+       helpers, the sphere writer L305, the tonemapper writer L109, the
+       stage_toggles writer L169), Harmonia `tests/fixtures/SkinTestSupport.hpp`
+       (its skinSceneToml), Theia + Hyperion `tests/module/test_scene_anim.cpp`
+       `kScene`. Color-space reject writers stay camera-less ON PURPOSE (the H-05
+       check runs first - ordering, not coincidence).
+    6. **New negative test** (the contract's own receipt):
+       `TEST(SceneLoader, RejectsSceneWithoutCamera)` - mesh+instance, no
+       `[camera]` -> `load` fails.
+  - *Receipt checklist (GPU items queue behind the running 2e section-V renders):*
+    builds x3 = 0; suites Harmonia (incl. the new negative test) / Theia 67 /
+    Hyperion 79; clang-format on touched C++; `test_arch` where touched;
+    **negative-path proof**: `hyperion --scene feature_matrix` -> the precise
+    diagnostic + "Scene load failed" + NO image (not a Cornell view);
+    **bit-identity proof**: `cornell_classic` render before/after the Hyperion edit
+    -> max|d| = 0 (camera present -> only focusDist's spelling changes, inert at
+    pinhole; this is what makes the fallback deletion safe for every valid scene).
+  - *Recorded follow-up implied by ruling 2 (NOT in this change):* the camera
+    ASSEMBLY itself (`SceneConfig` -> placement/optics) is still duplicated in
+    `Theia::applySceneCamera` and `Hyperion::buildCamera` - engine behaviour that
+    could hoist into `harmonia::renderer` like the vfov/ev100 defaults already
+    were. Deferred: one change at a time, receipts first; owner may order it.
+
+  **CAMERA CONTRACT + LEVEL-0 + ROI RECEIPTS (2026-11-20) - ALL VERIFIED.
+  Commits: Harmonia `92b4896`, Hyperion `6e03404`, Theia `1420681` (fix) +
+  `9b2010b` (ROI).**
+  - *Builds:* Harmonia **0**, Hyperion **0** (hyperion.exe 10:03:12), Theia **0**
+    (theia.exe 10:31:02, rebuilt AFTER every edit in the batch).
+  - *Suites:* Harmonia **100% of 186** (185 recorded + the new
+    `RejectsSceneWithoutCamera`; DN3M4 skips by design), Theia **100% of 67**,
+    Hyperion **100% of 79**. `test_arch` **0 x3**; clang-format **0/10 files**;
+    ruff **0**; py_compile 0.
+  - ***Contract behavior proof (GPU):*** `hyperion --scene feature_matrix` (a
+    camera-less Aether format fixture) **exits 1, creates NO image**, logging the
+    exact diagnostic `SceneLoader: '...feature_matrix.scene.toml' has no camera
+    placement - [camera] needs translate AND rotation (inline, or via a
+    resolvable preset reference)` + `Scene load failed`. Pre-fix this rendered
+    the Cornell fallback view - the owner's ruling is now enforced end-to-end.
+  - ***Bit-identity proof for valid scenes (GPU, hoist_proof pattern):***
+    `cornell_classic` 320x240 / 256spp / seed17 rendered by the PRE-edit build
+    (stashed, rebuilt) vs the POST-edit build: **max|d| = 0.0, mean|d| = 0.0,
+    0 of 76 800 pixels differ.** Code basis agrees: `focusDistance` is read only
+    inside `if (camera.lensRadius > 0)` (raygen.slang L31-34) and Hyperion pins
+    lensRadius = 0, so the focusDist value change (1079.5f -> scene distance)
+    cannot reach any ray; pos/at were never-fallback for camera'd scenes. Stash
+    round-trip restored both dirty files exactly (tree verified).
+  - ***New negative test:*** `SceneLoader.RejectsSceneWithoutCamera` PASSES with
+    the exact diagnostic; `LoadsRealScene` (cornell_classic) still passes; the
+    color-space rejection test still fails on COLOR SPACE (H-05 ordering intent
+    preserved); the skin/sphere/morph rejection tests still fail for their
+    RECORDED reasons ("covers 5 vertices", "procedural sphere", "morph row
+    count") - the fixtures' subjects were not displaced by the contract.
+  - ***Level-0 fix (decision 1) verified on the GPU:*** `exercise_bias_mode`
+    **BIAS_EXIT=0** -> **LEVEL-0 FIX VERIFIED: level0 aliases the default,
+    max|d| = 0.0000000, 0 differing pixels** (the pre-fix 1.355e34 / 76 674-pixel
+    explosion is unreachable) AND **LEVEL-2 RECEIPT PASS** (parse 0/1/2 found,
+    control default==1 bit-identical, level2 fires **1.2770669**, noise envelope
+    **4/4**: mean 2097.573 <= 2281.557, rel_mse 1062.31 <= 15829.42, ssim 0.7865
+    >= 0.7754, tm 7.103 <= 8.116).
+  - ***Inertness of the branch deletion (default path):*** `qualify_gap_c` arm
+    stats **byte-identical to the recorded values** - ref 3848.851562 / 77.901085,
+    k2 arm 2160.647949 / 27.346701, **k3 FIRES 90.845032**, mask2-vs-mask3
+    **0.000000**, tm 7.088/7.089 (its GAPC_EXIT=1 is the recorded mechanical
+    condition-C verdict, unchanged).
+  - ***ROI (decision 2):*** `qualify_sms.py --case` choices now
+    `{C1,C2,C3,C4,DRAGON,HYBRID}` (tool loads, staged scene resolves, ruff 0).
+
   **SESSION PAUSE (2026-11-19 21:17) - RESUME FROM HERE.**
   - *State at pause:* all five repos **clean** (Theia 45 unpushed, Harmonia 20
     unpushed, Hyperion/Aether/slang-math 0); **nothing pushed**; **no GPU job running**
