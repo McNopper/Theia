@@ -698,6 +698,37 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
   config.cameraPos.value_or(kCornellCamPos)` and `camAt = ...value_or(kCornellCamTarget)`
   (`Application.cpp` L241-242, constants at L17-18), plus an **unconditional**
   `.focusDist = kCornellFocusDist` (L253). Theia has **no** position/target fallback at
+
+  **k=4 OBSERVED (2026-11-20) - Gap A's observation requirement MET.**
+  - *Fixture:* `hybrid_k4.scene.toml` (Harmonia `6597af0`) - fails TWO pairs before the
+    qualifying one, which the hybrid fixture cannot do by design:
+    pair 1 (plate, slab) fails on the plate's sampled lobe alpha (0.05 < 0.2); pair 2
+    (slab, wall) fails on the slab's DELTA transmission lobe (alpha 0.0); pair 3
+    (wall, floor) qualifies on two diffuse lobes (1.0) at far field => captureTarget 2
+    => kLevel 3 => **k = 4**, only reachable because stage 2b raised `kMaxHybridK`.
+  - *Receipts along the way:* static validation **23/23** (and cross-checked on
+    `hybrid_k3`, where it passes every structural check and fails only the two
+    k=4-specific ones, so the validator is neither trivially passing nor failing);
+    staging **PASS**; **optical-chain probe PASS** - 909 973 B, max 15218.32,
+    std 117.16, **229 134/230 400 pixels nonzero** (the derived chain camera -> plate ->
+    glass slab -> wall -> floor really renders, which static validation cannot see).
+  - *The observation itself:* `THEIA_SHIFT_MASK` **3 (bit2 clear: k4 -> unbiased
+    replay) vs 7 (bit2 set: k4 body)**, same scene/seed/budget:
+
+    | render | pixels | max&#124;d&#124; | mean&#124;d&#124; | sha256 |
+    |---|---|---|---|---|
+    | mask3 vs mask7 | **9 / 230 400 differ** | **0.006321669** | 1.13e-07 | **differ** |
+
+    Both arms non-degenerate (max 1378.62402, std 23.01838). Because `bit2` gates
+    **only** `kLevel >= 3u` in the dispatch, a difference implies a kLevel>=3 record
+    exists => **a k=4 record was captured and the bit2-gated N-hop body changed the
+    result**. The rarity (9 px of 230 400 over 256 frames) is expected: reaching
+    captureTarget 2 needs the full two-failing-pairs chain to survive to the floor.
+  - *Honest limits:* this proves the k=4 BODY RUNS and is step-through observable; it
+    does NOT yet prove the k=4 result is correct (no Hyperion gate was applied to this
+    fixture - its own noise envelope has not been measured) and it does not cover the
+    battery/ROI receipts. Those remain owed.
+
   all - `applySceneCamera` only writes the camera **when BOTH `cameraPos` and
   `cameraAt` are present** (`Application.cpp` L247), otherwise it keeps its internal
   defaults. *Risk assessment recorded honestly:* every qualification scene carries an
