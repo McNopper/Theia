@@ -65,6 +65,14 @@ CASES = {
     # region, derived from the 512-frame local-vs-reuse difference map
     # (reuse engages: 0.82% of pixels differ, in-window mean 3.6e-4).
     "C4": {"scene": "c4_dragon_area_light.scene.toml", "roi": [0.375, 0.438, 0.675, 0.738]},
+    # Hybrid fixture battery ROI - OWNER DECISION 2026-11-20 (receipt 6873e3a).
+    # The recorded derivation method (512f local-vs-reuse difference map) yields
+    # EXACTLY ZERO on this fixture (reuse renders byte-identical to local - verified
+    # with both modes engaged, not a config bug), so the owner accepted the
+    # mask-differential derivation instead: the window where the k=3 hybrid shift
+    # changes the result (qualify_gap_c mask1 vs mask3, 48.4% of that mass, peak on
+    # the specular plate band).
+    "HYBRID": {"scene": "hybrid_k3.scene.toml", "roi": [0.323, 0.0, 0.723, 0.3]},
 }
 
 
