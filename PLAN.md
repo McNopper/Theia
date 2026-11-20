@@ -766,6 +766,66 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
   Hyperion pins `.lensRadius = 0.0f` (pinhole) at L252, so `focusDist` cannot affect a
   render. Flagged for the audit session's adjudication, NOT implemented here.
 
+  **biasCorrectionMode LEVEL-2 EXERCISED (2026-11-20) - RECEIPT PASS + LEVEL-0 FINDING
+  (knob-semantics decision required) + RTXDI SOURCE CORRECTION.**
+  - *Instrument:* `tools/exercise_bias_mode.py` (ruff check 0, ruff format 0; exit-code
+    contract in the module docstring). Six SEQUENTIAL renders: Hyperion ref seed17, ref2
+    seed18 (for the live envelope), Theia default/level1/level2/level0 at 320x240,
+    256spp/256f seed 17.
+  - *The owed receipt (700e479), all four checks:*
+    - **A parse** - `THEIA_BIAS_CORRECTION = 0/1/2` FOUND in each arm's own log;
+    - **B control** - default (env unset) vs explicit 1: **max|d| = 0.0000000**,
+      bit-identical, default neutrality re-proven on this build;
+    - **C level 2 FIRES** - level1 vs level2 **max|d| = 1.2770669** (1 649 of 76 800
+      pixels; std 27.346559 vs 27.346286): the visibility half really rejects
+      non-generatable donors on this fixture;
+    - **D within the owner's noise-envelope criterion (0fbcb0b)** with a LIVE envelope
+      (ref seed17 vs ref seed18): level2 **4/4 within** - mean_diff 2097.573 <= 2281.557,
+      rel_mse 1062.31 <= 15829.42, ssim 0.7865 >= 0.7754, tm 7.103 <= 8.116. The
+      mechanical strict-AND gate FAILs for every arm incl. the shipped default and for
+      ref-vs-ref itself (recorded condition C) - reported as context, verdict rests on
+      the owner's criterion. **RESULT: LEVEL-2 RECEIPT PASS, exit 0.** Level 2 is now
+      exercised; the 700e479 "not yet exercised" gap is closed.
+  - ***RTXDI source correction (read `DIResamplingFunctions.hlsli` +
+    `DIReservoir.hlsli`, commit 0cfd439, while building the instrument):*** OFF keeps
+    `weightAtCurrent` (donated sample re-evaluated at the CURRENT surface) in the merge
+    **unconditionally in every mode** - only the finalize differs:
+    `FinalizeResampling(state, 1.0, state.M)` = `w_sum/(p_hat*M)`. That is **exactly our
+    default's math** (merge `p_hat*W*M` + finalize `w_sum/(M*p_hat)`). BASIC adds the
+    GRIS denominator `piSum = p_hat_sel@cur*M_cur + p_hat_sel@source*M_prev` - **not
+    implemented at any level**; it coincides with our formula iff the selected sample's
+    p_hat is equal at both sources (exact for same-pixel static temporal; NOT for
+    spatial neighbours, whose G differs). => the receipt's "BASIC-equivalent already"
+    (L35-40 above) is **corrected: the default computes RTXDI-OFF's formula; BASIC's
+    piSum is a recorded unimplemented gap**, not a shipped property. Level 2 = OFF +
+    visibility checked at the MERGE (skip + count M); RTXDI's RAY_TRACED instead zeroes
+    `temporalP` inside the BASIC normalization - the visibility intent matches, the
+    mechanism differs (recorded, not adjudicated).
+  - ***LEVEL-0 FINDING: EXPLODED (measured, not assumed).*** level0 frame max
+    **1.355437e+34** (level1 2160.6, ref 3848.9), **76 674 of 76 800 pixels** differ from
+    level1, implied per-frame growth **1.319x over 256f** (image-space tm_mean 88.5,
+    comparator mean_diff overflow -> nan). Mechanism: `pMerge = 1.0` drops `p_hat_cur`
+    from the MERGE weight while the finalize still divides by `p_hat_sel`, so every
+    temporal hop inflates `w_sum` by ~1/p_hat_typ and it compounds (1.319 ~ 1/0.758);
+    RTXDI's OFF **never** drops the merge re-evaluation, so the shipped level 0 matched
+    NO reference mode - it was an invention at 700e479 time ("off" implemented as
+    "no target-PDF re-evaluation at merge" instead of RTXDI's "no bias-correction
+    normalization"). Not gated by this receipt (level 2 stands independently); **not
+    fixed pending a knob-semantics decision**, because the fix's SHAPE depends on it:
+    - (a) **faithful**: level 0 := RTXDI OFF = today's default math -> 0 becomes
+      bit-identical to 1 (they coincide because our default was never BASIC), labels
+      corrected in comments/PLAN, explosion gone, no new math; BASIC/piSum stays
+      unreachable (candidate future knob extension, recorded);
+    - (b) **extend the parameter surface**: implement true BASIC (piSum) as an
+      additional level beyond the fixed default contract (1 = today, bit-identical) -
+      new math + its own exercise receipts;
+    - (c) **drop level 0** (parse clamps 0 -> 1 with a log line).
+    Options (b)/(c) and the label corrections are owner calls; (a) is the minimum
+    paper-faithful repair of a measured landmine (1e34 output behind an env var).
+  - *Still owed after this:* 2e temporal-stability / equal-time / both galleries + final
+    receipts; hybrid battery ROI (candidate recorded above); audit position/target scope
+    (fragment above).
+
   **SESSION PAUSE (2026-11-19 21:17) - RESUME FROM HERE.**
   - *State at pause:* all five repos **clean** (Theia 45 unpushed, Harmonia 20
     unpushed, Hyperion/Aether/slang-math 0); **nothing pushed**; **no GPU job running**
