@@ -171,6 +171,11 @@ the 320×240 parity resolution.
   The giBuffer is draw-order dependent for overlapping transparent surfaces (depth-write off);
   `gi.comp.slang` trusts the order-independent inline ray query for primary visibility. Do not
   re-add a `materialIdx ==` guard (it causes black holes on overlapping glass).
+- **Scene files (and synthetic test fixtures) must carry a `[camera]` placement** -
+  `translate` + `rotate`/`rotation`, inline or via a preset that carries them.
+  `SceneLoader` rejects camera-less scenes with a precise diagnostic (camera-presence
+  contract, owner 2026-11-20): neither renderer has a private fallback view anymore.
+  Camera presets that only set vfov/ev100 do NOT satisfy this - placement must exist.
 
 ## Test scenes
 
@@ -317,7 +322,13 @@ path. Both paths share one task-shader entry point (`gid.x = 0..visibleCount-1`)
   the GD3 indirect draw is always available.
 - Debug A/B toggles: `THEIA_FORCE_GD3` (skip DGC, use indirect draw), `THEIA_SINGLE_PASS`
   (bypass two-pass Hi-Z), `THEIA_DISABLE_HIZ` (draw all meshlets), `THEIA_NO_RECONNECTION`
-  (GI-ENH (a) reconnection shift off — replay-only, for A/B measurement), `THEIA_MATERIAL_LOD=0|1`
+  (GI-ENH (a) reconnection shift off - replay-only, for A/B measurement), `THEIA_BIAS_CORRECTION=0|1|2`
+(ReSTIR DI merge bias correction, RTXDI's three levels: `1` = default = the
+RTXDI-OFF formula `w_sum/(p_hat*M)` (bit-identical); `0` = that same formula - an
+alias of `1` since the faithful-off fix of 2026-11-20, whose pre-fix branch
+measured 1.355e34 and matched no reference implementation; `2` = + a per-source
+conservative visibility test per merged temporal/spatial donor = RAY_TRACED's
+visibility half - receipts in PLAN "LEVEL-2 EXERCISED"), `THEIA_MATERIAL_LOD=0|1`
   (PERF8 material-LOD tier force-off/-on; default = interactive ON, estimator-pure capture OFF),
   `THEIA_RADIANCE_CACHE=0|1` (GI-NRC world-space radiance-cache force-off/-on; default =
   interactive ON, capture OFF, animated scenes always OFF),

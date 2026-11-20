@@ -132,16 +132,27 @@ reference = "presets/preview.render.toml"      # shared preset; inline keys over
 working_color_space = "lin_rec2020_scene"      # or "lin_rec709_scene"
 
 [camera]
-reference = "presets/cornell.camera.toml"      # translate / rotate / vfov / ev100
+reference = "presets/cornell.camera.toml"      # optional preset (vfov / ev100)
+translate = [0.0, 2.73, -8.0]                  # REQUIRED placement: translate +
+rotate_x = 0.0                                 # rotation, inline or resolved from
+rotate_y = 180.0                               # a preset carrying them
 
 [tonemap]
 tonemapper = "agx"                             # aces | agx | reinhard | hable
 
-[[geometry]]
-type = "instance"                              # instance | box | sphere
-mesh = "cornell.obj"
-materials = { Floor = "WhiteWall", LeftWall = "RedWall", RightWall = "GreenWall" }
+[[mesh]]
+name = "cornell"
+path = "cornell.obj"
+
+[[instance]]
+mesh = "cornell"
+materials = { Floor = "WhiteWall", Ceiling = "WhiteWall", AreaLight = "AreaLight", BackWall = "WhiteWall", LeftWall = "RedWall", RightWall = "GreenWall" }
+rotate_y = 180.0                               # compensates the 180 Y bake in cornell.obj
 ```
+
+A `[camera]` placement (`translate` + `rotate`/`rotation`, inline or through a
+preset that carries them) is **required**: the shared scene loader rejects
+camera-less scenes instead of falling back to a private default view.
 
 OBJ files contribute **only geometry**; all material assignments are declared in the
 scene file. See the [Aether README](https://github.com/McNopper/Aether) for the full
@@ -224,11 +235,18 @@ build/theia.exe --scene cornell_classic --output out.exr
 | `--offscreen-frames <n>` | `4` | Number of frames accumulated/warmed up before offscreen capture is written |
 | `--width <n>` | 1024 | Render width in pixels |
 | `--height <n>` | 768 | Render height in pixels |
-| `--validation` / `--no-validation` | disabled | Enable / disable Vulkan validation layers |
+| `--validation` / `--no-validation` | enabled | Vulkan validation layers - ON by default (family contract); `--no-validation` is the explicit escape hatch |
 | `--taa` / `--no-taa` | on | Interactive-window temporal anti-aliasing during camera motion. `--taa` is **incompatible with `--output`** (offscreen uses progressive accumulation); the two must not be combined |
 | `--no-restir-di` | off | Disable the legacy ReSTIR DI candidate path (debug; forced off when ReSTIR PT is on — the unified PT reservoir already contains the DI candidates) |
 | `--indirect-ambient <x>` | `0.0` | Presentation-only indirect ambient boost (scene-referred linear) |
-| `--no-camera-jitter` | off | Disable sub-pixel camera jitter (interactive debug only; ignored in `--output` capture — jitter is forced on for parity sampling) |
+| `--no-camera-jitter` | off | Disable sub-pixel camera jitter (interactive debug only; ignored in `--output` capture - jitter is forced on for parity sampling) |
+| `--sms-mode <off\|local\|reuse>` | `local` | SMS sampling (GI-SMS caustics): `off` = plain path tracing, `local` = one frozen receiver per pixel (default), `reuse` = local + experimental spatial reuse |
+| `--no-postfx` | off | Force off every presentation stage (A-SVGF denoiser + TAA); implied by `--output` |
+| `--frames-per-flip <n>` | `1` | Interactive: accumulation frames per swapchain flip |
+| `--rng-seed <n>` | `0` | Base seed of the stochastic stages (same-seed captures are reproducible) |
+| `--sequence-frames <N>` | `0` | ANI7: render N animation frames instead of one capture (`<stem>_0000` ... EXR+PNG each; requires `--output`) |
+| `--frame <n>` | `0` | ANI8: start the animation clock at frame n (sequence frame k renders tick n+k) |
+| `--capture-every-ms <f>` (+ `--start-seconds <f>`) | - | ANI7 time-based sequence sampling (with `--sequence-frames`) |
 
 ### Indirect lighting and GI architecture
 
