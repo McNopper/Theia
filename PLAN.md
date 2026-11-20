@@ -625,6 +625,43 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     mask2 vs mask3 = 0.000000**, every arm statistic identical to the pre-knob run to
     6 dp => the default level is behaviour-neutral. Level 2 (ray_traced) is **NOT yet
     exercised** - it needs `THEIA_BIAS_CORRECTION=2` renders and is not claimed as
+
+  **HOIST IMPLEMENTED (2026-11-20) - shared camera/window defaults, owner decision
+  d268d5b. Commits: Harmonia `8c339d3`, Theia `57b6486`, Hyperion `5efe43f`.**
+  - *What now has ONE definition instead of two:* `harmonia::app::AppConfig::
+    kDemoWidth/kDemoHeight` = 1024x768 (both `main.cpp` files had the literal pair) and
+    `harmonia::renderer::kDefaultVfovDeg` = 39.1f (Theia `value_or(39.1f)`, Hyperion a
+    private `kCornellVfovDeg` which is now **deleted**). The struct's generic 1920x1080
+    default is untouched for non-demo users; Hyperion's other Cornell scene constants
+    (`camPos/camTarget/focusDist`) are untouched and remain the audit addendum's scope
+    question.
+  - *Reachability (the thing that could have made this pointless):* both local builds
+    set `FETCHCONTENT_SOURCE_DIR_HARMONIA = C:/Development/GitHub/Harmonia` with no
+    pinned clone, so these Harmonia headers do feed BOTH renderers.
+  - ***MSVC update isolated before the edit:*** toolchain re-read first - MSVC
+    **14.52.37025**, compiler **clang-cl** (LLVM), **clang-format still 22.1.3** (the
+    pinned lint version, so the format gate still means what it did), slangc
+    2026.17-25, cmake 4.4.5, ninja 1.13.2. A **baseline build of the clean tree was
+    run FIRST and passed** (Harmonia 237 targets = full rebuild, Theia 505 lines), so
+    any update-induced failure could not be mistaken for a hoist failure.
+  - *Receipts after the hoist:* builds **Harmonia 0 / Theia 0 / Hyperion 0**;
+    clang-format **0 on all six** touched files; **test_arch 0** (Application.cpp
+    994/1000); suites **Harmonia 0 (185)**, **Theia 0 (67)**,
+    **Hyperion 0 = 100% of 79**.
+  - ***Behaviour-neutrality proven end-to-end, not assumed:***
+    `hoist_proof.py` re-rendered **C1 (512f / seed 17 / local) with the post-hoist
+    build** and compared it to the pre-hoist battery baseline
+    `gapb_regress/C1_local_512_17.exr`: **max|d| = 0, mean|d| = 0 -> PROOF_EXIT=0**,
+    "IDENTICAL - hoist is behaviour-neutral". The shared constants reproduce the
+    previous output bit-for-bit; only the duplicated copy disappeared.
+  - *Why this closes the base problem (audit executions 1-4):* scene parsing was
+    already shared; the missing piece was that the INTERPRETATION of a missing key was
+    decided twice. The two rows the audit marked DUPLICATED-AND-UNTESTED are now
+    **shared** (window resolution) and **shared + value-identical** (vfov).
+  - *Next:* Gap A stage 2 (design b772a81; knob not safe past 3 until it lands) ->
+    hybrid fixture battery ROI -> 2e temporal-stability / equal-time / both galleries
+    + final receipts -> exercise `THEIA_BIAS_CORRECTION=2` (level 2 still unexercised).
+
     verified.
   - Condition C of Gap C stays the noise-limited one, judged by the owner's
     noise-envelope criterion (0fbcb0b), unchanged by this pass.
