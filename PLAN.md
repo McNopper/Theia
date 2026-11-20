@@ -1035,6 +1035,49 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     `THEIA_SHIFT_MASK` **bit2** dispatch for k=4, and **only then** raising
     `kMaxHybridK` to 4 - which is what makes the k=4 acceptance (mask differential)
     runnable. Nothing about k>=4 is reachable yet, so the knob remains unsafe to raise,
+
+  **Gap A STAGE 2b LANDED (2026-11-20) - N-hop replay, products, bit2, knob raised.
+  Harmonia `424291a` / Theia `1e509b8`.**
+  - *Replay generalised:* `tryReconnectionShiftK3` now walks
+    `hopCount = min(rec.kLevel - 1, kHopCapacity)` hops in a loop, applying the SAME two
+    eligibility gates at every replayed vertex (roughness `>= 0.2`, prefix far-field
+    `>= 0.1`), advancing `hopFrom` and keeping the **last** replayed surface as the
+    connection origin (x'{k-1} for any k).
+  - *Products over all hops:* `wHop = prod_j (f_j * cos_j * fTerm_j / pdfY_j)`;
+    `jacHopNum = prod_j (pdfY_j * geomGTarget_j)`; `jacHopDen = prod_j (hopPdf_j *
+    hopGSource_j)`; `jacEndDenom = jacHopDen * pdfInK * geomGInKSource`;
+    `jacEnd = (jacHopNum * pdfY2 * geomGTargetEdge) / jacEndDenom`; footprint =
+    `min_j 1/(hopPdf_j * hopGSource_j)`; and the coincident-vertex guard became
+    `min_j hopDist2[j]` (any coincident hop rejects, as the single-hop version did).
+    `jacCont` and both `reconnectionJacobianValid` guards are unchanged.
+  - ***Why raising the knob is safe:*** at `kHopCapacity == 1` every product collapses to
+    the old single-hop expression **in the same float operand order**
+    (`jacHopDen * pdfInK * geomGInKSource` == `pdfEdgeIn * hopGSource[0] * pdfInK *
+    geomGInKSource`, left-to-right), `wHop` seeds at 1.0 (exact), and `hopPdf[0]` ==
+    `pdfEdgeIn` (both are the primary's outgoing pdf). The only code before the single
+    RNG draw (the opacity gate) is pure evaluation, so control flow is equivalent too.
+  - *`THEIA_SHIFT_MASK` bit2 added:* `& 3u` -> `& 7u`, log reports `k4={}`, and the
+    push constant documents `bit2 (4) = k>=4 hybrid shift`. Dispatch is
+    `kLevel == 2u || (kLevel >= 3u && (mask & 4u) != 0u)` -> the N-hop body; **with bit2
+    clear a k=4 record falls back to the unbiased replay**, never a reconnection against a
+    mislabelled edge.
+  - *`kMaxHybridK` 3 -> 4 raised LAST* (capacity 2), with the comment rewritten to state
+    the ordering rule; the knob comment no longer claims "default 3".
+  - *Receipts:* Harmonia **BUILD=0**, Theia **BUILD=0** (theia.exe linked); verifier
+    **39/39 VERIFY_EXIT=0** (products/guards/loop/dispatch/mask/knob + brace balance
+    302/302 and 63/63 + uniform CRLF + Application.cpp 995/1000); `test_arch` **0**;
+    clang-format **0**; suites **Harmonia H=0 (185 tests; only DN3M4 skips, by design) and Theia 100% of 67 (T=0) - both run AFTER the stage-2b edits, plus test_arch 0 and clang-format 0**; `qualify_gap_c.py` after the raise:
+    **every arm statistic identical to the pre-raise run** (ref 3848.851562 / 77.901085,
+    k2 arm 2160.647949 / 27.346701, **k3 FIRES 90.845032**, mask LIVE 90.845032,
+    **mask2 vs mask3 0.000000**, tm 7.088/7.089) - i.e. raising the cap changed nothing
+    on the fixture, exactly as the first-qualifying-pair rule predicts (it stops at k=3).
+  - *Not yet exercised:* a path that actually REACHES k=4 (the hybrid fixture stops at
+    k=3 by design), so the k4 body itself is compiled and dispatch-gated but unrun; that
+    observation needs a fixture where two pairs fail before the third qualifies.
+  - *Still owed after this:* hybrid fixture battery ROI, biasCorrectionMode level 2,
+    2e temporal-stability/equal-time/galleries + final receipts, audit position/target
+    scope decision.
+
     exactly as recorded.
 
 **Living source of truth for outstanding work.** Shipped items are removed from the work
