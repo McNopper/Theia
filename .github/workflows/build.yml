@@ -316,7 +316,7 @@ jobs:
             }
             $dir = Join-Path $dest 'bin'
           }
-          "$dir;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "PATH=$dir;$env:PATH" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           & (Join-Path $dir 'clang-cl.exe') --version
 
       - uses: actions/cache@v4
