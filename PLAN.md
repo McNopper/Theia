@@ -997,6 +997,45 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
   - ***ROI (decision 2):*** `qualify_sms.py --case` choices now
     `{C1,C2,C3,C4,DRAGON,HYBRID}` (tool loads, staged scene resolves, ruff 0).
 
+  **RELEASE PREP (2026-11-20) - documentation aligned with the code + README
+  screenshots recreated; committed everywhere, NOTHING pushed (owner rule:
+  "you can commit, just not push").**
+  - *Documentation alignment (audited claim-by-claim, both renderer repos,
+    commits Theia `97b26b6` + `98db26d`, Hyperion `a10e2ed`):* (1) the
+    READMEs' scene-format examples used `[[geometry]]`, which the parser never
+    reads (only mesh/instance arrays; 0/31 assets use it) -> rewritten to the
+    real `[[mesh]]`+`[[instance]]` shape; (2) the camera examples claimed the
+    preset carries translate/rotate (it carries only vfov/ev100) and would now
+    be contract-rejected -> REQUIRED inline placement + prose sentence; (3) the
+    examples' materials map omitted Ceiling/AreaLight/BackWall and the instance
+    lacked `rotate_y = 180` (bake compensation - without it NEE backface-skips
+    the emissive -> black scene); (4) `--validation` default corrected from
+    'disabled' to ON-by-default (family contract); (5) shipped flags added to
+    the Theia table (`--sms-mode`, `--sequence-frames`, `--frame`,
+    `--capture-every-ms`/`--start-seconds`, `--frames-per-flip`, `--no-postfx`,
+    `--rng-seed`); (6) `THEIA_BIAS_CORRECTION` documented in AGENTS with the
+    corrected RTXDI semantics + camera-presence gotchas in both AGENTS files.
+  - ***End-to-end proof of the fixed example (not eyeballed):*** the README's
+    toml block was extracted VERBATIM into a probe scene next to the real
+    assets and rendered by hyperion: attempt 1 (3-entry materials map) and
+    attempt 2 (missing rotate_y=180) both rendered BLACK (diagnosed: unmapped
+    AreaLight group -> non-emissive; bake-rotated emissive backface -> NEE
+    skip - "built 2 emissive triangle(s)" still appeared, pinpointing orientation
+    not presence); after both fixes: **exit 0, max 65.1042 std 3.9868 (matches
+    cornell_classic's known 65.104), zero warnings.** Probe deleted, Aether
+    tree untouched (status empty).
+  - *Screenshots:* both galleries re-rendered to build dirs, regression vs the
+    committed set reported (Theia 12 byte-identical + 18 at means <= 0.0222/255;
+    Hyperion 30/30 byte-identical), then copied to `screenshots/` (Theia 18
+    refreshed -> committed `98db26d`; Hyperion byte-identical -> no-op) and
+    committed per the owner's word. The recorded "README gallery convention
+    refresh" follow-up is hereby executed.
+  - *Also landed this release window:* vendored `check_arch` aligned to the
+    skill engine 1.5.1 (Theia `39b19ab`, Harmonia `507f5e1`, Hyperion `0a4e611`,
+    gates re-run green); 2e GPU-half receipts in Harmonia/PLAN (V `906375e`,
+    final block this commit's sibling). All repos clean; **push awaits the
+    owner's explicit go.**
+
   **SESSION PAUSE (2026-11-19 21:17) - RESUME FROM HERE.**
   - *State at pause:* all five repos **clean** (Theia 45 unpushed, Harmonia 20
     unpushed, Hyperion/Aether/slang-math 0); **nothing pushed**; **no GPU job running**
