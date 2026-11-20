@@ -250,12 +250,13 @@ void Application::applySceneCamera(const harmonia::scene::SceneLoader::SceneConf
         m_camera.up = sceneConfig.cameraUp.value_or(sm::float3{0.0f, 1.0f, 0.0f});
         // VFOV parity with Hyperion (sibling of the camera-ev fallback fix): when a
         // scene's `[camera] reference` preset cannot resolve (staged scenes ship without
-        // presets/), fall back to the SAME constant Hyperion uses - kCornellVfovDeg
-        // 39.1f (Hyperion Application.cpp:19/248). The previous value_or(45.0f) put the
-        // two renderers behind different lenses on preset-less scenes (C4 emitter row
+        // presets/) fall back to the SHARED constant both renderers read
+        // (harmonia::renderer::kDefaultVfovDeg, hoisted 2026-11-19 by the cross-renderer
+        // audit so the two private copies cannot drift). The previous value_or(45.0f) put
+        // the two renderers behind different lenses on preset-less scenes (C4 emitter row
         // 31 vs 43, vertical align corr 0.366) - recorded as C4 residual #3 in
         // Harmonia/PLAN.md; scenes with an inline vfov (C1-C3) are unaffected.
-        m_camera.vfovDeg = sceneConfig.cameraVfov.value_or(39.1f);
+        m_camera.vfovDeg = sceneConfig.cameraVfov.value_or(harmonia::renderer::kDefaultVfovDeg);
     }
     // Physical camera exposure - shared factory from harmonia::renderer::Camera.
     // Fallback parity with Hyperion's buildCamera (ground truth): apply fromEv100 ONLY

@@ -13,8 +13,8 @@ int main(int argc, char* const argv[]) {
     harmonia::core::Logger::setTag("THEIA");
     harmonia::app::App::Config config;
     config.title = "Theia \xe2\x80\x94 Real-Time Renderer";
-    config.width = 1024;
-    config.height = 768;
+    config.width = harmonia::app::AppConfig::kDemoWidth;
+    config.height = harmonia::app::AppConfig::kDemoHeight;
     config.resizable = true;
     config.assetsDir = THEIA_ASSETS_DIR;
     config.sceneFile = "cornell_classic.scene.toml";
