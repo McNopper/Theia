@@ -16,7 +16,7 @@ namespace theia {
 namespace {
 struct SmsProducerContext {
     VkDeviceAddress work, prefixes;
-    std::uint32_t resolution, flags;
+    std::uint32_t resolution = 0, flags = 0;
     VkDeviceAddress temporalReservoir, historyReservoir;
 };
 static_assert(sizeof(SmsProducerContext) == 40);

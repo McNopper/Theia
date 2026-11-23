@@ -80,7 +80,7 @@ class SmsGiFrameFixture : public RtFixture {
             gpu.transmissionScatter = sm::float4(0);
             caster = harmonia::scene::Material::fromGpu(gpu);
         }
-        const auto mirror = scene.addMaterial(std::move(caster));
+        const auto mirror = scene.addMaterial(harmonia::scene::Material(caster));
         const auto light = scene.addMaterial(harmonia::scene::Material::emissive(sm::float3(1), 10));
         if (specularPrefix())
             ASSERT_NO_FATAL_FAILURE(
