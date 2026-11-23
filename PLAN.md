@@ -1,17 +1,25 @@
 # PLAN — Theia
 
-**Release:** v0.8.4 - **VK5 pipeline-binary cache wired** (all 9 pipeline-creation sites through
-Harmonia's `core::PipelineBinaryCache`; consumes Harmonia v0.7.23 — pin bump) + alignment audit.
-Galleries re-rendered with the cache on: 24/30 scenes byte-identical, the 6 speckle-class glass
-scenes gate-PASS at EXR precision (mean ≤ 0.001, SSIM 1.0). **Work continues on `main`** (the
-dev/gi-sms-restir branch is retired; its full history is `git log` and the Baseline below).
+**Minor release:** v0.11.0 - documentation and roadmap aligned with the shipped renderer;
+SMS producer initialization and test-material static-analysis fixes verified by the full
+67-test gate. Family parity is 14/14 and the 30-scene/two-renderer Vulkan sweep is 60/60
+clean. Project version and Aether/Harmonia pins are 0.11.0. **No approved implementation
+roadmap item remains; work continues on `main`.** Historical release and qualification
+records stay below.
 
 **C track: shipped.** The PSMS-ReSTIR port (Hong et al., SIGGRAPH Asia 2025; reference: the PSMS-ReSTIR Falcor implementation) is complete and qualified on the C1/C2/C3 track: pooled-energy bias 0.15-1.2% at the 8192-frame gate (gate 2%, pooled SE ~1.8%), deterministic same-seed captures, a 2.5x equal-time MSE win on absorption-prefix chains and parity on light-tailed scenes, reuse at ~5% frame-time overhead. SMS sampling is active by default (`--sms-mode local`); spatiotemporal reuse via `--sms-mode reuse`. Eleven root-caused bring-up defects were fixed on the way (receipts: Baseline v0.8.2, the git log of the merge wave, and the qualification manifest under `build/sms-qualification/run_manifest.json`). The gallery regression check after the merge: byte-identical or pixel-identical everywhere except speckle-level firefly shifts on the glass-bearing scenes (cornell_spheres/suzanne, dragon_teapot, shaderball_transmission), means <=0.07/255.
 
-**Known follow-ups:** the `qualify_sms.py` equal-time timing acceptance is `CLOSED 2026-11-18` - per-seed bounded re-land at the UNCHANGED +-5% budget (the pilot-derived frame count drifted with per-run GPU throughput and pushed seeds out of budget, reporting timing-inconclusive despite separated quality numbers; C2 re-run evidence: all 6 mode/target timing flags True vs all False historically, so the stage exit is now decided by the quality numbers alone, ruff clean, commit `4d5501b`). The README gallery convention still needs a refresh whenever estimator-affecting changes ship (SMS is default-on, so glass-bearing scenes shift noise realizations).
+**Follow-up status (2026-11-23):** equal-time timing acceptance is closed and the README
+gallery is refreshed for this code. Optional, unchartered work comprises a true RTXDI BASIC
+`piSum` mode, RAY_TRACED's remaining source-side BSDF/facing term, and full camera-assembly
+deduplication; these would be new parameterized work, not repairs to the verified default.
+C4 is closed on the owner's perceptual acceptance with the 2% energy gate explicitly waived,
+not passed. DN3M4 is an opt-in production-output test (`HARMONIA_DN3M4_DIR`) whose normal-suite
+skip is intentional and whose configured run is recorded as passing. None is an open release
+blocker or an approved roadmap row.
 
-**Research receipt + conditional plan (2026-11-19): converged-bias fix inventory from
-the reference implementations** (recorded while the post-`16e9ae4` C4 correctness
+**Historical research receipt (2026-11-19; conditional plan superseded by the shipped decisions
+and follow-up status above): converged-bias fix inventory from the reference implementations** (recorded while the post-`16e9ae4` C4 correctness
 battery runs; no code written yet - plan-before-edit holds until the verdict):
 - *NVIDIA RTXDI* (`Doc/NoiseAndBias.md` + `RTXDI-Library/Include/Rtxdi/DI/
   TemporalResampling.hlsli`): three-level `biasCorrectionMode` - OFF =
@@ -1456,6 +1464,7 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
 
 ## At a glance
 
+- **Minor release:** v0.11.0 (2026-11-23) - documentation/roadmap alignment and verified static-analysis repairs (`5655d8b`); project version and Aether/Harmonia pins 0.11.0. `verify-full` 67/67, family parity 14/14, full-gallery Vulkan validation 60/60 clean. No open implementation roadmap item.
 - **Release:** v0.10.0 (2026-11-20) - Gap A k=4 complete (N-hop prefix replay, THEIA_SHIFT_MASK bit2, kMaxHybridK=4, observation + correctness gate PASS), Gap B battery regression, biasCorrectionMode: level-2 exercised (noise envelope 4/4) + level-0 faithful RTXDI-OFF alias (pre-fix 1.355e34 branch removed, verified max|d|=0), camera-presence contract participation, 2e sections V/T-a/T-b/E/G receipts, README/AGENTS alignment + gallery refresh (98db26d), check_arch 1.5.1; project 0.10.0, pins aether/harmonia v0.10.0.
   - **Release verification (2026-11-23):** `verify-full` exit 0 (67/67 tests) after the SMS initialization and test-material fixes (`5655d8b`). Family parity harness **14/14 PASS** and full-gallery Vulkan validation **60/60 clean**; README gallery had already been regenerated for this release.
 - **Release:** v0.9.0 (2026-11-16) - **deformation half + gate resolution consumed.** ANI4/ANI5 renderer halves (shared `DeformPass`: rest->morph->skin per tick, BLAS refit, rest-pose vertex copy, skinned/morphed conservative bounds, radiance-cache gate for hasMorphs()) + DQS blend consumption (zero renderer code - rides the shared job/staging); parity thresholds recalibrated (fresh gate 14/14 PASS incl. this renderer, 0 VUID); triage sync (C11 consumed-claim removed). Receipts: module **61/61**, e2e sequences 0 VUID with motion proof. Pins: Harmonia **v0.9.0**, Aether **v0.9.0**.
