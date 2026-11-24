@@ -1,3 +1,29 @@
+# Theia v0.12.0 (2026-11-24) - minor release
+
+Real-time renderer release consuming **Harmonia v0.12.0 + Aether v0.12.0**.
+
+## Shipped
+- CAM-1: scene-camera assembly and animated placement now come from Harmonia's shared
+  `CameraAssembly`. Controller navigation, camera jitter, accumulation/view gates and
+  presentation behavior are unchanged.
+
+## Receipts
+- Shared camera assembly: **7/7** tests; Theia: **67/67**.
+- Qualification-tool tests: **11/11**; ruff clean.
+- Direct capture identity: `mean_diff=0`, `rel_mse=0`, `SSIM=1.0`, `PSNR=inf`.
+- Parity: **14/14 PASS**. Full-gallery Vulkan validation: **60/60 clean**.
+
+## Gallery
+- Fresh README gallery regenerated at 1280x720 / 256 frames.
+- **23/30 byte-identical**; seven images have speckle-level differences only and are staged
+  in the working tree for owner visual review.
+
+## Release mechanics
+- Local release-preparation commits only. Push and `v0.12.0` tags wait for the owner's
+  screenshot approval.
+
+---
+
 # Theia v0.9.0 (2026-11-16) - minor release
 
 Real-time renderer release consuming **Harmonia v0.9.0 + Aether v0.9.0**.
