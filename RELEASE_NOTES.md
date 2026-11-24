@@ -15,12 +15,12 @@ Real-time renderer release consuming **Harmonia v0.12.0 + Aether v0.12.0**.
 
 ## Gallery
 - Fresh README gallery regenerated at 1280x720 / 256 frames.
-- **23/30 byte-identical**; seven images have speckle-level differences only and are staged
-  in the working tree for owner visual review.
+- **23/30 byte-identical**; seven images have speckle-level differences only and were
+  approved after owner visual review.
 
 ## Release mechanics
-- Local release-preparation commits only. Push and `v0.12.0` tags wait for the owner's
-  screenshot approval.
+- Local release-preparation commits. Owner screenshot review complete; push and `v0.12.0`
+  tags proceed together.
 
 ---
 
