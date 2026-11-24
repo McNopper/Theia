@@ -6,12 +6,12 @@
 #include <cstdint>
 #include <slang-math/slang-math.hpp>
 #include <string>
-#include <tuple>
 
 #include "harmonia/core/Barrier.hpp"
 #include "harmonia/core/Env.hpp"
 #include "harmonia/core/Logger.hpp"
 #include "harmonia/renderer/Camera.hpp"
+#include "harmonia/renderer/CameraAssembly.hpp"
 #include "theia/camera/CameraJitter.hpp"
 
 namespace theia {
@@ -366,11 +366,12 @@ bool Application::onSceneLoaded(const harmonia::scene::SceneLoader::SceneConfig&
     m_cameraNodeId = sceneConfig.cameraNodeId;
     m_cameraTick = ~std::uint64_t{0};
 
-    applySceneCamera(sceneConfig);
+    if (!applySceneCamera(sceneConfig)) {
+        return false;
+    }
 
-    // Scene-scale-aware near/far — shared helper from harmonia::renderer::Camera.
+    // Scene-scale-aware near/far are assembled once in harmonia::renderer::CameraAssembly.
     const float camDist = sm::length(m_camera.target - m_camera.position);
-    std::tie(m_camera.nearPlane, m_camera.farPlane) = harmonia::renderer::Camera::nearFarFromDistance(camDist);
     // harmonia::renderer::Camera move speed also scales with the scene (5× the camera distance, so navigating
     // a scene feels responsive rather than crawling); mouse-wheel still adjusts on top.
     m_camCtrl.speed = std::max(0.1f, camDist * 2.5f);
@@ -938,13 +939,7 @@ void Application::placeBoundCamera(double seconds) {
     if (!pose) {
         return; // hand-built scene without a placement - keep the current view
     }
-    m_camera.position = pose->position; // aether::Vec3 is sm::float3
-    m_camera.target = m_camera.position + (pose->rotation * sm::float3{0.0f, 0.0f, -1.0f});
-    m_camera.up = pose->rotation * sm::float3{0.0f, 1.0f, 0.0f};
-    // Scene-scale-aware clip planes follow the placed camera-to-target
-    // distance (same helper the load path uses).
-    const float camDist = sm::length(m_camera.target - m_camera.position);
-    std::tie(m_camera.nearPlane, m_camera.farPlane) = harmonia::renderer::Camera::nearFarFromDistance(camDist);
+    m_camera = harmonia::renderer::CameraAssembly::fromPose(m_camera, *pose);
     m_renderer->setCamera(m_camera);
 }
 

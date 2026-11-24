@@ -9,19 +9,16 @@ records stay below.
 
 **C track: shipped.** The PSMS-ReSTIR port (Hong et al., SIGGRAPH Asia 2025; reference: the PSMS-ReSTIR Falcor implementation) is complete and qualified on the C1/C2/C3 track: pooled-energy bias 0.15-1.2% at the 8192-frame gate (gate 2%, pooled SE ~1.8%), deterministic same-seed captures, a 2.5x equal-time MSE win on absorption-prefix chains and parity on light-tailed scenes, reuse at ~5% frame-time overhead. SMS sampling is active by default (`--sms-mode local`); spatiotemporal reuse via `--sms-mode reuse`. Eleven root-caused bring-up defects were fixed on the way (receipts: Baseline v0.8.2, the git log of the merge wave, and the qualification manifest under `build/sms-qualification/run_manifest.json`). The gallery regression check after the merge: byte-identical or pixel-identical everywhere except speckle-level firefly shifts on the glass-bearing scenes (cornell_spheres/suzanne, dragon_teapot, shaderball_transmission), means <=0.07/255.
 
-**Follow-up status (2026-11-23):** equal-time timing acceptance is closed and the README
-gallery is refreshed for this code. The next implementation item is **CAM-1
-camera-assembly deduplication** (chartered in `Harmonia/PLAN.md` §3): shared scene-camera
-assembly and animated-placement semantics in Harmonia, with Theia's controller and
-renderer behavior unchanged. Optional, unchartered estimator work remains a true RTXDI
-BASIC `piSum` mode and RAY_TRACED's remaining source-side BSDF/facing term. C4 is closed
-on the owner's perceptual acceptance with the 2% energy gate explicitly waived, not
-passed. DN3M4 is an opt-in production-output test (`HARMONIA_DN3M4_DIR`) whose normal-suite
-skip is intentional and whose configured run is recorded as passing. None is an open
-release blocker.
+**Follow-up status (2026-11-24):** equal-time timing acceptance is closed and the README
+gallery is refreshed for this code. CAM-1 camera-assembly deduplication is implemented
+and verified. Optional, unchartered estimator work remains a true RTXDI BASIC `piSum`
+mode and RAY_TRACED's remaining source-side BSDF/facing term. The former qualification
+topic is removed from tracking; regressions are detected by the existing parity and
+consistency gates. DN3M4 is an opt-in production-output test (`HARMONIA_DN3M4_DIR`) whose
+normal-suite skip is intentional and whose configured run is recorded as passing.
 
 **Historical research receipt (2026-11-19; conditional plan superseded by the shipped decisions
-and follow-up status above): converged-bias fix inventory from the reference implementations** (recorded while the post-`16e9ae4` C4 correctness
+and follow-up status above): converged-bias fix inventory from the reference implementations** (recorded while the post-`16e9ae4` COMPLEX_CASE correctness
 battery runs; no code written yet - plan-before-edit holds until the verdict):
 - *NVIDIA RTXDI* (`Doc/NoiseAndBias.md` + `RTXDI-Library/Include/Rtxdi/DI/
   TemporalResampling.hlsli`): three-level `biasCorrectionMode` - OFF =
@@ -48,10 +45,10 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
   the same history cap family; reject -> full-replay fallback = unbiased-by-fallback
   on the shift side). **The one documented gap vs RTXDI: no per-source conservative
   visibility during the merge** - we only trace the final single shadow ray (L1199).
-*Conditional acceptance (decided by the running C4 correctness verdict):*
-  - **C4 gate GREEN** -> record receipts; the RAY_TRACED step stays an optional
+*Conditional acceptance (decided by the running COMPLEX_CASE correctness verdict):*
+  - **COMPLEX_CASE gate GREEN** -> record receipts; the RAY_TRACED step stays an optional
     hardening candidate (owner decision), research recorded only.
-  - **C4 gate FAIL** -> implement a parameter-driven `biasCorrectionMode`
+  - **COMPLEX_CASE gate FAIL** -> implement a parameter-driven `biasCorrectionMode`
     (historical proposal; shipped semantics are now 0 = RTXDI-OFF alias of the default,
     1 = default RTXDI-OFF-form, 2 = visibility-only RAY_TRACED hardening) over the temporal and
     spatial merges of `restirDiDirect`: for the merged source(s), re-run the target-PDF
@@ -59,7 +56,7 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     visibility ray (one per source, reusing the fresh-visibility/age tracking like
     RTXDI's `temporalSampleHasFreshVisibility`) shows the sample was not generatable
     there. Knob default = 1 (bit-identical to today; no silent semantic change), the
-    qualification runs both levels. Acceptance: C4 local+reuse @8192f within +-2%,
+    qualification runs both levels. Acceptance: COMPLEX_CASE local+reuse @8192f within +-2%,
     C1-C3 + DRAGON re-cert unchanged-green, module suite 64/64, k2-only bit-identity
     on the existing scenes; every step plan-before-edit and GPU-serial; commits only,
     no push until the owner says.
@@ -104,29 +101,29 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     records is f5c71e7 (src/demo/Application.cpp); every later commit touches PLAN.md
     only. => their recorded verdicts transfer; re-running them would re-render
     bit-identical images.
-  - *C4 is the ONLY affected case*: its `[camera]` carries no inline vfov and instead
+  - *COMPLEX_CASE is the ONLY affected case*: its `[camera]` carries no inline vfov and instead
     references `presets/openpbr_studio_near.camera.toml`, and staged qualification
     scenes ship WITHOUT `presets/` - proven by the loader warning in the candidate log
     (`SceneLoader: malformed render preset reference 'presets/preview.render.toml'`)
     and by the source comment at Application.cpp L369-376 ("staged scenes ship without
-    presets/ - the staged C4 qualification fixture hit exactly this"). The preset's own
-    `vertical_field_of_view = 50` therefore never reaches C4; the fallback (45 -> 39.1)
-    is what C4's projection is built from.
+    presets/ - the staged COMPLEX_CASE qualification fixture hit exactly this"). The preset's own
+    `vertical_field_of_view = 50` therefore never reaches COMPLEX_CASE; the fallback (45 -> 39.1)
+    is what COMPLEX_CASE's projection is built from.
   - *References are NOT the cost and are NOT invalidated in substance*: they are
     rendered by **Hyperion** (`render_hyperion`, qualify_sms L307/L312), which is
     untouched by f5c71e7 and already carries kCornellVfovDeg = 39.1; a full 4096-spp
-    C4 reference ladder costs ~12s (logs 06:13:59 -> 06:14:11, 4.8 s/frame). Only the
+    COMPLEX_CASE reference ladder costs ~12s (logs 06:13:59 -> 06:14:11, 4.8 s/frame). Only the
     harness's provenance dict (which hashes Theia's exe too) flags them stale.
   - *Where the ~11h actually goes*: `stage_correctness` = modes(2) x frames(3) x
     seeds(4) = 24 Theia renders per case; measured from the recorded log timestamps -
-    512f ~4.5min, 2048f ~19min, 8192f ~78min each. C4 alone is therefore ~6.8h in
-    local mode and ~13.6h with reuse - i.e. the ladder cost IS the C4 candidate
+    512f ~4.5min, 2048f ~19min, 8192f ~78min each. COMPLEX_CASE alone is therefore ~6.8h in
+    local mode and ~13.6h with reuse - i.e. the ladder cost IS the COMPLEX_CASE candidate
     sweep, not the references.
   - *Acceptance substitution (owner's own recorded law):* "if from a perceptual
     perspective one does not see a difference, I accept." Perceptual re-measure needs
-    ONE post-fix 8192f C4 render (single seed, ~78min, one GPU app) and is directly
+    ONE post-fix 8192f COMPLEX_CASE render (single seed, ~78min, one GPU app) and is directly
     comparable to the verified pre-fix baseline just reproduced on this HEAD's files:
-    C4 tm_mean 5.039/255, SSIM 0.7629 (recorded failing) vs C1/C2/C3/DRAGON
+    COMPLEX_CASE tm_mean 5.039/255, SSIM 0.7629 (recorded failing) vs C1/C2/C3/DRAGON
     1.227/0.799/1.542/1.352 (accepted, invisible) vs the measured noise floor
     tm 0.357, SSIM 0.966.
   - *Explicitly NOT verified by this decision*: the harness's 2%-energy gate at 8192f
@@ -135,10 +132,10 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     entry exists so the absence of that gate can never be mistaken for a pass.
 
   **Calibrated decision rule (2026-11-19, measured before the post-fix render).**
-  Instrument: `c4_postfix_verdict.py` (selftest 12/12 PASS, reproduces every
+  Instrument: `complex_case_postfix_verdict.py` (selftest 12/12 PASS, reproduces every
   recorded number), scoring row-mode / emitter-band / tm_mean / SSIM against
-  `ref_C4_final_4096.exr`:
-  - *Emitter band* = `c4_diff_composition.py`'s exact mask (y24:41, x60:101),
+  `ref_COMPLEX_CASE_final_4096.exr`:
+  - *Emitter band* = `complex_case_diff_composition.py`'s exact mask (y24:41, x60:101),
     NOT the qualify ROI - an earlier draft of the instrument scored the qualify
     window (y105-177) and read ratio 0.901 where the recorded finding is
     0.000; the selftest caught it. Verified against the recorded composition
@@ -161,11 +158,11 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     78min. The 512f-first rule therefore avoids an unnecessary overnight job while
     keeping the escalation path intact.
 
-  **C4 POST-FIX VERDICT (2026-11-19 16:34) - PASS on the owner's perceptual bar.**
+  **COMPLEX_CASE POST-FIX VERDICT (2026-11-19 16:34) - PASS on the owner's perceptual bar.**
   Render: `theia.exe` built post-f5c71e7 (13:33) over
-  `scenes/C4/c4_dragon_area_light.scene.toml`, 320x240, `--offscreen-frames 512`,
-  `--rng-seed 17`, `--sms-mode local` -> `c4_vfov_sanity.exr`, RENDER_EXIT=0.
-  Scored by `c4_postfix_verdict.py --frames 512` -> VERDICT_EXIT=0.
+  `scenes/COMPLEX_CASE/complex_case_dragon_area_light.scene.toml`, 320x240, `--offscreen-frames 512`,
+  `--rng-seed 17`, `--sms-mode local` -> `complex_case_vfov_sanity.exr`, RENDER_EXIT=0.
+  Scored by `complex_case_postfix_verdict.py --frames 512` -> VERDICT_EXIT=0.
 
   | metric | pre-fix | post-fix | 512f noise floor | bar |
   |---|---|---|---|---|
@@ -177,7 +174,7 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
   | SSIM | 0.7602 | **0.9611** | ceiling 0.9540 | - |
   | lum_hist_corr | 0.9996 | **1.0000** | - | - |
 
-  - *Interpretation:* the vfov fallback (f5c71e7) was the cause of C4's perceptual
+  - *Interpretation:* the vfov fallback (f5c71e7) was the cause of COMPLEX_CASE's perceptual
     failure - the emitter now lands on the reference row and the band energy
     matches to 0.2%, so the black-band composition defect is gone. tm_mean fell
     from 8.4x its own noise floor to 1.2x, and SSIM now sits ABOVE the measured
@@ -188,7 +185,7 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     gate):* mean_diff 0.381/120, rel_mse 0.0436/250, SSIM 0.9611/0.6,
     lum_hist 1.0000/0.8. The thresholds are calibrated for 256f, and per e457997
     the harness's own 8192f/4-seed 2% energy gate remains **NOT run** - this entry
-    closes C4 on the owner's perceptual bar only, and does not convert the absent
+    closes COMPLEX_CASE on the owner's perceptual bar only, and does not convert the absent
     energy gate into a pass.
   - C1/C2/C3/DRAGON remain on their recorded verdicts (scope proof, e457997); their
     images are provably unchanged by f5c71e7 (inline vfov / resolvable preset).
@@ -485,7 +482,7 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     + Theia `gi.comp.slang`.
   - *Acceptance (unchanged from the original Gap-B text), instruments now ready:*
     Gap-C fixture must still reach k=3 -> `tools/qualify_gap_c.py` reports the k
-    differential directly (A/B/D readout); module suite 64/64; C1-C4 battery
+    differential directly (A/B/D readout); module suite 64/64; C1-COMPLEX_CASE battery
     re-cert; and a **disagreement case** (material proxy vs sampled alpha) must be
     demonstrated on record - i.e. a vertex where `specularRoughAnisoIor.x` and the
     sampled lobe's alpha differ (a multi-lobe material: diffuse+coat/GGX), reported
@@ -555,11 +552,11 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     unchanged** and the change is a no-op on this single-lobe fixture. Condition C is
     still judged by the owner's noise-envelope criterion (0fbcb0b), unchanged.
   - *Battery re-cert in flight as a REGRESSION DIFFERENTIAL* (one GPU app, sequential):
-    for each of C1-C4 render 320x240 / 512f / seed 17 / local and compare against the
+    for each of C1-COMPLEX_CASE render 320x240 / 512f / seed 17 / local and compare against the
     pre-Gap-B baseline - C1-C3 use the stored `cand_<case>_local_512_17.exr` (those
     scenes pin `vertical_field_of_view` inline, so they remain valid Gap-B baselines
-    even though they predate f5c71e7) and C4 uses `c4_vfov_sanity.exr` (the only valid
-    C4 baseline: post-f5c71e7, pre-Gap-B). **Rationale:** Gap B draws no RNG and moves
+    even though they predate f5c71e7) and COMPLEX_CASE uses `complex_case_vfov_sanity.exr` (the only valid
+    COMPLEX_CASE baseline: post-f5c71e7, pre-Gap-B). **Rationale:** Gap B draws no RNG and moves
     no sample, so `bit-identical <=> capture decisions unchanged <=> the recorded
     pre-change verdict still holds`; any difference is reported with its magnitude and
     must be judged against the case's 512f noise floor, never silently accepted.
@@ -568,7 +565,7 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
   - *Still owed for Gap B:* the battery result above, and the **material-vs-sampled
     disagreement case** - a multi-lobe vertex (e.g. diffuse + coat/GGX) where
     `specularRoughAnisoIor.x` and the sampled lobe's alpha actually differ, reported
-    old/new. Note C1-C3/C4 are transmission/coat content, so they are the natural
+    old/new. Note C1-C3/COMPLEX_CASE are transmission/coat content, so they are the natural
     home for that case.
 
   **Gap B material-vs-sampled-alpha disagreement case - STATIC HALF (2026-11-19).**
@@ -580,11 +577,11 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
   | material | proxy | proxy verdict | selectable sampled lobes -> alpha | disagree? |
   |---|---|---|---|---|
   | DiffuseFloor / Wall | 1.0 / 1.0 | pass | diffuse 1.0, specular same side | no |
-  | Floor (C4) | 0.55 | pass | diffuse 1.0, specular 0.55 | no |
+  | Floor (COMPLEX_CASE) | 0.55 | pass | diffuse 1.0, specular 0.55 | no |
   | RoughGold | 0.30 | pass | metal/specular 0.30 | no |
   | GlassDelta / GlassAbsorbing / Gem | 0.0 | fail | delta transmission -> 0.0 | no |
   | PolishedMetal (hybrid_k3) | 0.05 | fail | metal 0.05 | no |
-  | **Ceramic (C4 teapot)** | **0.08** | **fail** | **diffuse -> 1.0 (pass)**, coat 0.04, specular `effSpecRough` (base 0.08, coat-modulated, still < 0.2) | **YES** |
+  | **Ceramic (COMPLEX_CASE teapot)** | **0.08** | **fail** | **diffuse -> 1.0 (pass)**, coat 0.04, specular `effSpecRough` (base 0.08, coat-modulated, still < 0.2) | **YES** |
 
   - *Why Ceramic is the only one:* it is genuinely multi-lobe - `base_metalness = 0.0`,
     `base_weight = 1.0`, `coat_weight = 1.0`, `coat_roughness = 0.04` - so a diffuse
@@ -596,17 +593,17 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     material in the battery falls on the same side of 0.2 for both rules, so Gap B is
     a no-op for them - which is exactly what the C1-C3 bit-identical regression
     already showed.
-  - *Dynamic half still owed:* demonstrate the disagreement on a render (C4's k
-    distribution old/new via the mask differential, or the C4 battery delta showing
-    Ceramic vertices changing). Pending the C4 comparison - static evidence only
+  - *Dynamic half still owed:* demonstrate the disagreement on a render (COMPLEX_CASE's k
+    distribution old/new via the mask differential, or the COMPLEX_CASE battery delta showing
+    Ceramic vertices changing). Pending the COMPLEX_CASE comparison - static evidence only
     until then, deliberately not claimed as a demonstration.
 
   **Gap B battery regression - COMPLETE (2026-11-19 21:05) + biasCorrectionMode
   RECEIPT (Theia `700e479`). Tree clean.**
-  - *How the C4 run survived its own harness:* the `battery_c4` shell was **SIGTERM'd by
+  - *How the COMPLEX_CASE run survived its own harness:* the `battery_complex_case` shell was **SIGTERM'd by
     its own timeout** (twice this session - 3000 s earlier, then 7200 s), but the child
     `theia` process outlived it and **finished at 20:50:26**, writing
-    `gapb_regress/C4_local_512_17.exr` (358 141 B) as an orphan. The comparison was
+    `gapb_regress/COMPLEX_CASE_local_512_17.exr` (358 141 B) as an orphan. The comparison was
     therefore run separately (CPU only). GPU was verified free (2 %) before the next
     stage; no second GPU app was ever started.
   - *Results - the pattern is exactly what the [Ceramic] analysis predicted:*
@@ -614,18 +611,18 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     | case | baseline | pixel max&#124;d&#124; | pixel mean&#124;d&#124; | verdict |
     |---|---|---|---|---|
     | C1 / C2 / C3 | stored 512f seed17 | **0** | **0** | bit-identical |
-    | **C4** | `c4_vfov_sanity.exr` | **0.00252** | 6.27e-07 | **CHANGED** |
+    | **COMPLEX_CASE** | `complex_case_vfov_sanity.exr` | **0.00252** | 6.27e-07 | **CHANGED** |
 
-  - *C4's change is imperceptible* (`compare_renders`, new vs pre-Gap-B baseline):
+  - *COMPLEX_CASE's change is imperceptible* (`compare_renders`, new vs pre-Gap-B baseline):
     **tm_mean 0.000/255** against a 512f noise floor of **0.605** and a bar of 3.0;
     **SSIM 0.999999** against the 0.9540 noise ceiling; **mean_diff 0.000** (threshold
     120); Rel-MSE 0.000000 (250); max_diff 0.553 with **p99 0.001**; PSNR 95.31 dB;
     ictec_dE mean 0.0000 / max 0.1214; black_frac identical; **gate PASS, exit 0**.
-    => Gap B changed C4 by an amount far below the scene's own sampling noise while
+    => Gap B changed COMPLEX_CASE by an amount far below the scene's own sampling noise while
     leaving C1-C3 bit-identical - i.e. it did exactly what it was designed to do and
-    nothing more. **Every recorded C1-C4 verdict still holds.**
+    nothing more. **Every recorded C1-COMPLEX_CASE verdict still holds.**
   - ***Dynamic half of the [Ceramic] disagreement case - DEMONSTRATED:*** the change
-    appears in **C4 alone**, which is the only case containing `Ceramic` (the only
+    appears in **COMPLEX_CASE alone**, which is the only case containing `Ceramic` (the only
     material where material-proxy 0.08 and diffuse-sample 1.0 fall on opposite sides of
     `kAlphaMin`), and in no other case. Static half: 2a0b3f5; dynamic half: here.
   - ***biasCorrectionMode (`700e479`) - full verification chain on the post-Gap-A
@@ -742,7 +739,7 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
 
   **Hybrid fixture battery ROI - DERIVATION BLOCKED on the recorded method + CANDIDATE
   PRODUCED. OWNER DECISION REQUIRED (an ROI is a gate parameter).**
-  - *The recorded method returns nothing here:* `qualify_sms` derives C4's ROI from "the
+  - *The recorded method returns nothing here:* `qualify_sms` derives COMPLEX_CASE's ROI from "the
     512-frame local-vs-reuse difference map". Running exactly that on `hybrid_k3`
     (512f / seed 17, both modes) gives **difference mass 0.000000, peak 0.000000,
     0 of 76 800 nonzero pixels** - i.e. `reuse` produced a **byte-identical** image to
@@ -753,7 +750,7 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     `Application.cpp` sets `.smsSpatialReuse = m_smsMode == SmsMode::Reuse` (L197/L637).
     So on THIS fixture spatial reuse contributes nothing measurable at this budget -
     a property of the fixture (single emitter, 12 emissive triangles, deterministic
-    selection), not a broken flag. (C4 does show reuse engaging - 0.82% of pixels differ.)
+    selection), not a broken flag. (COMPLEX_CASE does show reuse engaging - 0.82% of pixels differ.)
   - *Candidate from data already on disk (no new renders):* the window where the **k=3
     hybrid shift itself** changes the result - mask1 (k2-only) vs mask3 (hybrid) from the
     `qualify_gap_c` run: difference mass 263.61, peak 89.99, **8 203 of 76 800 nonzero**,
@@ -917,7 +914,7 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     carry complete placement (translate + rotate_x/y inline or resolvable preset);
     the 4 camera-less files are Aether format-test-only; the node-camera fixtures
     (camera_orbit/skinned_orbit) carry `node` PLUS static translate/rotate as
-    preview; C4's preset reference is resolve-on-site with full inline placement.
+    preview; COMPLEX_CASE's preset reference is resolve-on-site with full inline placement.
     So the contract `(cameraPos && cameraAt)` rejects NOTHING that renders today.
   - *Edits (exact):*
     1. **Harmonia `src/harmonia/scene/SceneLoader.cpp`** - after
@@ -1006,7 +1003,7 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     **0.000000**, tm 7.088/7.089 (its GAPC_EXIT=1 is the recorded mechanical
     condition-C verdict, unchanged).
   - ***ROI (decision 2):*** `qualify_sms.py --case` choices now
-    `{C1,C2,C3,C4,DRAGON,HYBRID}` (tool loads, staged scene resolves, ruff 0).
+    `{C1,C2,C3,COMPLEX_CASE,DRAGON,HYBRID}` (tool loads, staged scene resolves, ruff 0).
 
   **RELEASE PREP (2026-11-20) - documentation aligned with the code + README
   screenshots recreated; committed everywhere, NOTHING pushed (owner rule:
@@ -1055,10 +1052,10 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
   - *Green receipts at pause:* Harmonia suite **H_CTEST=0**, Theia **100% of 67**,
     **test_arch ARCH=0**, `qualify_gap_c.py` k3 FIRES 90.845032 / mask LIVE /
     mask2-vs-mask3 0.000000, structural verifier **28/28**, clang-format clean.
-  - *Closed this session:* C4 perceptual PASS (8049b63), DN3-M4 (c7770f6/1b27c2a),
+  - *Closed this session:* COMPLEX_CASE perceptual PASS (8049b63), DN3-M4 (c7770f6/1b27c2a),
     Gap C SATISFIED (0fbcb0b), arch gate (110f6c8), Gap B steps 1-2 (4d44983,
     b79beb6, a478208), **Gap B battery regression complete** (33ac8bd: C1-C3
-    bit-identical, C4 changed only where `[Ceramic]` lives, tm 0.000 vs noise 0.605),
+    bit-identical, COMPLEX_CASE changed only where `[Ceramic]` lives, tm 0.000 vs noise 0.605),
     **`biasCorrectionMode` shipped** (700e479, level 2 NOT yet exercised), cross-renderer
     audit executions 1-4 with backlog cleared (1602c91/d21f19f/6995cf9/0108882),
     hoist decision (d268d5b).
@@ -1108,7 +1105,7 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     is ONE definition, or (b) keep it renderer-specific but add a cross-renderer
     parity assertion for it. Deliverable: a divergence table with owner + test per row,
     so the base is verified before further paper-level work builds on it.
-  - *Sequencing:* the two in-flight items (C4 battery comparison, `biasCorrectionMode`
+  - *Sequencing:* the two in-flight items (COMPLEX_CASE battery comparison, `biasCorrectionMode`
     link/commit) are closed FIRST so this session starts from a clean tree; no new
     feature work is started ahead of it.
 
@@ -1294,7 +1291,7 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
     the code, and each was diagnosed before being "fixed" to green.
   - *Receipts:* Harmonia **BUILD_EXIT=0**, Theia **BUILD_EXIT=0** (gi.comp compiles
     against the new record layout), verifier **28/28 VERIFY_EXIT=0**, braces 59/59 and
-    296/296. **Suites and `qualify_gap_c.py` NOT yet re-run** - the C4 battery job owns
+    296/296. **Suites and `qualify_gap_c.py` NOT yet re-run** - the COMPLEX_CASE battery job owns
     the GPU (one app at a time); they are the next actions when it releases.
   - *Stage 2 still owed (and the knob is not safe to raise past 3 until it lands):*
     capture hops beyond the first, the N-hop prefix replay in place of the single-hop
@@ -1480,10 +1477,9 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
   clang-format pinned 22.1.3, ruff contract in `ruff.toml` (identical x5), cppcheck,
   bandit, actionlint 1.7.12, yamllint. Coverage stays a local activity (the test
   suite needs a GPU).
-- **Next:** **CAM-1 camera-assembly deduplication** (family charter in
-  `Harmonia/PLAN.md` §3) is the next shared-engine implementation item and will be
-  consumed here. The PERF4/PERF5 arc is **removed 2026-11-15** (measured does-not-serve Theia real-time; tombstones + triggers in Harmonia PLAN section 5.1; the design/stage record stays in git - Baseline v0.8.0).
-  Theia's remaining live items: none beyond CAM-1 (GI-ENH closed 2026-11-16 - recorded paper-deltas are
+- **Next:** no approved implementation item remains. CAM-1 camera-assembly deduplication is
+  complete and verified. The PERF4/PERF5 arc is **removed 2026-11-15** (measured does-not-serve Theia real-time; tombstones + triggers in Harmonia PLAN section 5.1; the design/stage record stays in git - Baseline v0.8.0).
+  Theia's remaining live items: none (GI-ENH closed 2026-11-16 - recorded paper-deltas are
   notes, not tasks; shared-estimator adopters: C12 shipped, C11 dropped - see
   `Harmonia/PLAN.md`).
 ## How to continue
@@ -1640,7 +1636,7 @@ deterministic delta, estimator unbiased. Remaining:
   eligibility guards stay material-roughness unless that read says otherwise
   (recorded either way). Acceptance: Gap-C fixture still reaches k=3 (criteria
   change must not silently change which k fires - report old/new k distribution
-  via the mask differential), module suite 64/64, C1-C4 battery re-cert green,
+  via the mask differential), module suite 64/64, C1-COMPLEX_CASE battery re-cert green,
   and a disagreement case (material proxy vs sampled alpha) demonstrated on record.
   *Gap A - k >= 4 (uncap + N-hop body):* (1) re-read the reference's adaptive
   rcVertexLength + full-prefix replay (Shift.slang / PathTracer.slang handleHit)
@@ -1658,7 +1654,7 @@ deterministic delta, estimator unbiased. Remaining:
   constant). Acceptance: Gap-C fixture at the raised cap must be able to fire k=4
   (mask differential evidence, same contract as C), k2-only mask = bit-identity on
   the existing scenes (no regression), identity-style check like 2d.2 (shifted
-  value vs full-replay at overlap where both are defined), suite 64/64, C1-C4 +
+  value vs full-replay at overlap where both are defined), suite 64/64, C1-COMPLEX_CASE +
   fixture battery green. GPU receipts strictly serial; every step keeps commits
   local (no push).
 
@@ -1696,14 +1692,14 @@ deterministic delta, estimator unbiased. Remaining:
     bit1; L1568 gets it right). `AGENTS.md`'s description - 0 = replay,
     1 = reconnection, 2/3 = hybrid, body chosen by kLevel - is the accurate one.
     The in-source comment fix is **deferred to the next build window**: the running
-    C4 render holds `theia.exe`, and touching sources changes provenance /
+    COMPLEX_CASE render holds `theia.exe`, and touching sources changes provenance /
     executable hashes.
   - *Battery membership (its ROI) still NOT added*: the ROI must be derived from a
-    probe render the way C4's was (local-vs-reuse difference map), never guessed -
+    probe render the way COMPLEX_CASE's was (local-vs-reuse difference map), never guessed -
     so no `CASES` entry was written. Remaining receipt step, not an omission.
   - Receipts so far: ruff 0 (family `tools/` contract), `py_compile` 0,
     missing-render guard exit 2. **Renders not run** - GPU serial, queued behind the
-    post-vfov-fix C4 sanity render; cost 4 Theia x 256f + 1 Hyperion.
+    post-vfov-fix COMPLEX_CASE sanity render; cost 4 Theia x 256f + 1 Hyperion.
 
 
 **Stream compaction** (§6.2.2) — **LANDED 2026-11-09.** The GI pass split into

@@ -123,7 +123,7 @@ class Application final : public harmonia::app::App,
     /// vfov/ev100 fallbacks (f5c71e7 / 3f27122) and the controller orientation reset.
     /// Extracted from onSceneLoaded (Extract Method, the Code-health TU-split seam) so
     /// Application.cpp stays under the 1000-line architecture gate.
-    void applySceneCamera(const harmonia::scene::SceneLoader::SceneConfig& sceneConfig);
+    bool applySceneCamera(const harmonia::scene::SceneLoader::SceneConfig& sceneConfig);
     /// GI-ENH: parse THEIA_BIAS_CORRECTION (0 = RTXDI-OFF alias of the default,
     /// 1 = default RTXDI-OFF-form, 2 = visibility-only RAY_TRACED hardening).
     /// Extracted into ApplicationCompute.cpp for the same reason as applySceneCamera.

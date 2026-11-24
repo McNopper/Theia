@@ -1548,7 +1548,7 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
         //  * DI/PT on (restirDiEnabled == 1): the forward pass SKIPS its proxies, and
         //    a single-light-sample reservoir cannot represent DELTA reflections of the
         //    emitter (camera->primary(delta)->emissive) - the term would vanish between
-        //    owners (measured: C4 dragon D2 gap, theia exactly 0 where Hyperion counts
+        //    owners (measured on the historical complex-scene gap, theia exactly 0 where Hyperion counts
         //    the depth-1 post-specular emission). The walk therefore carries it through
         //    the SHARED evalEmissionGuarded at depth bounce+primaryCharge - exactly
         //    Hyperion's rule: specular adds, non-specular is 0 + terminate (which keeps

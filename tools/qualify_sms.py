@@ -59,12 +59,12 @@ CASES = {
     # light source excluded (in-window max 2.7 vs scene max 48).
     "DRAGON": {"scene": str(GITHUB / "Aether" / "assets" / "dragon_teapot.scene.toml"),
                "roi": [0.375, 0.688, 0.675, 0.988]},
-    # C4 = 2e complex-scene integration: dragon_teapot content + a finite area
+    # COMPLEX_CASE = 2e complex-scene integration: dragon_teapot content + a finite area
     # emitter (usesSms requires emitterCount != 0; the IBL-only DRAGON asset
     # runs plain PT - recorded in the 2e receipts). ROI = the SMS-active
     # region, derived from the 512-frame local-vs-reuse difference map
     # (reuse engages: 0.82% of pixels differ, in-window mean 3.6e-4).
-    "C4": {"scene": "c4_dragon_area_light.scene.toml", "roi": [0.375, 0.438, 0.675, 0.738]},
+    "COMPLEX_CASE": {"scene": "complex_case_dragon_area_light.scene.toml", "roi": [0.375, 0.438, 0.675, 0.738]},
     # Hybrid fixture battery ROI - OWNER DECISION 2026-11-20 (receipt 6873e3a).
     # The recorded derivation method (512f local-vs-reuse difference map) yields
     # EXACTLY ZERO on this fixture (reuse renders byte-identical to local - verified

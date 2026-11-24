@@ -100,9 +100,11 @@ class QualificationHarnessTests(unittest.TestCase):
               patch.object(q, "render_theia", side_effect=lambda label, scene, mode, frames, seed: (Path(label + ".exr"), 1.0)),
               patch.object(q, "roi_energy", return_value=np.array([10.0, 20.0, 30.0])),
               patch.object(q, "record", side_effect=record.append),
-              patch.object(q, "roi_mse", side_effect=lambda ref, cand, roi: (
-                  (2.0 if "local" in cand.name else 1.0) if "512" in cand.name else
-                  (1.0 if "local" in cand.name else 0.5)))):
+              patch.object(q, "roi_mse", side_effect=lambda ref, cand, roi: {
+                  512: 2.0 if "local" in cand.name else 1.0,
+                  2048: 1.0 if "local" in cand.name else 0.5,
+                  8192: 0.5 if "local" in cand.name else 0.25,
+              }[next(frames for frames in (512, 2048, 8192) if f"_{frames}_" in cand.name)])):
                 q.stage_correctness("C1", Path("reference.exr"))
         self.assertEqual(record[0]["results"]["local_512"]["mse"], 2.0)
         self.assertEqual(record[0]["results"]["reuse_512"]["mse"], 1.0)
