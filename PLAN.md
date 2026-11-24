@@ -10,13 +10,15 @@ records stay below.
 **C track: shipped.** The PSMS-ReSTIR port (Hong et al., SIGGRAPH Asia 2025; reference: the PSMS-ReSTIR Falcor implementation) is complete and qualified on the C1/C2/C3 track: pooled-energy bias 0.15-1.2% at the 8192-frame gate (gate 2%, pooled SE ~1.8%), deterministic same-seed captures, a 2.5x equal-time MSE win on absorption-prefix chains and parity on light-tailed scenes, reuse at ~5% frame-time overhead. SMS sampling is active by default (`--sms-mode local`); spatiotemporal reuse via `--sms-mode reuse`. Eleven root-caused bring-up defects were fixed on the way (receipts: Baseline v0.8.2, the git log of the merge wave, and the qualification manifest under `build/sms-qualification/run_manifest.json`). The gallery regression check after the merge: byte-identical or pixel-identical everywhere except speckle-level firefly shifts on the glass-bearing scenes (cornell_spheres/suzanne, dragon_teapot, shaderball_transmission), means <=0.07/255.
 
 **Follow-up status (2026-11-23):** equal-time timing acceptance is closed and the README
-gallery is refreshed for this code. Optional, unchartered work comprises a true RTXDI BASIC
-`piSum` mode, RAY_TRACED's remaining source-side BSDF/facing term, and full camera-assembly
-deduplication; these would be new parameterized work, not repairs to the verified default.
-C4 is closed on the owner's perceptual acceptance with the 2% energy gate explicitly waived,
-not passed. DN3M4 is an opt-in production-output test (`HARMONIA_DN3M4_DIR`) whose normal-suite
-skip is intentional and whose configured run is recorded as passing. None is an open release
-blocker or an approved roadmap row.
+gallery is refreshed for this code. The next implementation item is **CAM-1
+camera-assembly deduplication** (chartered in `Harmonia/PLAN.md` §3): shared scene-camera
+assembly and animated-placement semantics in Harmonia, with Theia's controller and
+renderer behavior unchanged. Optional, unchartered estimator work remains a true RTXDI
+BASIC `piSum` mode and RAY_TRACED's remaining source-side BSDF/facing term. C4 is closed
+on the owner's perceptual acceptance with the 2% energy gate explicitly waived, not
+passed. DN3M4 is an opt-in production-output test (`HARMONIA_DN3M4_DIR`) whose normal-suite
+skip is intentional and whose configured run is recorded as passing. None is an open
+release blocker.
 
 **Historical research receipt (2026-11-19; conditional plan superseded by the shipped decisions
 and follow-up status above): converged-bias fix inventory from the reference implementations** (recorded while the post-`16e9ae4` C4 correctness
@@ -40,7 +42,7 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
   `temporalHistoryLength`. i.e. **BASIC-level GRIS + shift admissibility, no
   ray-traced visibility** - consistent with the paper validating by RMSE-at-equal-time
   rather than tight converged-energy gates.
-- *Ours* (`gi.comp restirDiDirect` + path reservoir): BASIC-equivalent already
+- *Ours* (`gi.comp restirDiDirect` + path reservoir): RTXDI-OFF-form equivalent already
   (`evalReservoirSample` per candidate at the primary; `W = w_sum/(M*p_hat)` L1167;
   env balance-heuristic MIS L1195; `prev.M = min(prev.M, kRestirMCap)` L1083 =
   the same history cap family; reject -> full-replay fallback = unbiased-by-fallback
@@ -50,7 +52,8 @@ battery runs; no code written yet - plan-before-edit holds until the verdict):
   - **C4 gate GREEN** -> record receipts; the RAY_TRACED step stays an optional
     hardening candidate (owner decision), research recorded only.
   - **C4 gate FAIL** -> implement a parameter-driven `biasCorrectionMode`
-    (0 = off / 1 = basic = today's behavior / 2 = ray_traced) over the temporal and
+    (historical proposal; shipped semantics are now 0 = RTXDI-OFF alias of the default,
+    1 = default RTXDI-OFF-form, 2 = visibility-only RAY_TRACED hardening) over the temporal and
     spatial merges of `restirDiDirect`: for the merged source(s), re-run the target-PDF
     evaluation at the SOURCE reservoir's surface and zero it when a conservative
     visibility ray (one per source, reusing the fresh-visibility/age tracking like
@@ -1477,8 +1480,10 @@ in `Harmonia/src/harmonia/app/App.cpp:302/:313/:337`) — deliberate; do not reo
   clang-format pinned 22.1.3, ruff contract in `ruff.toml` (identical x5), cppcheck,
   bandit, actionlint 1.7.12, yamllint. Coverage stays a local activity (the test
   suite needs a GPU).
-- **Next:** the PERF4/PERF5 arc is **removed 2026-11-15** (measured does-not-serve Theia real-time; tombstones + triggers in Harmonia PLAN section 5.1; the design/stage record stays in git - Baseline v0.8.0).
-  Theia's live items: **none open** (GI-ENH closed 2026-11-16 - recorded paper-deltas are
+- **Next:** **CAM-1 camera-assembly deduplication** (family charter in
+  `Harmonia/PLAN.md` §3) is the next shared-engine implementation item and will be
+  consumed here. The PERF4/PERF5 arc is **removed 2026-11-15** (measured does-not-serve Theia real-time; tombstones + triggers in Harmonia PLAN section 5.1; the design/stage record stays in git - Baseline v0.8.0).
+  Theia's remaining live items: none beyond CAM-1 (GI-ENH closed 2026-11-16 - recorded paper-deltas are
   notes, not tasks; shared-estimator adopters: C12 shipped, C11 dropped - see
   `Harmonia/PLAN.md`).
 ## How to continue

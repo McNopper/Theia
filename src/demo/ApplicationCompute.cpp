@@ -30,9 +30,9 @@ namespace theia {
 // weight, matched NO reference mode and measured 1.355e34 output - fixed by
 // aliasing instead of inventing a mode); 1 = today's behaviour (the default,
 // bit-identical; RTXDI-OFF-form, historically labeled "basic" - RTXDI's real BASIC
-// piSum normalization is a recorded unimplemented gap); 2 = basic + a per-source
-// conservative visibility test in the ReSTIR DI temporal/spatial merges (the
-// RAY_TRACED visibility half). Lives here so Application.cpp stays under the
+// piSum normalization is a recorded unimplemented gap); 2 = that same default formula
+// plus a per-source conservative visibility test in the ReSTIR DI temporal/spatial
+// merges (the RAY_TRACED visibility half). Lives here so Application.cpp stays under the
 // 1000-line architecture gate (same Extract Method reason as applySceneCamera).
 void Application::parseBiasCorrectionEnv() {
     if (const auto biasRaw = harmonia::core::getEnvString("THEIA_BIAS_CORRECTION")) {

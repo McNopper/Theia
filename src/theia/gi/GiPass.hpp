@@ -123,8 +123,9 @@ class GiPass {
         /// THEIA_SHIFT_MASK=<n>). bit0 = k=2 shift, bit1 = k>=3 hybrid shift.
         /// 0 = replay-only (the clean baseline).
         std::uint32_t reconnectShiftEnabled = 3;
-        /// GI-ENH bias correction (THEIA_BIAS_CORRECTION): 0 = off, 1 = basic (default),
-        /// 2 = ray_traced (+ per-source conservative visibility in the DI merges).
+        /// GI-ENH bias correction (THEIA_BIAS_CORRECTION): 0 = RTXDI-OFF alias of the
+        /// default formula, 1 = default RTXDI-OFF-form `w_sum/(p_hat*M)`, 2 = that
+        /// formula plus per-source conservative visibility in the DI merges.
         std::uint32_t biasCorrectionMode = 1;
         VkImageView motionVectorView = VK_NULL_HANDLE;
         /// PERF8 (RTXPT whitepaper §7, material LOD by ray class): reduced-BRDF +
@@ -209,8 +210,9 @@ class GiPass {
         std::uint32_t fireflyClampEnabled = 1; ///< 1 = presentation clamp (default); 0 = estimator-pure capture
         std::uint32_t reconnectShiftEnabled = 1; ///< GI-ENH (a): reconnection shift feature mask
                                                  ///< bit0 = k=2, bit1 = k>=3. 0 = replay-only.
-        std::uint32_t biasCorrectionMode = 1;    ///< GI-ENH: 0 = off (1/M), 1 = basic
-                                                 ///< (today), 2 = ray_traced (+ source visibility)
+        std::uint32_t biasCorrectionMode = 1;    ///< GI-ENH: 0 = RTXDI-OFF alias of the
+                                                 ///< default, 1 = default RTXDI-OFF-form,
+                                                 ///< 2 = + source conservative visibility
         std::uint32_t smsEnabled = 0;
         std::uint32_t materialLodEnabled = 1;   ///< PERF8: 1 = material LOD tier active (interactive);
                                                 ///< 0 = estimator-pure capture (full material everywhere)

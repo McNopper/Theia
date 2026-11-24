@@ -124,7 +124,8 @@ class Application final : public harmonia::app::App,
     /// Extracted from onSceneLoaded (Extract Method, the Code-health TU-split seam) so
     /// Application.cpp stays under the 1000-line architecture gate.
     void applySceneCamera(const harmonia::scene::SceneLoader::SceneConfig& sceneConfig);
-    /// GI-ENH: parse THEIA_BIAS_CORRECTION (0 = off / 1 = basic = today / 2 = ray_traced).
+    /// GI-ENH: parse THEIA_BIAS_CORRECTION (0 = RTXDI-OFF alias of the default,
+    /// 1 = default RTXDI-OFF-form, 2 = visibility-only RAY_TRACED hardening).
     /// Extracted into ApplicationCompute.cpp for the same reason as applySceneCamera.
     void parseBiasCorrectionEnv();
     void dispatchLightCull(VkCommandBuffer cmd, const sm::float4x4& proj, const sm::float4x4& view) noexcept;
@@ -191,9 +192,9 @@ class Application final : public harmonia::app::App,
     /// bit0 = k=2 shift, bit1 = k>=3 shift. 0 = replay-only.
     std::uint32_t m_reconnectShiftEnabled = 3u;
     /// GI-ENH bias-correction level over the ReSTIR DI temporal/spatial merges
-    /// (THEIA_BIAS_CORRECTION): 0 = off (1/M finalize, explicitly biased - RTXDI's OFF),
-    /// 1 = basic = today's behaviour (default), 2 = ray_traced = basic + a per-source
-    /// conservative visibility test (RTXDI's documented "complete correction").
+    /// (THEIA_BIAS_CORRECTION): 0 = RTXDI-OFF alias of the default formula,
+    /// 1 = default RTXDI-OFF-form `w_sum/(p_hat*M)`, 2 = that formula plus
+    /// per-source conservative visibility in the DI merges.
     std::uint32_t m_biasCorrectionMode = 1u;
     /// PERF8 (material LOD): -1 = auto (interactive on / estimator-pure capture off),
     /// 0/1 = forced by THEIA_MATERIAL_LOD (debug A/B harness).
