@@ -1,11 +1,11 @@
 # PLAN — Theia
 
-**Minor release:** v0.12.0 - CAM-1 scene-camera assembly deduplication consumed through
-Harmonia's shared `CameraAssembly`; Theia's controller, jitter, accumulation and presentation
-behavior are unchanged. Shared tests 7/7, Theia 67/67, parity 14/14, gallery validation 60/60.
-Fresh README gallery regenerated: 23/30 images byte-identical and 7 speckle-level changes
-approved after owner visual review. Project version and Aether/Harmonia pins are 0.12.0. No approved
-implementation roadmap item remains; work continues on `main`.
+**Major release:** v1.0.0 - stable public baseline. Theia consumes Harmonia's shared
+camera assembly and retains its controller, jitter, accumulation and presentation
+behavior. Reviewed and rubber-ducked code/docs; removed deterministic analyzer debt,
+declared external include boundaries, and adopted strict documentation-reference checks.
+Full gates: Theia 67/67; architecture and dead-code gates clean. Project version and
+Aether/Harmonia pins are 1.0.0. No approved implementation roadmap item remains.
 
 **C track: shipped.** The PSMS-ReSTIR port (Hong et al., SIGGRAPH Asia 2025; reference: the PSMS-ReSTIR Falcor implementation) is complete and qualified on the C1/C2/C3 track: pooled-energy bias 0.15-1.2% at the 8192-frame gate (gate 2%, pooled SE ~1.8%), deterministic same-seed captures, a 2.5x equal-time MSE win on absorption-prefix chains and parity on light-tailed scenes, reuse at ~5% frame-time overhead. SMS sampling is active by default (`--sms-mode local`); spatiotemporal reuse via `--sms-mode reuse`. Eleven root-caused bring-up defects were fixed on the way (receipts: Baseline v0.8.2, the git log of the merge wave, and the qualification manifest under `build/sms-qualification/run_manifest.json`). The gallery regression check after the merge: byte-identical or pixel-identical everywhere except speckle-level firefly shifts on the glass-bearing scenes (cornell_spheres/suzanne, dragon_teapot, shaderball_transmission), means <=0.07/255.
 

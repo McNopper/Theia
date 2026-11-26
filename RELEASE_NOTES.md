@@ -1,3 +1,23 @@
+# Theia v1.0.0 (2026-11-26) - major stable release
+
+Stable public baseline for the real-time renderer. Coordinates with
+**Harmonia v1.0.0 + Aether v1.0.0**.
+
+## Stability review
+- Declared Aether as an explicit external include boundary.
+- Adopted strict documentation-reference checks.
+- Architecture and dead-code gates remain clean; accepted TU-split/large-module shapes
+  remain documented and unchanged.
+
+## Verification
+- Full suite: **67/67**
+- `verify-full`, `check_arch`, `check_dead`, and `check_docs_refs --strict`: clean.
+
+## Release mechanics
+- Local release-preparation commits only. Push and v1.0.0 tags require explicit authorization.
+
+---
+
 # Theia v0.12.0 (2026-11-24) - minor release
 
 Real-time renderer release consuming **Harmonia v0.12.0 + Aether v0.12.0**.
