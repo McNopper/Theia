@@ -1,9 +1,15 @@
 # Architecture
 
-The checked-in architecture contract for Theia. One leaf (`theia/scene`), the renderer consuming it, and the thin
-`demo` host on top. **Theia never depends on Hyperion** — the sibling
-renderers are independent; shared code goes down into Harmonia (a
-`hyperion/` include is a hard violation).
+Theia is built in three layers. The bottom layer, `scene`, holds the GPU scene layout. The middle
+layer, `renderer`, holds the culling, depth, rasterizer, global-illumination and post-processing
+modules that consume the scene. The top layer, `host`, holds the thin demo application. Dependencies
+point downwards only.
+
+Theia never depends on Hyperion. The two renderers are siblings: code that both of them needs goes
+down into Harmonia, and a `hyperion/` include violates the contract.
+
+The diagrams below are generated from the contract by `tools/check_arch.py --diagram` and are
+compared with it on every check.
 
 <!-- check_arch: diagram BEGIN -->
 ### the layers
@@ -51,6 +57,34 @@ block-beta
 <!-- check_arch: diagram END -->
 
 ## The machine contract
+
+The `arch` block below is the contract. `tools/check_arch.py` extracts the include graph of `src/`
+and compares it with the block; `ctest` runs the check as `test_arch`. The block changes only when
+the architecture itself changes. How to read it:
+
+- `scan`, `extensions` and `exclude` define what is measured: the `.hpp` and `.cpp` files under
+  `src/`.
+- `unclassified: error`: every measured file must belong to a declared module.
+- `external` lists the include roots of other repositories that are allowed (`aether`, `harmonia`,
+  `slang-math`, `SDL3`, `vma`, `volk`). `forbidden: hyperion` makes a `hyperion/` include a
+  violation.
+- `quotes_relative: true` and `repo_fallback: false`: a quoted include resolves relative to the
+  including file. `unresolved: info` reports a quoted include that resolves to nothing without
+  failing the check.
+- `within_layer: deny`: an include between two modules of the same layer must be declared with an
+  `allow` line, even though the modules share a layer. Nothing is allowed by default.
+- `cycles: true`: include cycles are detected at file level.
+- `header_size: error`: a file with more than 1000 lines fails the check.
+- `smells: report`: the refactoring smell proxies (large module, hub, mutual pair, orphan) are
+  reported and never fail the check.
+- `layer` declares the stack, bottom first. An `allow` edge from a lower to a higher layer is a
+  violation even when it is declared.
+- `module <path> in <layer>`: a module is the directory `<src>/<path>/`, assigned to a layer.
+- `allow A -> B`: module A may include the headers of module B. Any other include between two
+  modules is a violation.
+
+The namespace knobs are not set. Theia's classes live in `namespace theia` by convention; the check
+does not enforce it.
 
 ```arch
 scan: src
@@ -107,3 +141,57 @@ allow demo -> theia/postfx
 allow demo -> theia/gi
 allow demo -> theia/camera
 ```
+
+## The modules
+
+| Layer | Module under `src/` | Content |
+|-------|----------------------|---------|
+| `host` | `demo` | `Application`, the `harmonia::app::App` subclass that implements `IRenderer` and `IFrameCompletion`. Its code is split into `Application.cpp` and `ApplicationCompute.cpp`. Also `main.cpp`, `ViewAccumulation.hpp` and `EnvImportanceResources.hpp` |
+| `renderer` | `theia/renderer` | `ForwardRenderer`, the rasterizer (`ForwardRenderer.cpp`), `PassTimer`, and the two small headers the other modules of the layer share: `RendererConstants.hpp` and `ShaderPath.hpp` |
+| `renderer` | `theia/pipelines` | The pipeline and descriptor-set-layout creation of `ForwardRenderer` (`ForwardRendererPipelines.cpp`) |
+| `renderer` | `theia/cull` | `GpuCullPass`, `GpuDrivenState`, `LightCuller` |
+| `renderer` | `theia/depth` | `HiZPass` |
+| `renderer` | `theia/gi` | `GiPass` (`GiPass.cpp`, `GiPassSms.cpp`) |
+| `renderer` | `theia/postfx` | `MotionVectorPass`, `TaaPass` |
+| `renderer` | `theia/camera` | Header only: `CameraController.hpp`, `CameraJitter.hpp` |
+| `scene` | `theia/scene` | `Scene` and its GPU layouts `GpuInstance`, `GpuInstanceBounds`, `GpuMeshlet` |
+
+Two facts explain edges that look surprising at first:
+
+- `theia/renderer` holds the shared headers `RendererConstants.hpp` and `ShaderPath.hpp`. Every
+  other module of the renderer layer includes them, which is why `theia/cull`, `theia/depth`,
+  `theia/gi` and `theia/postfx` have edges into `theia/renderer`.
+- `theia/pipelines` is the second source file of the `ForwardRenderer` class. The two files call
+  each other's members, so they form one static library in the build.
+- `theia/scene` implements the scene-builder hooks of Harmonia's scene layer
+  (`createTriangleMesh`, `finishBuild`) and owns the top-level acceleration structure. Harmonia's
+  scene layer has no ray-tracing code of its own; the shared ray-tracing helpers live in
+  `harmonia::scene_rt`.
+
+## Rules for changes
+
+- Add an include only along a declared edge. A new dependency is first declared as an `allow` line
+  in the contract, then used.
+- New code goes into the module that owns the data or the pass. A new module is declared in the
+  contract together with its layer.
+- A file with more than 1000 lines is split along a responsibility. `Application.cpp` was split
+  when the GI dispatch and the async-compute submission moved to `ApplicationCompute.cpp`, and
+  `ForwardRenderer.cpp` when the pipeline creation moved to
+  `src/theia/pipelines/ForwardRendererPipelines.cpp`.
+- The build follows the contract. `CMakeLists.txt` links every module as its own target
+  (`theia_scene`, `theia_camera`, `theia_depth`, `theia_cull`, `theia_renderer`, `theia_gi`,
+  `theia_postfx`, `theia_demo`) in the direction of the contract, so a symbol that is used across
+  an undeclared edge also fails to link. `theia_renderer_core` is the header-only part of
+  `theia/renderer`.
+
+## Shapes that are intentional
+
+Some module relationships look like refactoring targets but are deliberate:
+
+- The chain `demo` → `theia/renderer` → `theia/scene` is the layering itself, not a pass-through to
+  collapse.
+- The async-compute submission flow stays in `Application` (`onBeforeSceneStages`). It implements a
+  hook of the host and submits to queues that the host provides; moving it into a renderer class
+  would invert that relationship.
+- `Scene::uploadBuffer` is an adapter between Harmonia's expected-value API and the `VkResult` plus
+  output-parameter style of the scene build. It is applied uniformly and is not a layer to remove.
