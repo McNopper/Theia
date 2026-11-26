@@ -52,9 +52,10 @@ class GiPass {
         bool smsSpatialReuse = false; ///< Opt-in (--sms-mode reuse): qualified C1/C2/C3 + 2d.2 controls; default local.
     };
 
-    /// Per-frame scene + camera state consumed by record(). Most resources are
-    /// scene-dependent (TLAS, material/geometry buffers, env CDF) and are rebound
-    /// each frame, mirroring ForwardRenderer's descriptor update strategy.
+    /// Per-frame scene + camera state consumed by record(). The scene bindings
+    /// (material/geometry buffers, env CDF) are written into every descriptor slot
+    /// when the scene or the environment changes; the TLAS and the reservoirs are
+    /// written into the slot of each frame, like ForwardRenderer's descriptor update.
     struct FrameParams {
         const Scene* scene = nullptr;
         VkImageView envMapView = VK_NULL_HANDLE; ///< env panorama (or a harmless placeholder when no env)

@@ -366,8 +366,6 @@ bool GiPass::createComputePipeline(const char* spv,
 void GiPass::updateDescriptors(const FrameParams& params) {
     const Scene* scene = params.scene;
 
-    VkAccelerationStructureKHR tlas = scene->tlas();
-
     // Env CDF buffers may be absent (no env map); bind the material buffer as a harmless
     // placeholder so the descriptor stays valid — the shader gates all reads on hasEnvMap.
     const harmonia::core::Buffer& cdfFallback = scene->materialBuffer();
@@ -377,11 +375,11 @@ void GiPass::updateDescriptors(const FrameParams& params) {
         (params.envConditionalCdf != nullptr) ? *params.envConditionalCdf : cdfFallback;
 
     // Scene bindings are frame-independent — write them into EVERY slot's descriptor buffer.
+    // The TLAS is not among them: see record().
     const bool texturesDirty = (m_texturesBoundFor != scene);
     for (std::uint32_t si = 0; si < kDescriptorSlots; ++si) {
         auto& w = m_descWriters[si];
         // MOD1: typed descriptor buffer writes.
-        w.writeAccelerationStructure(*m_ctx, 0, tlas);
         w.writeStorageImage(*m_ctx, 1, m_cfg.hdrView, VK_IMAGE_LAYOUT_GENERAL);
         w.writeSampledImage(*m_ctx, 2, m_cfg.giBufferView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         w.writeSampledImage(*m_ctx, 3, m_cfg.gbufferView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -593,8 +591,19 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         vkCmdPipelineBarrier2(cmd, &pingPongDep);
     }
 
+    // Per-frame bindings of this frame's slot: the TLAS (binding 0) and, below, the
+    // reservoir ping-pong + motion vectors. The TLAS is written here and not with the
+    // scene bindings of updateDescriptors() because the shared update policy replaces
+    // it with a fresh acceleration structure on every full rebuild
+    // (harmonia::scene_rt::updateTlas: on every update of a static scene and on every
+    // 128th update of an animated one). A slot that kept the structure bound at
+    // scene-bind time would trace a frozen pose. Only this frame's slot is written:
+    // the other slot may hold a frame that is still in flight, and receives the
+    // current structure when its own frame is recorded.
+    const std::uint32_t slot = params.frameSampleIndex % kDescriptorSlots;
+    m_descWriters[slot].writeAccelerationStructure(*m_ctx, 0, params.scene->tlas());
     // A4: rebind the reservoir ping-pong + motion vectors for this frame's slot.
-    updateRestirDescriptors(params, params.frameSampleIndex % kDescriptorSlots);
+    updateRestirDescriptors(params, slot);
     // ---- Barriers: forward attachments -> compute inputs/outputs ----
     if (!skipPreBarriers) {
         const std::array<VkImageMemoryBarrier2, 3> preBarriers{{
