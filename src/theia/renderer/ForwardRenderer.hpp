@@ -58,9 +58,15 @@ class ForwardRenderer {
     /// Recreates depth/GBuffer targets; the pipeline and descriptors are unchanged.
     bool resize(std::uint32_t width, std::uint32_t height, VkImage hdrImage, VkImageView hdrImageView) noexcept;
 
+    /// Set the scene to draw. The cull pass makes room for every instance of it.
     void setScene(const Scene* scene) {
         m_scene = scene;
         m_desc.texturesBoundFor = nullptr;
+        if (scene != nullptr) {
+            // reserve() reports its own failure and leaves the capacity as is;
+            // the cull pass then draws only what the list holds.
+            (void)m_gpu.gpuCullPass.reserve(scene->instanceCount());
+        }
     }
     void setCamera(const CameraParams& cam) { m_camera = cam; }
     /// Bind the raw environment panorama (set 2: linear sampler at binding 3, raw env at

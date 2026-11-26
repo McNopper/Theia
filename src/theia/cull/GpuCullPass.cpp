@@ -41,24 +41,24 @@ bool GpuCullPass::initialize(const harmonia::DeviceContext& ctx, const char* spv
     m_ctx = &ctx;
 
     // --- Output buffers ---
-    const VkDeviceSize kCompactListSize = static_cast<VkDeviceSize>(kMaxInstances) * sizeof(std::uint32_t);
+    const VkDeviceSize kCompactListSize = kInitialCapacity * sizeof(std::uint32_t);
     // vkCmdFillBuffer zeros all 12 bytes before each dispatch; the compute shader then
     // restores groupCountY=1 and groupCountZ=1, and accumulates groupCountX atomically.
     constexpr VkDeviceSize kIndirectBufSize = kMeshTaskIndirectCmdSize;
 
-    auto compactBuf =
-        harmonia::core::Buffer::create(ctx,
-                                       kCompactListSize,
-                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                       VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                                       "theia.gpuCull.compactInstanceList");
-    auto indirectBuf =
-        harmonia::core::Buffer::create(ctx,
-                                       kIndirectBufSize,
-                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-                                           VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                                       VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-                                       "theia.gpuCull.indirectDrawBuf");
+    // Both output buffers are copy sources so tests and diagnostics can read
+    // back what the shader wrote.
+    constexpr VkBufferUsageFlags kOutputUsage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                                VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                                VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+
+    auto compactBuf = harmonia::core::Buffer::create(
+        ctx, kCompactListSize, kOutputUsage, VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE, "theia.gpuCull.compactInstanceList");
+    auto indirectBuf = harmonia::core::Buffer::create(ctx,
+                                                      kIndirectBufSize,
+                                                      kOutputUsage | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT,
+                                                      VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                                      "theia.gpuCull.indirectDrawBuf");
 
     if (!compactBuf || !indirectBuf) {
         harmonia::core::Logger::error("GpuCullPass: failed to allocate output buffers");
@@ -66,6 +66,7 @@ bool GpuCullPass::initialize(const harmonia::DeviceContext& ctx, const char* spv
     }
     m_compactInstanceListBuf = std::move(*compactBuf);
     m_indirectDrawBuf = std::move(*indirectBuf);
+    m_capacity = kInitialCapacity;
 
     // --- Descriptor set layout ---
     // binding 0: instances          (STORAGE, read)
@@ -170,13 +171,45 @@ bool GpuCullPass::initialize(const harmonia::DeviceContext& ctx, const char* spv
     m_descWriter.writeStorageBuffer(ctx, 2, m_compactInstanceListBuf.deviceAddress(), kCompactListSize);
     m_descWriter.writeStorageBuffer(ctx, 3, m_indirectDrawBuf.deviceAddress(), kIndirectBufSize);
 
-    harmonia::core::Logger::info("GpuCullPass: initialized (max {} instances)", kMaxInstances);
+    harmonia::core::Logger::info("GpuCullPass: initialized (capacity {} instances)", m_capacity);
+    return true;
+}
+
+bool GpuCullPass::reserve(std::uint32_t instanceCount) {
+    if (instanceCount <= m_capacity) {
+        return true;
+    }
+    if (m_ctx == nullptr) {
+        harmonia::core::Logger::error("GpuCullPass: reserve({}) before initialize", instanceCount);
+        return false;
+    }
+
+    const VkDeviceSize size = static_cast<VkDeviceSize>(instanceCount) * sizeof(std::uint32_t);
+    auto grown =
+        harmonia::core::Buffer::create(*m_ctx,
+                                       size,
+                                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                           VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                                       VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                                       "theia.gpuCull.compactInstanceList");
+    if (!grown) {
+        harmonia::core::Logger::error("GpuCullPass: failed to grow the compact instance list to {} instances",
+                                      instanceCount);
+        return false;
+    }
+    // The GPU is idle here (documented precondition): the previous list can go.
+    m_compactInstanceListBuf = std::move(*grown);
+    m_capacity = instanceCount;
+    m_descWriter.writeStorageBuffer(*m_ctx, 2, m_compactInstanceListBuf.deviceAddress(), size);
+    harmonia::core::Logger::info("GpuCullPass: compact instance list grown to {} instances", m_capacity);
     return true;
 }
 
 void GpuCullPass::shutdown() {
     m_compactInstanceListBuf = {};
     m_indirectDrawBuf = {};
+    m_capacity = 0;
+    m_reportedOverflow = false;
     m_descWriter.shutdown(); // MOD1: replaces pool + set
 
     m_pipeline.reset();
@@ -192,6 +225,18 @@ void GpuCullPass::dispatch(VkCommandBuffer cmd,
                            const sm::float4x4& viewProj) {
     if (!m_ctx || m_pipeline == VK_NULL_HANDLE || instanceCount == 0)
         return;
+    if (instanceCount > m_capacity) {
+        // Never write past the compact list: the instances it cannot hold are
+        // neither culled nor drawn. reserve() keeps this off the drawn path.
+        if (!m_reportedOverflow) {
+            harmonia::core::Logger::error("GpuCullPass: {} instances exceed the compact list capacity of {} - "
+                                          "reserve() was not called; the excess is not drawn",
+                                          instanceCount,
+                                          m_capacity);
+            m_reportedOverflow = true;
+        }
+        instanceCount = m_capacity;
+    }
 
     // Zero all 12 bytes so thread 0 can re-initialize groupCountY=1 and groupCountZ=1,
     // and all visible-instance threads accumulate groupCountX from 0.

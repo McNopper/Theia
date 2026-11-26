@@ -41,9 +41,9 @@ namespace theia {
 ///      World-View-Projection Matrix" (2001)
 class GpuCullPass {
   public:
-    /// Maximum number of instances supported per allocation.
-    /// Sized conservatively; covers all current test scenes with room to spare.
-    static constexpr std::uint32_t kMaxInstances = 4096;
+    /// Entries the compact instance list starts with. It holds one index per
+    /// visible instance and grows on demand (see reserve).
+    static constexpr std::uint32_t kInitialCapacity = 4096;
 
     GpuCullPass() = default;
     ~GpuCullPass();
@@ -62,6 +62,18 @@ class GpuCullPass {
 
     [[nodiscard]] bool isInitialized() const noexcept { return m_ctx != nullptr; }
 
+    /// Make room for @p instanceCount visible instances.
+    ///
+    /// The compact list holds one index per visible instance, so a scene with
+    /// more instances than the current capacity must reserve before it is
+    /// drawn; the capacity never shrinks. Call between frames with the GPU
+    /// idle - the previous list is destroyed here, and the host already
+    /// waits for the device when it loads a scene.
+    [[nodiscard]] bool reserve(std::uint32_t instanceCount);
+
+    /// Entries the compact instance list currently holds.
+    [[nodiscard]] std::uint32_t capacity() const noexcept { return m_capacity; }
+
     /// Dispatch the frustum cull compute pass.
     /// @param instanceBuf      GpuInstance[] storage buffer (scene.instances)
     /// @param instanceBoundsBuf GpuInstanceBounds[] storage buffer (scene.instanceBounds)
@@ -77,7 +89,7 @@ class GpuCullPass {
                   std::uint32_t instanceCount,
                   const sm::float4x4& viewProj);
 
-    /// GPU buffer of visible instance indices (uint[kMaxInstances]).
+    /// GPU buffer of visible instance indices (uint[capacity()]).
     /// Bind to ForwardRenderer set 0, binding 10 for the task shader to read.
     [[nodiscard]] const harmonia::core::Buffer& compactInstanceListBuffer() const noexcept {
         return m_compactInstanceListBuf;
@@ -101,9 +113,11 @@ class GpuCullPass {
     /// MOD1: descriptor buffer writer replaces the pool + allocated set.
     harmonia::core::DescriptorBufferWriter m_descWriter;
 
-    harmonia::core::Buffer m_compactInstanceListBuf; ///< uint[kMaxInstances]  STORAGE
+    harmonia::core::Buffer m_compactInstanceListBuf; ///< uint[m_capacity]  STORAGE
     harmonia::core::Buffer
-        m_indirectDrawBuf; ///< single VkDrawMeshTasksIndirectCommandEXT  STORAGE | INDIRECT | DEVICE_ADDR
+        m_indirectDrawBuf;           ///< single VkDrawMeshTasksIndirectCommandEXT  STORAGE | INDIRECT | DEVICE_ADDR
+    std::uint32_t m_capacity = 0;    ///< entries m_compactInstanceListBuf holds
+    bool m_reportedOverflow = false; ///< the dispatch clamp is diagnosed once
 };
 
 } // namespace theia

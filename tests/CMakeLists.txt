@@ -6,6 +6,7 @@ include(GoogleTest)
 set(THEIA_MODULE_TEST_SOURCES
     module/main.cpp
     module/test_scene_build.cpp
+    module/test_gpu_cull.cpp
     module/test_scene_anim.cpp
     module/test_rng_contract.cpp
     module/test_camera_jitter_contract.cpp

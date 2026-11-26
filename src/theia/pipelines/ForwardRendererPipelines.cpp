@@ -527,6 +527,10 @@ bool ForwardRenderer::initialize(const harmonia::DeviceContext& ctx, const Confi
         harmonia::core::Logger::error("GpuCullPass: initialization failed");
         return false;
     }
+    // A scene set before the renderer was initialized still needs its capacity.
+    if (m_scene != nullptr && !m_gpu.gpuCullPass.reserve(m_scene->instanceCount())) {
+        return false;
+    }
 
     // Debug/A-B toggle: set THEIA_FORCE_GD3 to skip DGC layout creation and force the
     // vkCmdDrawMeshTasksIndirectEXT (GD3) draw path. Used to isolate DGC-specific regressions.
