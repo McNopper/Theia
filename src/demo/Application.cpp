@@ -477,7 +477,12 @@ void Application::record(VkCommandBuffer cmd, const harmonia::app::RenderTarget&
             if (const VkResult r = m_scene->updateTlas(deviceContext(), commandPool()); r != VK_SUCCESS) {
                 harmonia::core::Logger::error("TLAS update failed: VkResult {}", static_cast<std::int32_t>(r));
             }
-            resetAccumulation();
+            // A sequence capture restarts accumulation once per output frame
+            // and owns that restart: with a shutter the tick changes from
+            // sample to sample inside one frame, and all of them accumulate.
+            if (!sequenceCaptureActive()) {
+                resetAccumulation();
+            }
             if (!config().outputFile.empty() && config().sequenceFrames == 0U && !m_animatedCaptureWarned) {
                 m_animatedCaptureWarned = true;
                 harmonia::core::Logger::warn(
@@ -957,10 +962,12 @@ void Application::onUpdate(float dtSeconds) {
     // camera doesn't smear across viewpoints and a stationary one converges.
     // Cadence-independent by construction: the --frames-per-flip gate only
     // throttles the PRESENT half (Harmonia's AppPresent); rendering and this
-    // reset decision run on every iteration.
+    // reset decision run on every iteration. A sequence capture owns the
+    // restart per output frame: with a shutter the camera moves from sample to
+    // sample inside a frame, and those samples are the one exposure.
     const float ev100 = m_camera.physical.ev100();
     const bool viewChanged = m_viewGate.update(m_camera.position, m_camera.target, m_camera.up, ev100);
-    if (viewChanged) {
+    if (viewChanged && !sequenceCaptureActive()) {
         resetAccumulation();
     }
     // TAA gate: a changed view means this frame is a fresh, non-accumulated sample where TAA
