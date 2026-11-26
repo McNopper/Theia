@@ -101,6 +101,9 @@ class Scene : public harmonia::scene::SceneBase {
     /// its staging copy is queue-ordered behind this queue's prior submissions, so an
     /// in-flight frame never observes a half-updated set. Static scenes never go dirty
     /// -> exact no-op.
+    /// The same sync refreshes the per-instance world-space bounds the frustum
+    /// cull tests, so a moved instance is culled where it is, not where it was
+    /// built.
     void syncInstanceTransforms();
 
     /// ANI3 test receipts: CPU mirrors of the GPU transform buffers' contents
@@ -202,6 +205,9 @@ class Scene : public harmonia::scene::SceneBase {
                        std::vector<std::uint32_t>& meshletVertices,
                        std::vector<std::uint32_t>& meshletTriangles);
     void buildGpuInstances();
+    /// World-space bounds of one instance for the frustum cull: its mesh's
+    /// object-space box under the instance transform, widened for skinned meshes.
+    [[nodiscard]] GpuInstanceBounds worldBounds(const harmonia::scene::InstanceRecord& inst) const;
     VkResult uploadSceneBuffers(const harmonia::DeviceContext& ctx,
                                 const harmonia::core::CommandPool& pool,
                                 const std::vector<harmonia::GpuMaterial>& gpuMaterials,

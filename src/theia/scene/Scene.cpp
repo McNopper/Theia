@@ -84,6 +84,15 @@ void Scene::syncInstanceTransforms() {
     m_instanceTransformBuffer.uploadData(transforms.data(), transforms.size() * sizeof(sm::float4x4));
     m_prevSyncedInstanceTransforms = m_syncedInstanceTransforms;
     m_syncedInstanceTransforms = std::move(transforms);
+
+    // The frustum cull tests each instance's world-space bounds, so they follow
+    // the transform. Computed only at build, they would stay around the rest
+    // pose and an instance that animation moved out of that box would be culled
+    // and never rasterized - wherever sky was behind it, it would vanish.
+    for (std::size_t i = 0; i < m_instances.size(); ++i) {
+        m_instanceBounds[i] = worldBounds(m_instances[i]);
+    }
+    m_instanceBoundsBuffer.uploadData(m_instanceBounds.data(), m_instanceBounds.size() * sizeof(GpuInstanceBounds));
 }
 
 std::uint32_t Scene::addSphereMesh(const harmonia::DeviceContext& ctx,
@@ -317,26 +326,28 @@ void Scene::buildGpuInstances() {
             .geometryKind = gpu.geometryKind,
             .sphereRadius = gpu.sphereRadius,
         });
-        m_instanceBounds.push_back([&] {
-            const harmonia::scene::Aabb object = m_meshes[inst.meshIndex]->objectAabb();
-            harmonia::scene::Aabb world = harmonia::scene::worldAabbFromInstance(object, inst.transform);
-            if (m_meshes[inst.meshIndex]->isDynamic()) {
-                // ANI4: same conservative envelope as the meshlet spheres -
-                // skinned instances skip frustum culling (bounds are static).
-                world.min = world.min - sm::float3{kSkinnedBoundsRadius, kSkinnedBoundsRadius, kSkinnedBoundsRadius};
-                world.max = world.max + sm::float3{kSkinnedBoundsRadius, kSkinnedBoundsRadius, kSkinnedBoundsRadius};
-            }
-            return GpuInstanceBounds{
-                .minX = world.min.x,
-                .minY = world.min.y,
-                .minZ = world.min.z,
-                .maxX = world.max.x,
-                .maxY = world.max.y,
-                .maxZ = world.max.z,
-            };
-        }());
+        m_instanceBounds.push_back(worldBounds(inst));
     }
     m_instanceBounds.resize(m_instances.size(), GpuInstanceBounds{});
+}
+
+GpuInstanceBounds Scene::worldBounds(const harmonia::scene::InstanceRecord& inst) const {
+    const harmonia::scene::Aabb object = m_meshes[inst.meshIndex]->objectAabb();
+    harmonia::scene::Aabb world = harmonia::scene::worldAabbFromInstance(object, inst.transform);
+    if (m_meshes[inst.meshIndex]->isDynamic()) {
+        // Skinned meshes deform away from their rest pose: widen the box so a
+        // deformed instance is never frustum-culled on a stale shape.
+        world.min = world.min - sm::float3{kSkinnedBoundsRadius, kSkinnedBoundsRadius, kSkinnedBoundsRadius};
+        world.max = world.max + sm::float3{kSkinnedBoundsRadius, kSkinnedBoundsRadius, kSkinnedBoundsRadius};
+    }
+    return GpuInstanceBounds{
+        .minX = world.min.x,
+        .minY = world.min.y,
+        .minZ = world.min.z,
+        .maxX = world.max.x,
+        .maxY = world.max.y,
+        .maxZ = world.max.z,
+    };
 }
 
 VkResult Scene::uploadBuffer(const harmonia::DeviceContext& ctx,

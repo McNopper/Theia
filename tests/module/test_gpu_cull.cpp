@@ -158,6 +158,37 @@ TEST_F(RtFixture, GpuCull_CompactListGrowsForAScenePastTheInitialCapacity) {
     expectEveryInstanceOnce(pass, kInstanceCount, deviceCtx(), commandPool());
 }
 
+TEST_F(RtFixture, GpuCull_FollowsAnInstanceMovedByAnimation) {
+    // The frustum cull tests an instance's world-space bounds. Animation moves
+    // instances through the transform sync; the bounds have to move with them,
+    // or the instance is culled wherever it actually is and never rasterized.
+    theia::Scene scene;
+    const std::uint32_t material = scene.addMaterial(harmonia::scene::Material::diffuse(sm::float3(0.7F), 1.0F));
+    harmonia::scene::MeshData box = harmonia::scene::ProceduralGeometry::makeBox(sm::float3(0.4F));
+    const std::uint32_t mesh =
+        scene.addMesh(deviceCtx(), commandPool(), std::move(box), harmonia::scene::MeshOpacity{}, "test.mover");
+    ASSERT_NE(mesh, std::numeric_limits<std::uint32_t>::max());
+    // Built far outside the view of gridViewProj() (its half-width there is 226 m).
+    const std::uint32_t mover =
+        scene.addInstance(mesh, harmonia::scene::Transform{.translation = {400.0F, 0.0F, 0.0F}}, material);
+    ASSERT_NE(mover, std::numeric_limits<std::uint32_t>::max());
+    ASSERT_EQ(scene.build(deviceCtx(), commandPool()), VK_SUCCESS);
+
+    theia::GpuCullPass pass;
+    ASSERT_TRUE(pass.initialize(deviceCtx()));
+    cullScene(pass, scene, commandPool());
+    EXPECT_EQ(visibleCount(pass, deviceCtx(), commandPool()), 0U) << "built outside the view";
+
+    // Animation stamps the new pose on the instance - the same seam
+    // SceneBase::setAnimationTime uses - and the scene syncs it.
+    scene.instanceTransform(mover).translation = {0.0F, 0.0F, 0.0F};
+    ASSERT_EQ(scene.updateTlas(deviceCtx(), commandPool()), VK_SUCCESS);
+
+    cullScene(pass, scene, commandPool());
+    EXPECT_EQ(visibleCount(pass, deviceCtx(), commandPool()), 1U) << "moved into the view";
+    expectEveryInstanceOnce(pass, 1U, deviceCtx(), commandPool());
+}
+
 TEST_F(RtFixture, GpuCull_NeverWritesPastTheCompactList) {
     // A dispatch with more instances than the list holds - reserve() not
     // called - culls only what the list can hold, instead of writing past it.
