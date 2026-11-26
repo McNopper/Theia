@@ -1,9 +1,17 @@
 # check-docs-refs configuration (skill: check-docs-refs).
 #
+# extensions/prefixes - only assertion-like repository paths are treated as
+#   references; historical bare filenames in PLAN.md are provenance labels.
+# skip_files - PLAN.md records historical commands, generated artifacts and
+#   external reference paths; those are not clean-checkout promises.
 # siblings - the family checkouts live next to this repo, so cross-repo
 #   references such as `Harmonia/PLAN.md` resolve against them (declared
 #   trust; each sibling's own run verifies its side of the contract).
 # generated - build/ is never in a clean checkout (compile DB,
 #   FetchContent copies, generated .spv, qualification manifests).
-siblings = ["Aether", "Harmonia", "Hyperion", "Theia", "slang-math"]
+extensions = [".md", ".hpp", ".cpp", ".h", ".c", ".slang", ".py", ".ps1", ".toml", ".cmake", ".txt"]
+prefixes = ["tools/", "src/", "tests/", "shaders/", "include/", "docs/", "assets/"]
+skip_files = ["PLAN.md"]
+skip_dirs = ["build", "_deps", ".git"]
 generated = ["build/"]
+siblings = ["Aether", "Harmonia", "Hyperion", "Theia", "slang-math", "external"]

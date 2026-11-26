@@ -57,7 +57,7 @@ scan: src
 extensions: .hpp, .cpp
 exclude: build, _deps, .git
 unclassified: error
-external: SDL3, harmonia, slang-math, vma, volk
+external: SDL3, aether, harmonia, slang-math, vma, volk
 forbidden: hyperion
 quotes_relative: true
 repo_fallback: false

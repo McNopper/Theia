@@ -3,6 +3,7 @@
 
 #include <volk/volk.h>
 
+#include <aether/format/SceneAnimator.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <memory>
@@ -12,7 +13,6 @@
 
 #include "EnvImportanceResources.hpp"
 #include "ViewAccumulation.hpp"
-#include "aether/format/SceneAnimator.hpp"
 #include "harmonia/app/App.hpp"
 #include "harmonia/app/IFrameCompletion.hpp"
 #include "harmonia/app/IRenderer.hpp"
