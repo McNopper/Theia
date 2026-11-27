@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <slang-math/slang-math.hpp>
@@ -78,6 +79,7 @@ bool Application::onInitialize() {
     }
     m_renderer->setIndirectAmbient(config().indirectAmbient);
     m_renderer->setRngDebug(config().rngDebug);
+    m_tickTimingLogged = harmonia::core::getEnvString("HARMONIA_FRAME_TIMING") == std::optional<std::string>{"1"};
     m_renderer->setCameraJitterEnabled(m_cameraJitterEnabled);
     if (!m_cameraJitterEnabled) {
         harmonia::core::Logger::info("harmonia::renderer::Camera jitter disabled (--no-camera-jitter)");
@@ -465,9 +467,12 @@ void Application::record(VkCommandBuffer cmd, const harmonia::app::RenderTarget&
         if (clock.key != m_lastAnimationTick) {
             m_lastAnimationTick = clock.key;
             const float seconds = static_cast<float>(clock.seconds);
+            // PERF: the two host steps of a tick, timed when the frame timing is logged.
+            const auto tickStart = std::chrono::steady_clock::now();
             if (m_scene->hasAnimation()) {
                 m_scene->setAnimationTime(seconds);
             }
+            const auto stamped = std::chrono::steady_clock::now();
             if (m_deformPass.has_value()) {
                 if (const VkResult deformResult = m_deformPass->execute(deviceContext(),
                                                                         commandPool(),
@@ -483,6 +488,12 @@ void Application::record(VkCommandBuffer cmd, const harmonia::app::RenderTarget&
             }
             if (const VkResult r = m_scene->updateTlas(deviceContext(), commandPool()); r != VK_SUCCESS) {
                 harmonia::core::Logger::error("TLAS update failed: VkResult {}", static_cast<std::int32_t>(r));
+            }
+            if (m_tickTimingLogged) {
+                using Millis = std::chrono::duration<double, std::milli>;
+                harmonia::core::Logger::info("tick_timing_ms: stamp {:.3f} | tlas {:.3f}",
+                                             Millis(stamped - tickStart).count(),
+                                             Millis(std::chrono::steady_clock::now() - stamped).count());
             }
             // A sequence capture restarts accumulation once per output frame
             // and owns that restart: with a shutter the tick changes from

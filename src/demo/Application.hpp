@@ -215,6 +215,8 @@ class Application final : public harmonia::app::App,
     /// OUTPUT frame during sequence renders (per rendered frame otherwise, where the
     /// raw index changes every frame anyway). ~0u = "never" so frame 0 always runs.
     std::uint64_t m_lastAnimationTick = ~std::uint64_t{0};
+    /// PERF: HARMONIA_FRAME_TIMING=1 also logs what each animation tick costs the host.
+    bool m_tickTimingLogged = false;
     /// ANI4+ANI5 renderer half: the shared GPU deformation pass (skin +
     /// morphs), created for deforming scenes in onSceneLoaded (its descriptors
     /// bind that scene's buffers, so it is reset on scene unload).
