@@ -250,6 +250,10 @@ The release history, newest first.
   Regression test `tests/module/test_gi_stale_path_state.cpp` drives the real
   GI pass with a block of pixels that is floor in one frame and background in
   the next: without the fix all 6144 pixels of the block change, with it none.
+- The anisotropy of a material without a tangent map follows the texture
+  coordinates (Harmonia's shared `surface.slang`); its frame used to come from
+  the normal alone. The gallery screenshots of `openpbr_specular` and
+  `openpbr_metals` are rendered with the new frame.
 
 ### v1.0.0 (2026-11-26)
 
