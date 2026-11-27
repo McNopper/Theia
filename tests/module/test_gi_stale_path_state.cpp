@@ -4,9 +4,9 @@
 // result to the pixel. A pixel that is background never reaches the emit
 // stage. It must then not keep the candidates of a frame in which it showed
 // geometry: combineMain would add the light of a surface that is no longer in
-// front of the pixel to whatever the pixel shows now. On pier_city this left
-// the sun glints of the wheel's red spokes in the sky for the rest of a
-// sequence capture, at the screen positions where the spokes had passed.
+// front of the pixel to whatever the pixel shows now. On a dense animated scene
+// this left the sun glints of moving structures in the sky after they had passed,
+// at the screen positions where those structures had been.
 
 #include <volk/volk.h>
 
