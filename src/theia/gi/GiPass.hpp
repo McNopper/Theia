@@ -66,6 +66,10 @@ class GiPass {
         std::uint32_t envImportanceHeight = 0;
         bool hasEnvMap = false;
         float envLuminanceScale = 1.0f;
+        /// Distance haze of the scene ([haze]): extinction per metre at height zero
+        /// and the scale height in metres. 0 = none.
+        float hazeDensity = 0.0f;
+        float hazeHeight = 0.0f;
 
         sm::float4x4 view{1.0f}; ///< view matrix
         sm::float4x4 prevViewProj{
@@ -219,10 +223,12 @@ class GiPass {
                                                 ///< 0 = estimator-pure capture (full material everywhere)
         std::uint32_t radianceCacheEnabled = 1; ///< GI-NRC: 1 = world-space radiance-cache tier
                                                 ///< active (interactive); 0 = estimator-pure capture
+        float hazeDensity = 0.0F;               ///< [haze] extinction per metre at height zero; 0 = no haze
+        float hazeHeight = 0.0F;                ///< [haze] metres at which the extinction has fallen to 1/e
     };
     // Layout guard: must equal the Slang `GiPC` struct exactly (2×float4x4 + float4
-    // + 26 scalars = 144 + 104 = 248). Stays within the existing 256-byte device budget.
-    static_assert(sizeof(GiPushConstants) == 248);
+    // + 28 scalars = 144 + 112 = 256). Stays within the existing 256-byte device budget.
+    static_assert(sizeof(GiPushConstants) == 256);
 
     [[nodiscard]] bool createDescriptors();
     [[nodiscard]] bool createPipelineLayout();

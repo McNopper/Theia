@@ -675,6 +675,8 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         .smsEnabled = m_smsFrameActive ? 1U : 0U,
         .materialLodEnabled = params.materialLodEnabled ? 1u : 0u,
         .radianceCacheEnabled = params.radianceCacheEnabled ? 1u : 0u,
+        .hazeDensity = params.hazeDensity,
+        .hazeHeight = params.hazeHeight,
     };
 
     const bool replayCompaction = (pc.restirPtPathEnabled != 0u) && m_replayCountBuf[0].isValid() &&

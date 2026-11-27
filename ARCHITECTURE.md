@@ -146,7 +146,7 @@ allow demo -> theia/camera
 
 | Layer | Module under `src/` | Content |
 |-------|----------------------|---------|
-| `host` | `demo` | `Application`, the `harmonia::app::App` subclass that implements `IRenderer` and `IFrameCompletion`. Its code is split into `Application.cpp` and `ApplicationCompute.cpp`. Also `main.cpp`, `ViewAccumulation.hpp` and `EnvImportanceResources.hpp` |
+| `host` | `demo` | `Application`, the `harmonia::app::App` subclass that implements `IRenderer` and `IFrameCompletion`. Its code is split into `Application.cpp` (frame recording, camera, resize), `ApplicationInput.cpp` (input handling) and `ApplicationCompute.cpp` (GI dispatch, the async-compute path, camera placement). Also `main.cpp`, `ViewAccumulation.hpp` and `EnvImportanceResources.hpp` |
 | `renderer` | `theia/renderer` | `ForwardRenderer`, the rasterizer (`ForwardRenderer.cpp`), `PassTimer`, and the two small headers the other modules of the layer share: `RendererConstants.hpp` and `ShaderPath.hpp` |
 | `renderer` | `theia/pipelines` | The pipeline and descriptor-set-layout creation of `ForwardRenderer` (`ForwardRendererPipelines.cpp`) |
 | `renderer` | `theia/cull` | `GpuCullPass`, `GpuDrivenState`, `LightCuller` |
@@ -175,8 +175,9 @@ Two facts explain edges that look surprising at first:
 - New code goes into the module that owns the data or the pass. A new module is declared in the
   contract together with its layer.
 - A file with more than 1000 lines is split along a responsibility. `Application.cpp` was split
-  when the GI dispatch and the async-compute submission moved to `ApplicationCompute.cpp`, and
-  `ForwardRenderer.cpp` when the pipeline creation moved to
+  when the GI dispatch and the async-compute submission moved to `ApplicationCompute.cpp`, again
+  when the input handling moved to `ApplicationInput.cpp`, and `ForwardRenderer.cpp` when the
+  pipeline creation moved to
   `src/theia/pipelines/ForwardRendererPipelines.cpp`.
 - The build follows the contract. `CMakeLists.txt` links every module as its own target
   (`theia_scene`, `theia_camera`, `theia_depth`, `theia_cull`, `theia_renderer`, `theia_gi`,

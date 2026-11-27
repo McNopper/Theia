@@ -30,7 +30,8 @@ accumulation, denoiser, tone mapping and presentation.
 
 | Path | Content |
 |------|---------|
-| `src/demo/Application.cpp` | Frame recording, input handling, resize |
+| `src/demo/Application.cpp` | Frame recording, the camera, resize |
+| `src/demo/ApplicationInput.cpp` | Input handling: the keys, the mouse look, the EV100 keys |
 | `src/demo/ApplicationCompute.cpp` | GI dispatch (`buildGiFrameParams`), the async-compute path, camera placement |
 | `src/demo/main.cpp` | Flags specific to Theia; shared flags come from Harmonia's `CliParser` |
 | `src/theia/renderer/`, `src/theia/pipelines/` | `ForwardRenderer`, the rasterizer (one class, two source files) |
@@ -62,11 +63,19 @@ build/theia.exe --scene cornell_classic --output out.exr --offscreen-frames 256 
   shared flags is in Harmonia's README.
 - A capture (`--output`) is the raw estimator result: denoiser, TAA, firefly clamps, the
   roughness regularization, the material LOD tier and the radiance cache are off, and camera jitter
-  is forced on. Fireflies in a capture are true variance.
+  is forced on. Fireflies in a capture are true variance. With `--glare` the PNG of a capture
+  carries the lens glare of Harmonia's stage; the EXR never does.
+- A scene with a `[haze]` section is rendered with its distance haze: the GI pass composites
+  every pixel through `Harmonia/shaders/haze.slang`. It is part of the estimator, so it is in the
+  EXR, and Hyperion applies the same module.
 - Motion blur comes from Harmonia's `--shutter` and `--time-samples`: the accumulation frames of
   an output frame are spread over the exposure and all of them accumulate into one image. Compare
   a shuttered frame with Hyperion rendered with the same flags and the same `--rng-seed`; the
   jitter of each time sample depends on the seed.
+- A scene with a `[haze]` section renders with its distance haze, through the shared
+  `Harmonia/shaders/haze.slang`; nothing is switched on for it.
+- Lens glare comes from Harmonia's `--glare` and `--glare-threshold`: it is in the PNG of a
+  capture, never in the EXR, and `--no-postfx` turns it off.
 - A black window at start-up and after every resize is normal while pipelines are built.
 
 ## Parity and screenshots
@@ -133,6 +142,19 @@ Each of these has cost a debugging cycle.
   transforms. Computed once at build, they culled a moved instance at its rest position: on the
   ground the GI pass still drew it, because it re-traces the primary surface, but against the
   sky it disappeared.
+- A capture of `pier_city` does not repeat pixel for pixel (about 0.1 to 1 percent of the
+  pixels differ between two runs of the same command; `PLAN.md`, known limitations, has the
+  measurements and what was excluded). Do not use two Theia runs as equal in a comparison.
+  Prove that a flag leaves the EXR alone within one run, or against Hyperion, which repeats.
+- Every term the GI pass adds to a pixel goes through the haze of a scene with a `[haze]`
+  section: the terms of the main kernel through `hazePixel`, a term added after that composite
+  through `hazeTransmittance`. A new term that skips both is too bright in a hazed scene.
+- The main GI kernel returns early for a background pixel, a visibility miss under manifold
+  sampling and a self-emissive surface, all before its emit stage. A later kernel that reads
+  per-pixel state must get a valid value for those pixels too: `combineMain` runs for every
+  pixel and trusts `t_ptParams[pixelIdx].misc.z`, which the kernel clears at its top;
+  `initializeSmsPixel` does the same for the manifold-sampling slots. A new per-pixel buffer
+  without such a reset keeps the state of the last frame in which the pixel showed geometry.
 
 ## Test scenes
 

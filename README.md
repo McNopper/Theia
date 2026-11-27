@@ -147,7 +147,7 @@ Everything in the middle column is a presentation aid whose effect does not shri
 samples, so none of it is allowed on the converging path. Bright speckle in a capture is the true
 variance of the estimator, not a defect. `--no-postfx` gives the interactive window the capture
 identity (denoiser and TAA off). The shared part of this contract, the denoiser, is described in
-[Harmonia's README](../Harmonia/README.md#denoiser-stage-and-the-two-tier-output-contract).
+[Harmonia's README](../Harmonia/README.md#presentation-stages-and-the-two-tier-output-contract).
 
 ### Frame pipeline
 
@@ -164,11 +164,12 @@ flowchart TD
     MV --> TAA["TAA<br/>only while the camera moves"]
     TAA --> ACC["Accumulation<br/>shared stage"]
     ACC --> DEN["A-SVGF denoiser<br/>shared stage"]
-    DEN --> TM["Tone map and present<br/>shared stage"]
+    DEN --> GLR["Lens glare<br/>shared stage, with --glare"]
+    GLR --> TM["Tone map and present<br/>shared stage"]
 ```
 
-The renderer-owned stages are recorded in `src/demo/Application.cpp`. Accumulation, denoiser and tone
-mapping belong to Harmonia's `App`. The order is fixed: motion vectors and TAA are recorded in
+The renderer-owned stages are recorded in `src/demo/Application.cpp`. Accumulation, denoiser, glare
+and tone mapping belong to Harmonia's `App`. The order is fixed: motion vectors and TAA are recorded in
 `Application::onSceneFrameReady`, after the GI pass and all of its continuation batches have
 completed, because both read the HDR image the GI pass writes. When the device has a dedicated
 compute queue family, the GI pass is submitted to that queue and overlaps the next frame's raster
@@ -319,6 +320,17 @@ secondary vertex; pure absorbers take the exact Beer–Lambert branch.
 Where the denoiser's variance buffer is available, up to 4 samples per pixel are spent in
 high-variance pixels, and the firefly clamp is relaxed there.
 
+A scene with a `[haze]` section (see Aether's format reference) has distance haze between the camera
+and the scene. It is part of the estimator: the pass applies the shared module
+`Harmonia/shaders/haze.slang` at every site where it composites a pixel. The main kernel composites
+the radiance of a pixel with the transmittance from the camera to the primary surface and with the sky
+in the direction of the camera ray, read from a strongly blurred level of the environment map; a
+self-emissive surface is hazed like any other; the path-reservoir term that `combineMain` adds later
+only loses the transmittance. Shadow and secondary rays do not pass through the medium, and the sky
+is the radiance at infinity and stays as drawn. Hyperion applies the same module to the radiance of its
+camera rays, so the haze is compared like every other estimator change, as EXR. At load Theia logs
+`Haze: density <d> per metre at height zero, scale height <h> m`.
+
 ### Specular manifold sampling
 
 Specular manifold sampling (SMS) adds samples that travel along chains of specular events (mirrors,
@@ -438,8 +450,9 @@ The ones that matter for Theia:
 | `--width <n>`, `--height <n>` | `1024`, `768` | Window size, and the image size of a capture |
 | `--frames-per-flip <n>` | `1` | Accumulation frames per swapchain flip in the window |
 | `--sequence-frames <N>`, `--frame <n>`, `--capture-every-ms <f>`, `--start-seconds <f>` | off, `0`, –, – | Animation sequences and time-based captures |
-| `--rng-seed <n>` | `305419896` (`0x12345678`) | Base seed of the stochastic stages. With the same binary and scene, the same seed, frame count and resolution reproduce a capture pixel for pixel |
-| `--no-postfx` | off | Denoiser and TAA off in the window |
+| `--rng-seed <n>` | `305419896` (`0x12345678`) | Base seed of the stochastic stages. For `cornell_classic` and `haze` the same binary, scene, seed, frame count and resolution reproduce a capture pixel for pixel; for `pier_city` two runs of the same capture differ at about 0.1 to 1 percent of the pixels, by a few hundredths of a scene-linear unit at most ([Known limitations](#known-limitations)) |
+| `--no-postfx` | off | Denoiser, lens glare and TAA off in the window, and the glare in a capture |
+| `--glare <f>`, `--glare-threshold <f>` | `0`, `1.0` | Lens glare, a presentation stage of Harmonia ([Harmonia's README](../Harmonia/README.md#lens-glare)). It is in the PNG of a capture and never in its EXR |
 | `--validation` / `--no-validation` | on | Vulkan validation layers |
 | `--indirect-ambient <f>` | `0.0` | Accepted by the shared parser and forwarded to the forward pass's push constants; no Theia shader reads it, so it does not change the image |
 | `--deterministic-replay`, `--rng-debug` | off | Accepted by the shared parser; no Theia shader reads the flags they set |
@@ -504,6 +517,12 @@ The toggles of the shared library that Theia runs with — the pipeline binary c
   frame rendered with the same two flags and the same `--rng-seed`: the position of each time
   sample inside its interval depends on the seed, and two seeds give two different estimates of
   the same blur. The Aether scene `motion_blur` is made for this comparison.
+- Distance haze: a scene with a `[haze]` section is captured with it; nothing is switched on for
+  it. The Aether scene `haze` is made for the comparison with Hyperion.
+- Lens glare: with `--glare <f>` above zero the PNG of every captured frame carries the glare of
+  Harmonia's stage, and the EXR does not. The threshold is a luminance of the exposed frame: choose
+  it from the frame's values, not from the flag's default (see
+  [Harmonia's README](../Harmonia/README.md#lens-glare)).
 - The capture lowers its own CPU priority for its duration so that the desktop stays usable.
 
 ---
@@ -679,8 +698,9 @@ priority, which helps during the capture but is no licence for two captures at o
   leave the image identical.
 - Code shared 1:1 with Hyperion goes down into Harmonia; Theia never depends on Hyperion. Includes
   follow the contract in [ARCHITECTURE.md](ARCHITECTURE.md): declared edges only, no cycles, and no
-  source file above 1000 lines (split along a seam, as `Application.cpp` is split into
-  `ApplicationCompute.cpp`). Theia's classes live in `namespace theia`.
+  source file above 1000 lines (split along a seam, as `Application.cpp` is: its GI dispatch and
+  async-compute path are in `ApplicationCompute.cpp`, its input handling in
+  `ApplicationInput.cpp`). Theia's classes live in `namespace theia`.
 - A new compute entry point is added to `THEIA_ENTRY_SHADERS` in `CMakeLists.txt`; without it the
   SPIR-V is never compiled and the shader fails to load at runtime. A new Slang module that is not
   an entry point is added to `COMPILE_SLANG_EXTRA_DEPENDS` there as well.
@@ -701,7 +721,7 @@ priority, which helps during the capture but is no licence for two captures at o
 
 | Path | Content |
 |------|---------|
-| `src/demo/` | The application: `Application.cpp` (frame recording, input, resize), `ApplicationCompute.cpp` (GI dispatch, async-compute path, camera placement, `buildGiFrameParams`), `main.cpp` (argument parsing), `ViewAccumulation.hpp`, `EnvImportanceResources.hpp` |
+| `src/demo/` | The application: `Application.cpp` (frame recording, camera, resize), `ApplicationInput.cpp` (input handling), `ApplicationCompute.cpp` (GI dispatch, async-compute path, camera placement, `buildGiFrameParams`), `main.cpp` (argument parsing), `ViewAccumulation.hpp`, `EnvImportanceResources.hpp` |
 | `src/theia/scene/` | `Scene`: meshlet build, GPU buffers, BLAS and TLAS build and update |
 | `src/theia/camera/` | `CameraController.hpp` (first-person camera), `CameraJitter.hpp` (Halton jitter) |
 | `src/theia/depth/` | `HiZPass`: the depth pyramid |
@@ -726,6 +746,10 @@ The module boundaries and the allowed dependencies are defined in
   vectors, so TAA can ghost on fast deformation; the accumulation renders each animation state on
   its own and is not affected.
 - The manifold-sampling reuse mode is experimental.
+- A capture of `pier_city` does not repeat pixel for pixel: two runs of the same command differ
+  at about 0.1 to 1 percent of the pixels, at most by a few hundredths of a scene-linear unit. For
+  `cornell_classic` and `haze` a capture repeats exactly. The cause is not found
+  ([PLAN.md](PLAN.md#known-limitations)).
 
 The open items and the measured baselines are listed in [PLAN.md](PLAN.md).
 

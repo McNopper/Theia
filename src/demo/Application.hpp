@@ -206,6 +206,10 @@ class Application final : public harmonia::app::App,
     /// partition resolution (1 = full-domain/unpartitioned; default 16).
     std::uint32_t m_smsPartitionResolution = 16u;
     std::uint32_t m_sceneMaxDepth = 3u;
+    /// Distance haze of the scene ([haze]): extinction per metre at height zero and
+    /// the scale height in metres. 0 = none.
+    float m_hazeDensity = 0.0f;
+    float m_hazeHeight = 0.0f;
 
     /// ANI7: last animation tick applied - the guard that stamps + resets ONCE per
     /// OUTPUT frame during sequence renders (per rendered frame otherwise, where the

@@ -13,13 +13,12 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <gtest/gtest.h>
 #include <limits>
 #include <numbers>
+#include <slang-math/slang-math.hpp>
 #include <string_view>
 #include <vector>
-
-#include <gtest/gtest.h>
-#include <slang-math/slang-math.hpp>
 
 #include "fixtures/VulkanTestFixture.hpp"
 #include "harmonia/core/Buffer.hpp"
@@ -65,7 +64,8 @@ class GiTlasRebuildFixture : public RtFixture {
                                   {},
                                   "test.theia.giTlas.mover");
             ASSERT_NE(mover, std::numeric_limits<std::uint32_t>::max());
-            const std::uint32_t red = scene.addMaterial(harmonia::scene::Material::diffuse(sm::float3(0.63F, 0.065F, 0.05F), 1.0F));
+            const std::uint32_t red =
+                scene.addMaterial(harmonia::scene::Material::diffuse(sm::float3(0.63F, 0.065F, 0.05F), 1.0F));
             ASSERT_NE(scene.addInstance(mover, harmonia::scene::Transform{.translation = {-2.0F, 0.75F, 0.0F}}, red),
                       std::numeric_limits<std::uint32_t>::max());
         }
@@ -247,14 +247,14 @@ values = [-2.0, 0.75, 0.0, 2.0, 0.75, 0.0]
     }
 
     void image(harmonia::core::Image& output, const char* label) {
-        auto value = harmonia::core::Image::create(deviceCtx(),
-                                                  kExtent,
-                                                  VK_FORMAT_R32G32B32A32_SFLOAT,
-                                                  VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT |
-                                                      VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                                                      VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-                                                  VK_IMAGE_ASPECT_COLOR_BIT,
-                                                  label);
+        auto value = harmonia::core::Image::create(
+            deviceCtx(),
+            kExtent,
+            VK_FORMAT_R32G32B32A32_SFLOAT,
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+            VK_IMAGE_ASPECT_COLOR_BIT,
+            label);
         ASSERT_TRUE(value.has_value());
         output = std::move(*value);
     }
@@ -286,16 +286,16 @@ values = [-2.0, 0.75, 0.0, 2.0, 0.75, 0.0]
         ASSERT_TRUE(cmd.has_value());
         const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         for (auto* target : {&hdr, &giBuffer, &normal}) {
-            const auto old = first ? VK_IMAGE_LAYOUT_UNDEFINED
-                                   : (target == &hdr ? VK_IMAGE_LAYOUT_GENERAL
-                                                     : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            const auto old =
+                first ? VK_IMAGE_LAYOUT_UNDEFINED
+                      : (target == &hdr ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             target->transition(*cmd,
-                                old,
-                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
-                                VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-                                VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
-                                VK_ACCESS_2_TRANSFER_WRITE_BIT);
+                               old,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                               VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+                               VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
+                               VK_ACCESS_2_TRANSFER_WRITE_BIT);
         }
         VkBufferImageCopy copy{};
         copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
@@ -309,19 +309,19 @@ values = [-2.0, 0.75, 0.0, 2.0, 0.75, 0.0]
         vkCmdClearColorImage(*cmd, normal.handle(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &encoded, 1, &range);
         for (auto* target : {&hdr, &giBuffer, &normal})
             target->transition(*cmd,
-                                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
-                                VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
-                                VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                                VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                                VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL,
+                               VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
+                               VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                               VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                               VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
         VkMemoryBarrier2 memory{};
         memory.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2;
         memory.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
         memory.srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT;
         memory.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
-        memory.dstAccessMask =
-            VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+        memory.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT |
+                               VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
         VkDependencyInfo dependency{};
         dependency.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
         dependency.memoryBarrierCount = 1;

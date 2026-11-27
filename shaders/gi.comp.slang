@@ -21,6 +21,7 @@ import bsdf;            // evalBSDF / pdfBSDF / sampleBSDF + BSDFSample (resolve
 import bsdf_shared;     // shadowTerminatorFactor / terminatorSmoothPosition
 import env_sample;      // evalEnvImportancePdfDir
 import path_integrator; // ITracer, SurfaceHit, PathState, EnvNeeSample, evalEnvNEESample, integrateSurface, sampleEnvMapLatLong
+import haze;            // distance haze of the scene: optical depth and composite (shaders/haze.slang)
 import medium_walk;     // shared volumetric random-walk math (runMediumWalk)
 import surface;         // shared OpenPBR surface-frame (texture-map) populator
 import sms_path;
@@ -71,6 +72,8 @@ cbuffer GiPC {
                                           // 0 = estimator-pure capture — full material everywhere
     uint     radianceCacheEnabled;        // GI-NRC: 1 = world-space radiance-cache tier active
                                           // (interactive); 0 = estimator-pure capture
+    float    hazeDensity;                // [haze] extinction per metre at height zero; 0 = no haze
+    float    hazeHeight;                 // [haze] metres at which the extinction has fallen to 1/e
 };
 
 // ── A4: ReSTIR DI reservoir type ──────────────────────────────────────────────
@@ -2782,6 +2785,41 @@ void replayMain(uint3 tid : SV_DispatchThreadID) {
     t_replayResults[pixelIdx * kPathSpatialNeighbors + slot] = float4(gN, vn ? 1.0 : 0.0);
 }
 
+// ── Distance haze (shaders/haze.slang) ───────────────────────────────────────
+// The scene's [haze] lies between the camera and the surface a pixel shows.
+// The GI stage owns the pixel's final radiance (the forward pass wrote direct
+// light and emission into the same HDR texel), so the haze is composited here,
+// once per pixel: main composites the sum of the terms it adds, and the
+// path-reservoir term that combineMain adds later is attenuated by the same
+// transmittance. The sky is the radiance at infinity and stays as drawn.
+// Both kernels read the raster record of the pixel, so they see one surface.
+
+/// The medium, from the push constants.
+Haze sceneHaze() {
+    return Haze(hazeDensity, hazeHeight);
+}
+
+/// Optical depth from the camera to the surface the pixel shows.
+float pixelHazeDepth(int3 loadCoord) {
+    return hazeOpticalDepth(sceneHaze(), cameraPos.xyz, t_giBuffer.Load(loadCoord).xyz);
+}
+
+/// The blurred sky in the direction of the pixel's camera ray: the light the
+/// haze scatters into the pixel. The HDR image holds exposed radiance, so the
+/// sky carries the exposure.
+float3 pixelHazeSky(int3 loadCoord) {
+    const float3 direction = t_giBuffer.Load(loadCoord).xyz - cameraPos.xyz;
+    return exposure * envLuminanceScale * sampleEnvMapLatLongLevel(t_envMap, s_env, direction, kHazeSkyLod);
+}
+
+/// A pixel's radiance seen through the haze; unchanged when the scene has none.
+float3 hazePixel(float3 radiance, int3 loadCoord) {
+    if (!hazeActive(sceneHaze())) {
+        return radiance;
+    }
+    return hazeComposite(radiance, pixelHazeDepth(loadCoord), pixelHazeSky(loadCoord));
+}
+
 // Kernel-3 entry: per-pixel completion (combine + shade + HDR composite of the
 // path-reservoir indirect term on top of the emit stage's partial composite).
 [shader("compute")]
@@ -2798,7 +2836,13 @@ void combineMain(uint3 tid : SV_DispatchThreadID) {
     const float4 ptResult = restirPtComplete(px);
     // GI2.7: M in alpha — the emit stage left the DI reservoir's M in alpha;
     // overwrite with the combined total exactly as the fused path did.
-    hdrImage[px] = float4(hdrImage[px].xyz + ptResult.xyz, hdrImage[px].w + ptResult.w);
+    // Distance haze: main composited the pixel's other terms with the haze, so
+    // this term only loses what the medium extincts on the way.
+    float3 hazedIndirect = ptResult.xyz;
+    if (hazeActive(sceneHaze())) {
+        hazedIndirect *= hazeTransmittance(pixelHazeDepth(int3(int(px.x), int(px.y), 0)));
+    }
+    hdrImage[px] = float4(hdrImage[px].xyz + hazedIndirect, hdrImage[px].w + ptResult.w);
 }
 
 [numthreads(8, 8, 1)]
@@ -2808,6 +2852,17 @@ void main(uint3 tid : SV_DispatchThreadID) {
     }
     const uint2 px = tid.xy;
     initializeSmsPixel(px); // all slots, including pixel zero/background, get valid frozen metadata
+    // The path-reservoir block of a pixel starts the frame as "no work"
+    // (misc.z = 0). combineMain reads the block after this kernel, for every
+    // pixel, and adds the stored candidates to the pixel. A pixel that leaves
+    // this kernel early (background, visibility miss, self-emissive surface)
+    // never reaches its emit stage, so without this line it kept the block of
+    // a frame in which it showed geometry, and the light of a surface that is
+    // no longer there was added to whatever the pixel shows now. The emit
+    // stage sets the flag again when it runs.
+    if (restirPtPathEnabled != 0u) {
+        t_ptParams[px.y * screenWidth + px.x].misc.z = 0u;
+    }
     const int3 loadCoord = int3(int(px.x), int(px.y), 0);
 
     // --- Primary surface (shared reconstruction with the replay pass — GI-ENH §6.2.2) ---
@@ -2826,6 +2881,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
     const float3 primaryEmission = max(primary.mat.emissionColorLum.xyz, 0.0.xxx) *
                                    max(primary.mat.emissionColorLum.w, 0.0);
     if (maxComp(primaryEmission) > 0.0) {
+        // The haze lies in front of the emitter too.
+        hdrImage[px] = float4(hazePixel(hdrImage[px].xyz, loadCoord), hdrImage[px].w);
         return;
     }
 
@@ -2919,7 +2976,10 @@ void main(uint3 tid : SV_DispatchThreadID) {
                 // GI2.7: M in alpha — OVERWRITE (not +=) so the forward pass's
                 // indirectWeight doesn't pollute the M channel. RGB still adds to
                 // the forward pass's base color via the read in the same expression.
-                hdrImage[px] = float4(hdrImage[px].xyz + restirDirect, restirM);
+                hdrImage[px] = float4(hazePixel(hdrImage[px].xyz + restirDirect, loadCoord), restirM);
+            } else if (hazeActive(sceneHaze())) {
+                // Nothing to add: only the haze lies over the forward pass's color.
+                hdrImage[px] = float4(hazePixel(hdrImage[px].xyz, loadCoord), hdrImage[px].w);
             }
             return;
         }
@@ -2933,5 +2993,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // doesn't pollute the M channel. RGB still adds to the forward pass's base color.
     // GI-ENH §6.2.2: this is the PARTIAL composite — the path-reservoir indirect
     // term and its M are added by combineMain (kept out of the alpha overwrite).
-    hdrImage[px] = float4(hdrImage[px].xyz + (sumIndirect + sumEnvNee) * invN + restirDirect, restirM);
+    // The distance haze covers everything this pixel shows.
+    hdrImage[px] = float4(hazePixel(hdrImage[px].xyz + (sumIndirect + sumEnvNee) * invN + restirDirect, loadCoord),
+                         restirM);
 }

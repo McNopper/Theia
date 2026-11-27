@@ -316,6 +316,7 @@ set(THEIA_DEMO_SOURCES
     src/demo/Application.cpp
     src/demo/Application.hpp
     src/demo/ApplicationCompute.cpp
+    src/demo/ApplicationInput.cpp
     src/demo/EnvImportanceResources.hpp
     src/demo/ViewAccumulation.hpp
 )
