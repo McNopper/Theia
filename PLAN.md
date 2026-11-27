@@ -28,8 +28,8 @@ which metric catches which failure) belongs to Harmonia:
 ## At a glance
 
 - Current release: v1.0.0 (2026-11-26), with Aether and Harmonia pinned to v1.0.0.
-- No approved implementation item is open. What remains is listed under [Roadmap](#roadmap) and
-  [Known limitations](#known-limitations).
+- The dense-scene animation-scaling investigation is open with Harmonia and Aether; the other
+  remaining work is listed under [Roadmap](#roadmap) and [Known limitations](#known-limitations).
 - The interactive path tracer runs ReSTIR PT: one multi-bounce path reservoir for the indirect term,
   spatial reuse only, with the reconnection shift up to the fourth path vertex; a direct-light
   reservoir for emissive and environment light; and specular manifold sampling for caustics on
@@ -53,6 +53,7 @@ slang-math, Aether, Harmonia, Theia. Estimator work that touches both renderers 
 | Temporal reuse of the path reservoir without recursion bias | Optional, not started | The only accepted way to give the path reservoir temporal memory: an unbiased form such as GRIS pairwise MIS with canonical-sample accounting. It would also remove the recursion bias of the direct-light reservoir's temporal merge. A plain streamed temporal merge is ruled out (see the baselines) |
 | Basic normalization in the direct-light reservoir merges | Optional, not started | Levels 0 and 1 of `THEIA_BIAS_CORRECTION` compute the `OFF` formula of RTXDI and level 2 adds its visibility test. RTXDI's `BASIC` normalization (`piSum`) and the source-side BSDF and facing term of `RAY_TRACED` are not implemented |
 | Dual motion vectors | Recorded idea, not specified | A second set of motion vectors for the reprojection of the denoiser and TAA (ReSTIR PT Enhanced, section 6.4). A presentation-stage idea with no design yet |
+| Dense-scene animation scaling | Approved investigation | Share one evaluated Aether scene between camera and instances, then make transform/bounds uploads and TLAS input incremental. Measured on 109,694 draw instances: camera evaluation 72–98 ms, scene stamp 72–82 ms, transform sync plus TLAS interval 13–23 ms per instant; GI stays about 26 ms. The shared work and acceptance criteria are in `Harmonia/PLAN.md`, section 5.1 |
 
 Decided and closed:
 

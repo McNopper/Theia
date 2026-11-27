@@ -459,9 +459,16 @@ void Application::record(VkCommandBuffer cmd, const harmonia::app::RenderTarget&
     // trip the animation block's accumulation reset (offline would never
     // converge) - that case re-places the camera idempotently instead.
     const harmonia::app::App::AnimationClock clock = animationClock(m_scene->animationFps());
-    if (m_cameraNodeId && clock.key != m_cameraTick) {
+    const bool cameraTick = m_cameraNodeId && clock.key != m_cameraTick;
+    const auto cameraStart = std::chrono::steady_clock::now();
+    if (cameraTick) {
         m_cameraTick = clock.key;
         placeBoundCamera(clock.seconds);
+    }
+    if (m_tickTimingLogged && cameraTick) {
+        using Millis = std::chrono::duration<double, std::milli>;
+        harmonia::core::Logger::info("camera_timing_ms: {:.3f}",
+                                     Millis(std::chrono::steady_clock::now() - cameraStart).count());
     }
     if (m_scene->hasAnimation() || m_scene->hasSkins() || m_scene->hasMorphs()) {
         if (clock.key != m_lastAnimationTick) {
