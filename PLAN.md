@@ -92,7 +92,8 @@ Decided and closed:
 6. `--no-restir-di` together with `--no-restir-pt` leaves a scene that is lit only by the
    environment map without its direct light: in such a scene the environment's direct light is
    sampled by the direct-light reservoir only. The combination is for debugging emissive scenes.
-7. A capture of `pier_city` does not repeat pixel for pixel. Measured on 2026-11-26 at 1280×720,
+7. A capture of the local stress-test scene (not part of the repository) does not repeat pixel
+   for pixel. Measured on 2026-11-26 at 1280×720,
    frame 152, 128 accumulation frames, the same command run several times: 4,700 to 11,600 of
    921,600 pixels differ between two runs, by 0.018 at most (mean 2×10⁻⁷). With one accumulation
    frame three runs fell into two outcomes: two were equal except for one pixel, the third
@@ -105,7 +106,7 @@ Decided and closed:
    the sample count, the periodic TLAS rebuild, ReSTIR or the async-compute split, and it is not
    seeded randomness: the runs take a discrete decision at start-up. The suspicion is an
    order-dependent tie in a draw or a traversal. `cornell_classic` and `haze` repeat exactly,
-   and Hyperion repeats `pier_city` exactly. Until the cause is found, a comparison must not
+   and Hyperion repeats the scene exactly. Until the cause is found, a comparison must not
    take two Theia runs as equal: prove that a flag leaves the EXR alone within one run (PNG
    against EXR) or against Hyperion.
 
@@ -233,8 +234,9 @@ The release history, newest first.
   The transmittance read back from the five cubes of the scene matches the formula within 0.006
   in both renderers.
 - Lens glare is a stage of Harmonia (`--glare`, `--glare-threshold`) and reaches Theia through
-  the shared tone mapper: the PNG of a capture carries it, the EXR does not. On `pier_city` at
-  1280×720, frame 320, 128 accumulation frames, glare 0.2 above 6: the PNGs of both renderers
+  the shared tone mapper: the PNG of a capture carries it, the EXR does not. On the local
+  stress-test scene at 1280×720, frame 320, 128 accumulation frames, glare 0.2 above 6: the PNGs
+  of both renderers
   are within one step of 255 of the prediction from their own EXR, Theia against Hyperion has
   SSIM 0.873 and luminance correlation 0.987, and the glare around the sun is 2.61 against 2.56
   of 255 in the two renderers.
@@ -242,7 +244,7 @@ The release history, newest first.
   pixel that has become background. The main kernel returns before its emit
   stage for a background pixel and left the pixel's path-reservoir block at
   its last value; `combineMain` then took the block as current and added its
-  candidates to the pixel. In a sequence capture of `pier_city` the sun glints
+  candidates to the pixel. In a sequence capture of that scene the sun glints
   of the wheel's red spokes stayed in the sky from frame 96 on, at the screen
   positions where the spokes had passed: at one pixel red 168 where the sky is
   0.9, creeping to 176 by frame 195, while the same frame captured alone shows

@@ -142,8 +142,9 @@ Each of these has cost a debugging cycle.
   transforms. Computed once at build, they culled a moved instance at its rest position: on the
   ground the GI pass still drew it, because it re-traces the primary surface, but against the
   sky it disappeared.
-- A capture of `pier_city` does not repeat pixel for pixel (about 0.1 to 1 percent of the
-  pixels differ between two runs of the same command; `PLAN.md`, known limitations, has the
+- A capture of the local stress-test scene (it is not part of the repository) does not repeat
+  pixel for pixel (about 0.1 to 1 percent of the pixels differ between two runs of the same
+  command; `PLAN.md`, known limitations, has the
   measurements and what was excluded). Do not use two Theia runs as equal in a comparison.
   Prove that a flag leaves the EXR alone within one run, or against Hyperion, which repeats.
 - Every term the GI pass adds to a pixel goes through the haze of a scene with a `[haze]`

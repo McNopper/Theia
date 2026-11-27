@@ -450,7 +450,7 @@ The ones that matter for Theia:
 | `--width <n>`, `--height <n>` | `1024`, `768` | Window size, and the image size of a capture |
 | `--frames-per-flip <n>` | `1` | Accumulation frames per swapchain flip in the window |
 | `--sequence-frames <N>`, `--frame <n>`, `--capture-every-ms <f>`, `--start-seconds <f>` | off, `0`, –, – | Animation sequences and time-based captures |
-| `--rng-seed <n>` | `305419896` (`0x12345678`) | Base seed of the stochastic stages. For `cornell_classic` and `haze` the same binary, scene, seed, frame count and resolution reproduce a capture pixel for pixel; for `pier_city` two runs of the same capture differ at about 0.1 to 1 percent of the pixels, by a few hundredths of a scene-linear unit at most ([Known limitations](#known-limitations)) |
+| `--rng-seed <n>` | `305419896` (`0x12345678`) | Base seed of the stochastic stages. For `cornell_classic` and `haze` the same binary, scene, seed, frame count and resolution reproduce a capture pixel for pixel; for a large local stress-test scene two runs of the same capture differ at about 0.1 to 1 percent of the pixels, by a few hundredths of a scene-linear unit at most ([Known limitations](#known-limitations)) |
 | `--no-postfx` | off | Denoiser, lens glare and TAA off in the window, and the glare in a capture |
 | `--glare <f>`, `--glare-threshold <f>` | `0`, `1.0` | Lens glare, a presentation stage of Harmonia ([Harmonia's README](../Harmonia/README.md#lens-glare)). It is in the PNG of a capture and never in its EXR |
 | `--validation` / `--no-validation` | on | Vulkan validation layers |
@@ -746,8 +746,9 @@ The module boundaries and the allowed dependencies are defined in
   vectors, so TAA can ghost on fast deformation; the accumulation renders each animation state on
   its own and is not affected.
 - The manifold-sampling reuse mode is experimental.
-- A capture of `pier_city` does not repeat pixel for pixel: two runs of the same command differ
-  at about 0.1 to 1 percent of the pixels, at most by a few hundredths of a scene-linear unit. For
+- A capture of the local stress-test scene (it is not part of the repository) does not repeat pixel
+  for pixel: two runs of the same command differ at about 0.1 to 1 percent of the pixels, at most by
+  a few hundredths of a scene-linear unit. For
   `cornell_classic` and `haze` a capture repeats exactly. The cause is not found
   ([PLAN.md](PLAN.md#known-limitations)).
 
