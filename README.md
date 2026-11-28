@@ -313,6 +313,14 @@ listed in the two-mode table above:
   (α = 0.25) of the outgoing radiance seen by finished walks. Diffuse secondary hits from the first
   bounce on may terminate with the cached value.
 
+Emission coexists with the OpenPBR BSDF. The forward pass owns primary emission and analytic direct
+lighting; GI adds primary environment NEE and BSDF continuation. Secondary vertices use the shared
+integrator's emission/MIS guard and continue through the emitter's BSDF. No emissive-primary early
+return discards its surface response, and the forward opacity gate covers both direct lighting and EDF.
+Both k=2 and k≥3 reconnection shifts reject a positive front-face emissive x_k: their cached suffix
+contains NEE/continuation but not the target-side EDF/MIS state. Rejection selects the existing complete
+replay shift, preserving the emitter's contribution without approximating or double-counting it.
+
 Transmission, refraction, subsurface scattering and scattering media are evaluated by the shared
 path integrator and its volumetric random walk (`runMediumWalk`) on the primary and on every
 secondary vertex; pure absorbers take the exact Beer–Lambert branch.

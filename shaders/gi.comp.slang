@@ -1549,31 +1549,9 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
             if (smsPathEmissionTail(smsPath) && smsGiCollectableEmitter(h,surf)) break;
             currentSmsReceiver=smsCapturePathReceiver(smsPath,surf.mat,remainingDepth);
         }
-        // Primary direct-light ownership: camera->primary->emissive (bounce 0).
-        // The guard follows the SAME ownership knob that drives the forward pass's
-        // emissive-proxy skip (setRestirDiActive <-> gi push restirDiEnabled):
-        //  * DI/PT off (restirDiEnabled == 0): the FORWARD pass owns primary direct
-        //    (analytic RectLight proxies) - the walk breaks here as before, so the
-        //    proxy term is never double counted.
-        //  * DI/PT on (restirDiEnabled == 1): the forward pass SKIPS its proxies, and
-        //    a single-light-sample reservoir cannot represent DELTA reflections of the
-        //    emitter (camera->primary(delta)->emissive) - the term would vanish between
-        //    owners (measured on the historical complex-scene gap, theia exactly 0 where Hyperion counts
-        //    the depth-1 post-specular emission). The walk therefore carries it through
-        //    the SHARED evalEmissionGuarded at depth bounce+primaryCharge - exactly
-        //    Hyperion's rule: specular adds, non-specular is 0 + terminate (which keeps
-        //    the non-delta case single-counted, owned by the reservoir's NEE).
-        const float3 surfEmission = max(surf.mat.emissionColorLum.xyz, 0.0.xxx)
-                                  * max(surf.mat.emissionColorLum.w, 0.0);
-        if (bounce == 0u && maxComp(surfEmission) > 0.0 && dot(surf.wo, surf.geoNormal) > 0.0) {
-            if (restirDiEnabled == 0u) {
-                break; // forward pass owns primary direct (analytic proxies active)
-            }
-            state.radiance += state.throughput * evalEmissionGuarded(
-                surfEmission, bounce + primaryCharge, state.specularBounce,
-                surf.wo, surf.geoNormal, emissiveTriangleCount, surf.mat.baseMetalnessDiffRough.z > 0.5);
-            break;
-        }
+        // Secondary emission and the coexisting OpenPBR BSDF are both handled by the shared
+        // integrateSurface below. Its emission guard already separates forward/ReSTIR NEE
+        // ownership from camera/specular hits; terminating here would discard the emitter's BSDF.
         // A3(a): path regularization — widen near-specular GGX lobes on secondary+ bounces
         // to reduce firefly variance (Kaplanyan & Dachsbacher 2013; PBRT 4e §16). Trades a
         // small known bias for much lower variance. Theia-only, flag-gated; Hyperion stays
@@ -1977,8 +1955,8 @@ bool reconnectionJacobianValid(float jac, float denomProduct, float minDist2) {
 // replay per neighbour. The GRIS Jacobian (Eq. 2, k = 2 form) is folded into the returned
 // value (F(Y)·|J|), and the footprint criteria (ReSTIR PT Enhanced Eq. 5) decide validity;
 // on any failure the caller falls back to the replay shift, so every branch is a valid
-// unbiased shift. x_k is never a captured emissive front-face hit (the walk breaks those
-// before integrateSurface), so the shifted value needs no emission term.
+// unbiased shift. Emissive x_k vertices are rejected below: their target-side EDF and MIS
+// ownership are not stored in the suffix record, so the caller uses a complete replay instead.
 bool tryReconnectionShift(SurfaceHit primary, PathReservoir neighbor, float adaptiveClamp,
                           inout RngState rng, out float3 gShift) {
     gShift = 0.0.xxx;
@@ -2014,6 +1992,9 @@ bool tryReconnectionShift(SurfaceHit primary, PathReservoir neighbor, float adap
     const float3 wp = toXk / distXk;  // connection direction (my primary -> x_k)
     const float3 woK = -wp;           // x_k's outgoing direction toward my primary
     const SurfaceHit surfK = makeSurfaceHit(hK, woK);
+    if (hasPositiveFrontFaceEmission(surfK.mat, woK, surfK.geoNormal)) {
+        return false; // EDF is not represented in the cached suffix: use the full replay shift
+    }
 
     // Footprint reconnection criteria (ReSTIR PT Enhanced Eq. 5, k = 2 form): both
     // source-side ray footprints must reach the primary-ray footprint scaled by c/100
@@ -2249,6 +2230,9 @@ bool tryReconnectionShiftK3(SurfaceHit primary, PathReservoir neighbor, float ad
     const float3 wp = toXk / distXk;  // connection direction x'_2 → x_k
     const float3 woK = -wp;           // x_k's outgoing toward x'_2
     const SurfaceHit surfK = makeSurfaceHit(hK, woK);
+    if (hasPositiveFrontFaceEmission(surfK.mat, woK, surfK.geoNormal)) {
+        return false; // same EDF ownership rule as k=2: fall back to complete replay
+    }
 
     // ── Footprint criteria (Eq. 5, k=3 form): all three source-side footprints must
     // reach the primary footprint scaled by c/100. Inverse test skipped for diffuse/emissive. ──
@@ -2598,7 +2582,7 @@ ThinLensPrimaryRay pixelPrimaryRay(int3 loadCoord) {
 // uniform replay pass: camera-ray re-trace to the recorded world position with
 // the view-space G-buffer-normal fallback (transparent pixels). Returns false
 // when the pixel has no usable primary (background, visibility miss without a
-// usable normal, non-finite material, self-emissive surface). Deterministic —
+// usable normal, non-finite material). Deterministic —
 // both stages construct identical SurfaceHits.
 bool buildPrimarySurface(uint2 px, out GiHit primaryHit, out SurfaceHit primary, out bool primaryHitValid) {
     const int3 loadCoord = int3(int(px.x), int(px.y), 0);
@@ -2653,12 +2637,6 @@ bool buildPrimarySurface(uint2 px, out GiHit primaryHit, out SurfaceHit primary,
         // the GI compute's descriptor set: a non-finite material would feed NaN/Inf straight
         // into the BSDF eval, ahead of the downstream isfinite() guards.
         if (!all(isfinite(mat.baseColorWeight.xyz)) || !all(isfinite(mat.emissionColorLum.xyz))) {
-            return false;
-        }
-        // Skip self-emissive primary surfaces: their radiance is the emitter itself, shown
-        // directly by the forward pass; bounced light off an emitter is negligible.
-        const float3 emission = max(mat.emissionColorLum.xyz, 0.0.xxx) * max(mat.emissionColorLum.w, 0.0);
-        if (maxComp(emission) > 0.0) {
             return false;
         }
         if (dot(worldN, wo) < 0.0) {
@@ -2896,7 +2874,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // The path-reservoir block of a pixel starts the frame as "no work"
     // (misc.z = 0). combineMain reads the block after this kernel, for every
     // pixel, and adds the stored candidates to the pixel. A pixel that leaves
-    // this kernel early (background, visibility miss, self-emissive surface)
+    // this kernel early (background or visibility miss)
     // never reaches its emit stage, so without this line it kept the block of
     // a frame in which it showed geometry, and the light of a surface that is
     // no longer there was added to whatever the pixel shows now. The emit
@@ -2915,9 +2893,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
     bool primaryHitValid = false;
     SurfaceHit primary;
     if (!buildPrimarySurface(px, primaryHit, primary, primaryHitValid)) {
-        // No surface to shade (no view-space normal to fall back on, a non-finite
-        // material, a self-emissive fallback surface): the pixel keeps the forward
-        // pass's radiance.
+        // No surface to shade (no view-space normal to fall back on or a non-finite
+        // material): the pixel keeps the forward pass's radiance.
         if (!background) {
             hazeForwardRadiance(px, loadCoord);
         }
@@ -2930,15 +2907,8 @@ void main(uint3 tid : SV_DispatchThreadID) {
 
     if (primaryHitValid) produceSmsReceiver(px,primaryHit,primary);
 
-    // Skip self-emissive primary surfaces: their radiance is the emitter itself, shown
-    // directly by the forward pass; bounced light off an emitter is negligible.
-    const float3 primaryEmission = max(primary.mat.emissionColorLum.xyz, 0.0.xxx) *
-                                   max(primary.mat.emissionColorLum.w, 0.0);
-    if (maxComp(primaryEmission) > 0.0) {
-        // The haze lies in front of the emitter too.
-        hazeForwardRadiance(px, loadCoord);
-        return;
-    }
+    // Primary emission remains owned by the forward pass. GI still evaluates this surface's
+    // environment NEE and BSDF continuation: the OpenPBR EDF and BSDF coexist.
 
     // A3(b): variance-aware adaptive firefly clamp. When the A-SVGF gradient/variance guide is
     // bound, high local variance (genuine bright/complex region) relaxes the clamp while low

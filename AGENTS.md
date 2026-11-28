@@ -154,8 +154,8 @@ Each of these has cost a debugging cycle.
   pixel that leaves the kernel before its terms keeps the forward pass's radiance through
   `hazeForwardRadiance`. A new term that takes none of these roads is too bright in a hazed
   scene.
-- The main GI kernel returns early for a background pixel, a visibility miss under manifold
-  sampling and a self-emissive surface, all before its emit stage. A later kernel that reads
+- The main GI kernel returns early for a background pixel or a visibility miss under manifold
+  sampling, before its emit stage. A later kernel that reads
   per-pixel state must get a valid value for those pixels too: `combineMain` runs for every
   pixel and trusts `t_ptParams[pixelIdx].misc.z`, which the kernel clears at its top;
   `initializeSmsPixel` does the same for the manifold-sampling slots. A new per-pixel buffer

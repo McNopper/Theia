@@ -17,8 +17,8 @@
 //   floor        the camera ray hits the floor: main composites the pixel (direct light
 //                of the reservoir; the indirect light through the path reservoir in
 //                combineMain, or through main when the path reservoir is off)
-//   emitter      the camera ray hits the emissive panel: main returns before its terms,
-//                the forward pass's radiance is seen through the haze
+//   emitter      the camera ray hits the emissive panel: the forward pass owns its EDF,
+//                while GI adds the coexisting BSDF's environment/indirect transport
 //   visibility   the rasterizer recorded a surface, the re-traced camera ray finds none:
 //                without manifold sampling the view-space normal is the fallback
 //                surface; with manifold sampling the kernel returns before its terms,
@@ -498,7 +498,8 @@ TEST_F(GiHazeFixture, GiPass_EveryPixelIsSeenThroughTheHaze) {
             ASSERT_EQ(hazed.size(), clear.size());
 
             Tally floor, emitter, visibility, other;
-            std::size_t background = 0U, emitters = 0U, visibleMisses = 0U, litFloor = 0U, floorPixels = 0U;
+            std::size_t background = 0U, emitters = 0U, emitterTerms = 0U, visibleMisses = 0U, litFloor = 0U,
+                        floorPixels = 0U;
             for (std::uint32_t y = 0; y < kExtent.height; ++y) {
                 for (std::uint32_t x = 0; x < kExtent.width; ++x) {
                     const std::size_t i = std::size_t{y} * kExtent.width + x;
@@ -515,27 +516,27 @@ TEST_F(GiHazeFixture, GiPass_EveryPixelIsSeenThroughTheHaze) {
                         }
                         break;
                     }
-                    case Pixel::Emitter:
-                    case Pixel::Visibility: {
-                        // A pixel whose kernel returned before its terms keeps the
-                        // forward pass's radiance, seen through the haze. A visibility
-                        // miss gets there only under manifold sampling; without it the
-                        // view-space normal is the fallback surface and the pixel takes
-                        // the floor's road.
-                        const bool miss = ray.pixel == Pixel::Visibility;
-                        Tally& tally = miss ? (variation.sms ? visibility : floor) : emitter;
-                        if (miss) {
-                            ++visibleMisses;
-                        } else {
-                            ++emitters;
+                    case Pixel::Emitter: {
+                        ++emitters;
+                        // The EDF stays in the forward pass; the coexisting BSDF now contributes
+                        // here. Both the fill and those added terms obey the same haze oracle.
+                        const float added = std::max({std::abs(clear[i].x - kFill.x),
+                                                      std::abs(clear[i].y - kFill.y),
+                                                      std::abs(clear[i].z - kFill.z)});
+                        if (added > 1.0e-6F) {
+                            ++emitterTerms;
                         }
-                        // Exactly the fill: an emitter without manifold sampling (the
-                        // sampling may still collect from the receiver), always a
-                        // visibility miss under it.
-                        if ((!miss && !variation.sms) || (miss && variation.sms)) {
-                            if (!sameBits(clear[i], kFill)) {
-                                ++tally.kept;
-                            }
+                        expectThroughHaze(emitter, clear[i], hazed[i], std::exp(-opticalDepth(ray.world)));
+                        break;
+                    }
+                    case Pixel::Visibility: {
+                        ++visibleMisses;
+                        // A visibility miss returns before its terms only under manifold sampling;
+                        // without it the view-space normal is the fallback surface and the pixel
+                        // takes the floor's road. The exact fill is retained only on the early return.
+                        Tally& tally = variation.sms ? visibility : floor;
+                        if (variation.sms && !sameBits(clear[i], kFill)) {
+                            ++tally.kept;
                         }
                         expectThroughHaze(tally, clear[i], hazed[i], std::exp(-opticalDepth(ray.world)));
                         break;
@@ -565,6 +566,7 @@ TEST_F(GiHazeFixture, GiPass_EveryPixelIsSeenThroughTheHaze) {
             // skip it, a quarter of the pixels would be off the oracle.
             EXPECT_GT(background, 0U);
             EXPECT_GT(emitters, 100U) << "pixels on the emissive panel";
+            EXPECT_GT(emitterTerms, 0U) << "the emissive panel's coexisting BSDF must contribute to GI";
             EXPECT_GT(visibleMisses, 100U) << "pixels whose re-traced camera ray misses";
             EXPECT_GT(floorPixels, 1000U);
             EXPECT_GE(litFloor * 4U, floorPixels) << "floor pixels with terms above one percent of the fill";

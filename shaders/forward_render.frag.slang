@@ -724,8 +724,8 @@ FS_OUT main(FS_IN input, bool isFrontFace : SV_IsFrontFace) {
     // geometry_opacity coverage is handled by the path integrator's stochastic
     // pass-through gate at the primary vertex (gi.comp.slang).
 
-    // Match Hyperion emissive-hit behavior: emissive triangles are one-sided and
-    // terminate primary shading when seen from their emitting side.
+    // Emissive triangles are one-sided, but their EDF coexists with the OpenPBR BSDF:
+    // direct analytic lighting is evaluated below and GI supplies environment/indirect transport.
     // B1 fix: gate on the WINDING (geometric) side, matching Hyperion's
     // `dot(surf.wo, surf.geoNormal) > 0` test (path_integrator.slang:309), instead of
     // the interpolated vertex normal. With frontFace=CCW + projection y-flip
@@ -735,7 +735,6 @@ FS_OUT main(FS_IN input, bool isFrontFace : SV_IsFrontFace) {
     // The old vertex-normal gate darkened emitters whose normals disagree with winding.
     const float3 rawEmission = mat.emissionColorLum.xyz * mat.emissionColorLum.w;
     const float3 emission = isFrontFace ? rawEmission : 0..xxx;
-    const bool hitVisibleEmitter = max(emission.x, max(emission.y, emission.z)) > 0.0;
 
     float3 directLo = 0..xxx;
     float3 indirectLo = 0..xxx;
@@ -748,7 +747,7 @@ FS_OUT main(FS_IN input, bool isFrontFace : SV_IsFrontFace) {
     // handling (N above is the interpolated/smooth shading normal).
     const float3 Ng = normalize(cross(ddx(input.worldPos), ddy(input.worldPos)));
 
-    if (!hitVisibleEmitter) {
+    { // Direct lighting applies to the BSDF of emissive and non-emissive surfaces alike.
         // Tile-based direct lighting (Forward+).
         // When tilesX == 0 (fallback), evaluate all lights directly.
         static const uint kMaxLightsPerTile = 128;
@@ -784,12 +783,9 @@ FS_OUT main(FS_IN input, bool isFrontFace : SV_IsFrontFace) {
     // NOTE (GI2.7): when the GI compute stage runs it OVERWRITES alpha with the
     // ReSTIR reservoir M for the M-aware denoiser; no current consumer reads
     // indirectWeight downstream, so the overwrite is safe today.
-    float indirectWeight = 0.0;
-    if (!hitVisibleEmitter) {
-        const float directLum = dot(max(directLo, 0.0.xxx), kRec2020Luma);
-        const float indirectLum = dot(max(indirectLo, 0.0.xxx), kRec2020Luma);
-        indirectWeight = indirectLum / max(directLum + indirectLum, 1e-6);
-    }
+    const float directLum = dot(max(directLo, 0.0.xxx), kRec2020Luma);
+    const float indirectLum = dot(max(indirectLo, 0.0.xxx), kRec2020Luma);
+    const float indirectWeight = indirectLum / max(directLum + indirectLum, 1e-6);
 
     // Apply physical camera exposure: maps scene-linear radiance into [0,1] range
     // for the ToneMapper.  Same formula as Hyperion's PhysicalCamera.

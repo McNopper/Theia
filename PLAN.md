@@ -221,6 +221,16 @@ The release history, newest first.
 
 ### Unreleased
 
+- OpenPBR emission no longer suppresses the coexisting BSDF. Forward shading evaluates analytic
+  direct lighting on emissive surfaces, GI retains their environment/indirect transport, and the
+  shared secondary estimator carries emission plus BSDF continuation. The haze oracle covers the
+  new emitter terms with an independent numerical optical-depth integral and a positive control.
+  k=2 and k≥3 reconnection shifts reject emissive x_k vertices and fall back to complete replay,
+  because the cached suffix does not carry target-side EDF/MIS ownership.
+  The final 1920×1080 v10 title capture passes Theia against Hyperion at 256 samples with SSIM
+  0.802524, Rel-MSE 2.351234, histogram correlation 0.998456 and zero diagnostics. Directly against
+  the official JPEG at equal encoded dimensions, Hyperion reaches SSIM 0.687283; the native
+  1820×1024 comparison needs no resampling and scores 0.640925 Hyperion / 0.651881 Theia.
 - OpenPBR primary visibility now preserves stochastic opacity layers under both pinhole and thin-lens
   rays; a fully transparent outer shell no longer discards the visible inner surface. Forward texture
   replacement, all 16 map slots, UV-tangent anisotropy and textured HDR emission are verified. On the
