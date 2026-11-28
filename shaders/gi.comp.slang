@@ -592,7 +592,7 @@ void runMediumWalk(inout PathState state, inout float3 origin, inout float3 dir,
         // Boundary crossing at h.dist — transmittance, then Fresnel exit/TIR.
         mediumBoundaryTransmittance(state.throughput, state.mediumSigmaT, pureAbsorption, h.dist);
         float3 outOrigin, outDir;
-        bool exited = mediumResolveExit(state.seed, state.mediumEta, dir, h.geoNormal, h.worldPos,
+        bool exited = mediumResolveExit(state.throughput, state.seed, state.mediumEta, dir, h.geoNormal, h.worldPos,
                                          outOrigin, outDir);
         smsAdvancePathMediumBoundary(smsPath,exited,uint2(h.instanceIndex,h.materialIdx),pureAbsorption,dir,h.geoNormal);
         dir = outDir;

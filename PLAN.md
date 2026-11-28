@@ -27,7 +27,8 @@ which metric catches which failure) belongs to Harmonia:
 
 ## At a glance
 
-- Current release: v1.0.0 (2026-11-26), with Aether and Harmonia pinned to v1.0.0.
+- Current release: v1.0.0-pre-alpha (2026-11-28), with Aether and Harmonia pinned to
+  v1.0.0-pre-alpha.
 - The dense-scene animation-scaling investigation is open with Harmonia and Aether; the other
   remaining work is listed under [Roadmap](#roadmap) and [Known limitations](#known-limitations).
 - The interactive path tracer runs ReSTIR PT: one multi-bounce path reservoir for the indirect term,
@@ -219,7 +220,12 @@ are pushed together with the release commits.
 
 The release history, newest first.
 
-### Unreleased
+### v1.0.0-pre-alpha (2026-11-28)
+
+- Pre-alpha development snapshot and GitHub backup; consumes the shared Harmonia medium-exit
+  radiance transport in the GI adapter and regenerates the README gallery.
+
+### Previously unreleased baseline
 
 - OpenPBR emission no longer suppresses the coexisting BSDF. Forward shading evaluates analytic
   direct lighting on emissive surfaces, GI retains their environment/indirect transport, and the

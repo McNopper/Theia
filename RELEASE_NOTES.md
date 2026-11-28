@@ -1,3 +1,12 @@
+# Theia v1.0.0-pre-alpha (2026-11-28) — prerelease
+
+Pre-alpha development snapshot and GitHub backup. Consumes Harmonia v1.0.0-pre-alpha and applies
+the shared medium-exit radiance transport in the GI adapter. Verification: **94/94** tests pass.
+The README gallery is regenerated for this snapshot. Detailed OpenPBR Shader Playground validation
+continues after the prerelease.
+
+---
+
 # Theia v1.0.0 (2026-11-26) — major stable release
 
 Stable public baseline for the real-time renderer. Coordinates with
