@@ -461,7 +461,7 @@ void report(const Tally& tally, const char* what) {
 
 /// `hazed` against T * `clear`, component by component.
 void expectThroughHaze(Tally& tally, sm::float4 clear, sm::float4 hazed, double transmittance) {
-    for (const auto [c, h] : {std::pair{clear.x, hazed.x}, {clear.y, hazed.y}, {clear.z, hazed.z}}) {
+    for (const auto& [c, h] : {std::pair{clear.x, hazed.x}, {clear.y, hazed.y}, {clear.z, hazed.z}}) {
         const double expected = transmittance * c;
         const double difference = std::abs(double(h) - expected);
         tally.worst = std::max(tally.worst, difference / std::max(std::abs(expected), 1.0e-12));
