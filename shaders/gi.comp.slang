@@ -26,6 +26,13 @@ import medium_walk;     // shared volumetric random-walk math (runMediumWalk)
 import surface;         // shared OpenPBR surface-frame (texture-map) populator
 import sms_path;
 import sms_work;
+import thin_lens;       // the per-pixel thin-lens primary ray shared with the forward pass
+
+[[vk::binding(34, 0)]] cbuffer LensBuffer {
+    LensParams lensParams;
+};
+
+[[vk::binding(35, 0)]] StructuredBuffer<GpuLight> lights;
 
 [[vk::push_constant]]
 cbuffer GiPC {
@@ -1564,7 +1571,7 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
             }
             state.radiance += state.throughput * evalEmissionGuarded(
                 surfEmission, bounce + primaryCharge, state.specularBounce,
-                surf.wo, surf.geoNormal, emissiveTriangleCount);
+                surf.wo, surf.geoNormal, emissiveTriangleCount, surf.mat.baseMetalnessDiffRough.z > 0.5);
             break;
         }
         // A3(a): path regularization — widen near-specular GGX lobes on secondary+ bounces
@@ -1704,7 +1711,7 @@ bool estimateGiSampleCore(SurfaceHit primary, RngState seed, float adaptiveClamp
             emissiveTriangleCount, emissiveTriangles, emissiveCdf,
             envMarginalCdf, envConditionalCdf,
             envImportanceWidth, envImportanceHeight, envEnabled, envLuminanceScale,
-            t_envMap, s_env, state);
+            t_envMap, s_env, lights, lensParams.analyticLightCount, state.depth != 0u, state);
         if (smsEnabled!=0u)
             smsAdvancePathSurface(smsPath,surf,state,h.geoNormal,uint2(h.instanceIndex,h.materialIdx),
                 remainingDepth,currentSmsReceiver);
@@ -2576,6 +2583,17 @@ void restirPtEmit(SurfaceHit primary, uint2 px, float adaptiveClamp, inout RngSt
     t_ptParams[pixelIdx] = emitState;
 }
 
+// The per-pixel thin-lens primary ray, reconstructed from the raster record with the same
+// deterministic disk sample the forward pass used. Haze and the primary surface share it.
+ThinLensPrimaryRay pixelPrimaryRay(int3 loadCoord) {
+    const float3 worldPos = t_giBuffer.Load(loadCoord).xyz;
+    const float3 pinDirection = normalize(worldPos - cameraPos.xyz);
+    RngState lensSeed = composeRngSeed(uint2(loadCoord.xy), frameSampleIndex, 0xD0F0u, rngBaseSeed);
+    return makeThinLensPrimaryRay(
+        cameraPos.xyz, pinDirection, normalize(view[0].xyz), normalize(view[1].xyz),
+        lensParams.lensRadius, lensParams.focusDistance, sampleDisk(randFloat2(lensSeed)));
+}
+
 // Primary-surface reconstruction shared by the emit stage (main) and the
 // uniform replay pass: camera-ray re-trace to the recorded world position with
 // the view-space G-buffer-normal fallback (transparent pixels). Returns false
@@ -2601,7 +2619,8 @@ bool buildPrimarySurface(uint2 px, out GiHit primaryHit, out SurfaceHit primary,
     // position; this works for opaque AND transparent (glass) pixels alike. The view-space
     // G-buffer normal is only needed as a fallback when the re-trace misses (e.g. the
     // transparent pass does not write the normal G-buffer), so it is computed lazily below.
-    primaryHit = traceClosestHit(cameraPos.xyz, worldPos - cameraPos.xyz, kInf, kRayEpsilon);
+    const ThinLensPrimaryRay primaryRay = pixelPrimaryRay(loadCoord);
+    primaryHit = traceClosestHit(primaryRay.origin, primaryRay.direction, kInf, kRayEpsilon);
     // Trust the re-traced closest hit as the authoritative nearest surface. The rasterized
     // G-buffer materialIdx is draw-order dependent for transparent geometry (depth-write
     // disabled), so overlapping transparent surfaces can record the farther one; the inline
@@ -2612,7 +2631,7 @@ bool buildPrimarySurface(uint2 px, out GiHit primaryHit, out SurfaceHit primary,
     primaryHitValid = primaryHit.hit;
     const float3 primaryWorldPos = primaryHitValid ? primaryHit.worldPos : worldPos;
 
-    const float3 wo = normalize(cameraPos.xyz - primaryWorldPos);
+    const float3 wo = normalize(primaryRay.origin - primaryWorldPos);
     if (primaryHitValid) {
         primary = makeSurfaceHit(primaryHit, wo);
     } else {
@@ -2801,15 +2820,20 @@ Haze sceneHaze() {
 
 /// Optical depth from the camera to the surface the pixel shows.
 float pixelHazeDepth(int3 loadCoord) {
-    return hazeOpticalDepth(sceneHaze(), cameraPos.xyz, t_giBuffer.Load(loadCoord).xyz);
+    return hazeOpticalDepth(sceneHaze(), pixelPrimaryRay(loadCoord).origin, t_giBuffer.Load(loadCoord).xyz);
 }
 
 /// The blurred sky in the direction of the pixel's camera ray: the light the
 /// haze scatters into the pixel. The HDR image holds exposed radiance, so the
-/// sky carries the exposure.
+/// sky carries the exposure. The blur is an angle, so the mip level is taken
+/// from the width of the environment map (hazeSkyLod).
 float3 pixelHazeSky(int3 loadCoord) {
-    const float3 direction = t_giBuffer.Load(loadCoord).xyz - cameraPos.xyz;
-    return exposure * envLuminanceScale * sampleEnvMapLatLongLevel(t_envMap, s_env, direction, kHazeSkyLod);
+    const float3 direction = pixelPrimaryRay(loadCoord).direction;
+    uint envWidth = 0u;
+    uint envHeight = 0u;
+    t_envMap.GetDimensions(envWidth, envHeight);
+    return exposure * envLuminanceScale *
+           sampleEnvMapLatLongLevel(t_envMap, s_env, direction, hazeSkyLod(float(envWidth)));
 }
 
 /// A pixel's radiance seen through the haze; unchanged when the scene has none.
@@ -2818,6 +2842,23 @@ float3 hazePixel(float3 radiance, int3 loadCoord) {
         return radiance;
     }
     return hazeComposite(radiance, pixelHazeDepth(loadCoord), pixelHazeSky(loadCoord));
+}
+
+/// Adds @p added to what the forward pass wrote for the pixel, through the haze, and
+/// stores @p alpha as the pixel's alpha. Every term the main kernel adds to a pixel
+/// leaves through here, and the one term combineMain adds later through the haze's
+/// transmittance; a term that takes neither road is too bright in a hazed scene.
+void compositePixel(uint2 px, int3 loadCoord, float3 added, float alpha) {
+    hdrImage[px] = float4(hazePixel(hdrImage[px].xyz + added, loadCoord), alpha);
+}
+
+/// A pixel that leaves the main kernel before any of its terms is added keeps what the
+/// forward pass wrote, seen through the haze: the medium lies in front of that surface
+/// too. Nothing is written for a scene without haze.
+void hazeForwardRadiance(uint2 px, int3 loadCoord) {
+    if (hazeActive(sceneHaze())) {
+        compositePixel(px, loadCoord, 0.0.xxx, hdrImage[px].w);
+    }
 }
 
 // Kernel-3 entry: per-pixel completion (combine + shade + HDR composite of the
@@ -2864,15 +2905,28 @@ void main(uint3 tid : SV_DispatchThreadID) {
         t_ptParams[px.y * screenWidth + px.x].misc.z = 0u;
     }
     const int3 loadCoord = int3(int(px.x), int(px.y), 0);
+    // The sky is the radiance at infinity and stays as drawn. Every other pixel shows a
+    // surface the forward pass shaded, and the haze lies in front of it whatever this
+    // kernel can add to it.
+    const bool background = asuint(t_giBuffer.Load(loadCoord).w) == 0u;
 
     // --- Primary surface (shared reconstruction with the replay pass — GI-ENH §6.2.2) ---
     GiHit primaryHit;
     bool primaryHitValid = false;
     SurfaceHit primary;
     if (!buildPrimarySurface(px, primaryHit, primary, primaryHitValid)) {
-        return; // background / fallback-unusable / self-emissive-fallback pixel
+        // No surface to shade (no view-space normal to fall back on, a non-finite
+        // material, a self-emissive fallback surface): the pixel keeps the forward
+        // pass's radiance.
+        if (!background) {
+            hazeForwardRadiance(px, loadCoord);
+        }
+        return;
     }
-    if (smsEnabled!=0u && !primaryHitValid) return; // no synthetic SMS/ownership domain on a visibility miss
+    if (smsEnabled!=0u && !primaryHitValid) { // no synthetic SMS/ownership domain on a visibility miss
+        hazeForwardRadiance(px, loadCoord);
+        return;
+    }
 
     if (primaryHitValid) produceSmsReceiver(px,primaryHit,primary);
 
@@ -2882,7 +2936,7 @@ void main(uint3 tid : SV_DispatchThreadID) {
                                    max(primary.mat.emissionColorLum.w, 0.0);
     if (maxComp(primaryEmission) > 0.0) {
         // The haze lies in front of the emitter too.
-        hdrImage[px] = float4(hazePixel(hdrImage[px].xyz, loadCoord), hdrImage[px].w);
+        hazeForwardRadiance(px, loadCoord);
         return;
     }
 
@@ -2976,10 +3030,10 @@ void main(uint3 tid : SV_DispatchThreadID) {
                 // GI2.7: M in alpha — OVERWRITE (not +=) so the forward pass's
                 // indirectWeight doesn't pollute the M channel. RGB still adds to
                 // the forward pass's base color via the read in the same expression.
-                hdrImage[px] = float4(hazePixel(hdrImage[px].xyz + restirDirect, loadCoord), restirM);
+                compositePixel(px, loadCoord, restirDirect, restirM);
             } else if (hazeActive(sceneHaze())) {
                 // Nothing to add: only the haze lies over the forward pass's color.
-                hdrImage[px] = float4(hazePixel(hdrImage[px].xyz, loadCoord), hdrImage[px].w);
+                compositePixel(px, loadCoord, 0.0.xxx, hdrImage[px].w);
             }
             return;
         }
@@ -2994,6 +3048,5 @@ void main(uint3 tid : SV_DispatchThreadID) {
     // GI-ENH §6.2.2: this is the PARTIAL composite — the path-reservoir indirect
     // term and its M are added by combineMain (kept out of the alpha overwrite).
     // The distance haze covers everything this pixel shows.
-    hdrImage[px] = float4(hazePixel(hdrImage[px].xyz + (sumIndirect + sumEnvNee) * invN + restirDirect, loadCoord),
-                         restirM);
+    compositePixel(px, loadCoord, (sumIndirect + sumEnvNee) * invN + restirDirect, restirM);
 }

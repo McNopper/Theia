@@ -1,5 +1,6 @@
 #include "theia/cull/GpuCullPass.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -37,11 +38,13 @@ GpuCullPass::~GpuCullPass() {
 }
 
 bool GpuCullPass::initialize(const harmonia::DeviceContext& ctx, const char* spvFilename) {
+    // A reserve() that came before this call is part of the list's initial size.
+    const std::uint32_t capacity = std::max(kInitialCapacity, m_reserved);
     shutdown();
     m_ctx = &ctx;
 
     // --- Output buffers ---
-    const VkDeviceSize kCompactListSize = kInitialCapacity * sizeof(std::uint32_t);
+    const VkDeviceSize kCompactListSize = capacity * sizeof(std::uint32_t);
     // vkCmdFillBuffer zeros all 12 bytes before each dispatch; the compute shader then
     // restores groupCountY=1 and groupCountZ=1, and accumulates groupCountX atomically.
     constexpr VkDeviceSize kIndirectBufSize = kMeshTaskIndirectCmdSize;
@@ -66,7 +69,7 @@ bool GpuCullPass::initialize(const harmonia::DeviceContext& ctx, const char* spv
     }
     m_compactInstanceListBuf = std::move(*compactBuf);
     m_indirectDrawBuf = std::move(*indirectBuf);
-    m_capacity = kInitialCapacity;
+    m_capacity = capacity;
 
     // --- Descriptor set layout ---
     // binding 0: instances          (STORAGE, read)
@@ -180,8 +183,11 @@ bool GpuCullPass::reserve(std::uint32_t instanceCount) {
         return true;
     }
     if (m_ctx == nullptr) {
-        harmonia::core::Logger::error("GpuCullPass: reserve({}) before initialize", instanceCount);
-        return false;
+        // Not initialized yet: ForwardRenderer::setScene runs before the renderer's
+        // initialize(). Nothing can be grown here; the request is kept and initialize()
+        // sizes the list for it, so the promise of this call holds either way.
+        m_reserved = std::max(m_reserved, instanceCount);
+        return true;
     }
 
     const VkDeviceSize size = static_cast<VkDeviceSize>(instanceCount) * sizeof(std::uint32_t);
@@ -209,6 +215,7 @@ void GpuCullPass::shutdown() {
     m_compactInstanceListBuf = {};
     m_indirectDrawBuf = {};
     m_capacity = 0;
+    m_reserved = 0;
     m_reportedOverflow = false;
     m_descWriter.shutdown(); // MOD1: replaces pool + set
 

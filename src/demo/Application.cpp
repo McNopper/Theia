@@ -382,11 +382,10 @@ bool Application::onSceneLoaded(const harmonia::scene::SceneLoader::SceneConfig&
     m_sceneMaxDepth = sceneConfig.maxDepth.value_or(3u);
     m_renderer->setTransparentMaxDepth(sceneConfig.maxDepth.value_or(2u));
     // Distance haze ([haze]): the GI stage composites it into each pixel's radiance.
-    m_hazeDensity = sceneConfig.hazeDensity.value_or(0.0f);
-    m_hazeHeight = sceneConfig.hazeHeight.value_or(0.0f);
-    if (m_hazeDensity > 0.0f && m_hazeHeight > 0.0f) {
+    m_haze = sceneHaze(sceneConfig);
+    if (m_haze.density > 0.0f && m_haze.height > 0.0f) {
         harmonia::core::Logger::info(
-            "Haze: density {:.5f} per metre at height zero, scale height {:.1f} m", m_hazeDensity, m_hazeHeight);
+            "Haze: density {:.5f} per metre at height zero, scale height {:.1f} m", m_haze.density, m_haze.height);
     }
 
     harmonia::core::Logger::info("Loaded scene: {} instances, {} bytes vb, {} bytes ib",
@@ -460,15 +459,21 @@ void Application::record(VkCommandBuffer cmd, const harmonia::app::RenderTarget&
     // converge) - that case re-places the camera idempotently instead.
     const harmonia::app::App::AnimationClock clock = animationClock(m_scene->animationFps());
     const bool cameraTick = m_cameraNodeId && clock.key != m_cameraTick;
-    const auto cameraStart = std::chrono::steady_clock::now();
-    if (cameraTick) {
+    const auto placeCamera = [&] {
+        if (!cameraTick) {
+            return;
+        }
+        const auto cameraStart = std::chrono::steady_clock::now();
         m_cameraTick = clock.key;
-        placeBoundCamera(clock.seconds);
-    }
-    if (m_tickTimingLogged && cameraTick) {
-        using Millis = std::chrono::duration<double, std::milli>;
-        harmonia::core::Logger::info("camera_timing_ms: {:.3f}",
-                                     Millis(std::chrono::steady_clock::now() - cameraStart).count());
+        placeBoundCamera();
+        if (m_tickTimingLogged) {
+            using Millis = std::chrono::duration<double, std::milli>;
+            harmonia::core::Logger::info("camera_timing_ms: {:.3f}",
+                                         Millis(std::chrono::steady_clock::now() - cameraStart).count());
+        }
+    };
+    if (!m_scene->hasAnimation()) {
+        placeCamera(); // a static placement never evaluates the scene
     }
     if (m_scene->hasAnimation() || m_scene->hasSkins() || m_scene->hasMorphs()) {
         if (clock.key != m_lastAnimationTick) {
@@ -478,6 +483,7 @@ void Application::record(VkCommandBuffer cmd, const harmonia::app::RenderTarget&
             const auto tickStart = std::chrono::steady_clock::now();
             if (m_scene->hasAnimation()) {
                 m_scene->setAnimationTime(seconds);
+                placeCamera(); // reads the same evaluated scene; no second evaluation
             }
             const auto stamped = std::chrono::steady_clock::now();
             if (m_deformPass.has_value()) {
@@ -877,11 +883,11 @@ std::pair<VkCommandBuffer, VkSemaphore> Application::onBeforeSceneStages(VkComma
     return {stagesCmd, m_asyncSemaphores[slot]};
 }
 
-void Application::placeBoundCamera(double seconds) {
+void Application::placeBoundCamera() {
     if (!m_cameraNodeId || m_scene == nullptr || m_scene->attachedScene() == nullptr || m_renderer == nullptr) {
         return;
     }
-    const auto pose = aether::SceneAnimator::evaluateCamera(*m_scene->attachedScene(), static_cast<float>(seconds));
+    const auto pose = aether::SceneAnimator::cameraPoseFromEvaluated(*m_scene->evaluatedScene());
     if (!pose) {
         return; // hand-built scene without a placement - keep the current view
     }

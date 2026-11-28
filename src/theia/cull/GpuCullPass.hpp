@@ -54,6 +54,8 @@ class GpuCullPass {
     GpuCullPass& operator=(GpuCullPass&&) noexcept = default;
 
     /// Initialize the cull pass pipeline and output buffers.
+    /// The compact list starts with `kInitialCapacity` entries, or with the largest
+    /// count an earlier reserve() asked for.
     /// @param spvFilename  SPIR-V filename resolved against THEIA_SHADER_DIR.
     [[nodiscard]] bool initialize(const harmonia::DeviceContext& ctx,
                                   const char* spvFilename = "forward_cull.comp.spv");
@@ -69,6 +71,10 @@ class GpuCullPass {
     /// drawn; the capacity never shrinks. Call between frames with the GPU
     /// idle - the previous list is destroyed here, and the host already
     /// waits for the device when it loads a scene.
+    ///
+    /// Before initialize() the pass has no list to grow: the request is kept
+    /// and initialize() sizes the list for it, so the call succeeds (the
+    /// renderer sets its scene before it initializes).
     [[nodiscard]] bool reserve(std::uint32_t instanceCount);
 
     /// Entries the compact instance list currently holds.
@@ -117,6 +123,7 @@ class GpuCullPass {
     harmonia::core::Buffer
         m_indirectDrawBuf;           ///< single VkDrawMeshTasksIndirectCommandEXT  STORAGE | INDIRECT | DEVICE_ADDR
     std::uint32_t m_capacity = 0;    ///< entries m_compactInstanceListBuf holds
+    std::uint32_t m_reserved = 0;    ///< largest reserve() before initialize(); its initial capacity
     bool m_reportedOverflow = false; ///< the dispatch clamp is diagnosed once
 };
 

@@ -12,7 +12,16 @@ void initializeSmsPixel(uint2 pixel) {
     work.words[7].zw=uint2(hashCombine(slot,rngBaseSeed^0x53534D53u),hashCombine(frameSampleIndex,0x534D5350u));
     work.words[12].w=context.resolution;
     work.words[13].zw=uint2(emissiveTriangleCount,maxDepth);
-    work.words[14]=uint4(asuint(exposure),1u,frameSampleIndex,rngBaseSeed);
+    // The resolve pass adds its estimate, times the first word, to the pixel's radiance
+    // (sms_resolve.slang). The distance haze lies in front of that light too: like the
+    // path-reservoir term of combineMain, it only loses what the medium extincts on the
+    // way to the receiver.
+    float weight=exposure;
+    if (hazeDensity>0.0 && hazeHeight>0.0) {
+        const float3 receiver=t_giBuffer.Load(int3(int(pixel.x),int(pixel.y),0)).xyz;
+        weight*=hazeTransmittance(hazeOpticalDepth(Haze(hazeDensity,hazeHeight),cameraPos.xyz,receiver));
+    }
+    work.words[14]=uint4(asuint(weight),1u,frameSampleIndex,rngBaseSeed);
     work.words[15].zw=uint2(screenWidth,screenHeight);
     context.work[slot]=work;
     context.prefixes[slot]=0.0.xxxx;
@@ -60,7 +69,7 @@ void produceSmsReceiver(uint2 pixel,GiHit initialHit,SurfaceHit initialSurface) 
         state.depth=depth;
         integrateSurface(tracer,surface,emissiveTriangleCount,emissiveTriangles,emissiveCdf,
             envMarginalCdf,envConditionalCdf,envImportanceWidth,envImportanceHeight,hasEnvMap!=0u,
-            envLuminanceScale,t_envMap,s_env,state);
+            envLuminanceScale,t_envMap,s_env,lights,lensParams.analyticLightCount,state.depth != 0u,state);
         smsAdvancePathSurface(path,surface,state,hit.geoNormal,uint2(hit.instanceIndex,hit.materialIdx),remaining,false);
         if (state.terminated || !path.prefixSpecular) return;
         float3 origin=state.nextOrigin,direction=state.nextDirection;

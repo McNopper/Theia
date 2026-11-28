@@ -57,6 +57,8 @@ struct GpuMaterial {
     float4 emissionColorLum;
     float4 opacityFlagsPad;
     uint4  textureIndices2;
+    uint4  textureIndices3;
+    uint4  textureIndices4;
 };
 
 /// Payload: instance index + base offset into the global meshlet buffer.

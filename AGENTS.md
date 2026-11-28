@@ -81,7 +81,7 @@ build/theia.exe --scene cornell_classic --output out.exr --offscreen-frames 256 
 ## Parity and screenshots
 
 The parity budget is 320×240, a Hyperion reference at 256 samples per pixel and 256 Theia frames
-(`--offscreen-frames 256`), over the 14 scenes in `Harmonia/tools/validation_manifest.toml`. The
+(`--offscreen-frames 256`), over the 15 scenes in `Harmonia/tools/validation_manifest.toml`. The
 thresholds, the scripts and the method are Harmonia's
 ([README](../Harmonia/README.md#parity-methodology),
 [tools](../Harmonia/tools/README.md),
@@ -148,8 +148,12 @@ Each of these has cost a debugging cycle.
   measurements and what was excluded). Do not use two Theia runs as equal in a comparison.
   Prove that a flag leaves the EXR alone within one run, or against Hyperion, which repeats.
 - Every term the GI pass adds to a pixel goes through the haze of a scene with a `[haze]`
-  section: the terms of the main kernel through `hazePixel`, a term added after that composite
-  through `hazeTransmittance`. A new term that skips both is too bright in a hazed scene.
+  section: the terms of the main kernel through `compositePixel` (`hazePixel`), a term added after
+  that composite through `hazeTransmittance` (the path reservoir of `combineMain`, and the
+  estimate of the manifold sampling, which carries it in the weight of its work record). A
+  pixel that leaves the kernel before its terms keeps the forward pass's radiance through
+  `hazeForwardRadiance`. A new term that takes none of these roads is too bright in a hazed
+  scene.
 - The main GI kernel returns early for a background pixel, a visibility miss under manifold
   sampling and a self-emissive surface, all before its emit stage. A later kernel that reads
   per-pixel state must get a valid value for those pixels too: `combineMain` runs for every

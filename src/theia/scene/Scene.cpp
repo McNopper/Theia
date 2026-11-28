@@ -62,7 +62,8 @@ VkResult Scene::updateTlas(const harmonia::DeviceContext& ctx, const harmonia::c
     // BEFORE the scene_rt update consumes the dirty flag (the mesh/GI shaders and the
     // motion-vector pass read these buffers; only the TLAS knew about stamped poses).
     syncInstanceTransforms();
-    return harmonia::scene_rt::updateTlas(*this, ctx, pool, m_tlas, m_tlasAddress, m_tlasUpdateCapable, m_tlasUpdates);
+    return harmonia::scene_rt::updateTlas(
+        *this, ctx, pool, m_tlas, m_tlasAddress, m_tlasUpdateCapable, m_tlasUpdates, kTlasRebuildInterval);
 }
 
 void Scene::syncInstanceTransforms() {

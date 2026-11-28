@@ -168,11 +168,12 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
     // Set 2: environment resources. Indirect lighting is supplied by the RT-GI compute
     // stage; the forward pass keeps only the linear sampler (3), the raw env panorama (4)
     // and the env-importance CDFs (6/7) for the sky background / transparent env path.
-    const std::array<VkDescriptorSetLayoutBinding, 4> iblBindings{
+    const std::array<VkDescriptorSetLayoutBinding, 5> iblBindings{
         VkDescriptorSetLayoutBinding{3, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{4, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{6, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
         VkDescriptorSetLayoutBinding{7, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
+        VkDescriptorSetLayoutBinding{8, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
     };
     if (!createOneSetLayout(iblBindings, {}, "Failed to create IBL descriptor set layout", m_desc.iblSetLayout)) {
         m_desc.matSetLayout.reset();
@@ -197,7 +198,7 @@ bool ForwardRenderer::createDescriptorSetLayouts() {
     // MOD1: descriptor buffers (replaces the pool + allocated sets).
     if (!m_desc.mesh.init(*m_ctx, m_desc.meshSetLayout.get(), 12, "theia.fwd.mesh.descBuf") ||
         !m_desc.mat.init(*m_ctx, m_desc.matSetLayout.get(), 6, "theia.fwd.mat.descBuf") ||
-        !m_desc.ibl.init(*m_ctx, m_desc.iblSetLayout.get(), 8, "theia.fwd.ibl.descBuf") ||
+        !m_desc.ibl.init(*m_ctx, m_desc.iblSetLayout.get(), 9, "theia.fwd.ibl.descBuf") ||
         !m_desc.texture.init(*m_ctx, m_desc.textureSetLayout.get(), 1, "theia.fwd.texture.descBuf")) {
         harmonia::core::Logger::error("Failed to create descriptor buffers");
         m_desc.mesh.shutdown();

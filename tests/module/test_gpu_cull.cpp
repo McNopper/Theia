@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
 #include <limits>
 #include <slang-math/slang-math.hpp>
@@ -14,15 +16,33 @@
 #include "fixtures/VulkanTestFixture.hpp"
 #include "harmonia/scene/Material.hpp"
 #include "harmonia/scene/ProceduralGeometry.hpp"
+#include "harmonia/scene/SceneLoader.hpp"
 #include "theia/cull/GpuCullPass.hpp"
 #include "theia/scene/Scene.hpp"
 
 namespace {
 
-// A 68x68 grid of small boxes: 4624 instances, 528 more than the cull pass's
-// initial capacity, every one inside the view below.
-constexpr std::uint32_t kGrid = 68;
+/// The side of the smallest square grid that holds more instances than @p capacity.
+consteval std::uint32_t gridSide(std::uint32_t capacity) {
+    std::uint32_t side = 1U;
+    while (side * side <= capacity) {
+        ++side;
+    }
+    return side;
+}
+
+// A square grid of small boxes with more instances than the compact list's initial
+// capacity (the grid follows the capacity, not a number of its own), every one inside
+// the view below.
+constexpr std::uint32_t kGrid = gridSide(theia::GpuCullPass::kInitialCapacity);
 constexpr std::uint32_t kInstanceCount = kGrid * kGrid;
+static_assert(kInstanceCount > theia::GpuCullPass::kInitialCapacity);
+
+constexpr float kFieldOfViewY = 60.0F;
+constexpr float kAspect = 16.0F / 9.0F;
+// The grid spans two metres per instance. Seen from twice its side in front of it, it
+// fills half of the vertical field of view.
+const float kCameraDistance = 2.0F * float(kGrid) / std::tan(sm::radians(kFieldOfViewY) * 0.5F);
 
 /// The scene under test: one box mesh instanced on the grid.
 theia::Scene makeGridScene(const harmonia::DeviceContext& ctx, const harmonia::core::CommandPool& pool) {
@@ -44,14 +64,49 @@ theia::Scene makeGridScene(const harmonia::DeviceContext& ctx, const harmonia::c
     return scene;
 }
 
-/// View-projection exactly as ForwardRenderer builds it: 220 m in front of the
-/// grid, looking at it, a 60 degree vertical field of view (half-extent 127 m
-/// at the grid's distance - the grid spans 134 m, so every instance is inside).
+/// View-projection as ForwardRenderer builds it: in front of the grid at
+/// kCameraDistance, looking at it (see there for the distance).
 sm::float4x4 gridViewProj() {
-    sm::float4x4 proj = sm::perspective(sm::radians(60.0F), 16.0F / 9.0F, 0.1F, 1000.0F);
+    sm::float4x4 proj = sm::perspective(sm::radians(kFieldOfViewY), kAspect, 0.1F, 4.0F * kCameraDistance);
     proj[1][1] *= -1.0F;
-    return proj *
-           sm::lookAt(sm::float3(0.0F, 0.0F, 220.0F), sm::float3(0.0F, 0.0F, 0.0F), sm::float3(0.0F, 1.0F, 0.0F));
+    return proj * sm::lookAt(sm::float3(0.0F, 0.0F, kCameraDistance),
+                             sm::float3(0.0F, 0.0F, 0.0F),
+                             sm::float3(0.0F, 1.0F, 0.0F));
+}
+
+/// A cube mesh, wound outward, and an animated scene that moves it: into the view at
+/// one second and back out at two. Written next to each other, like a scene of the
+/// assets; the camera is the one of gridViewProj().
+std::filesystem::path writeAnimatedMover() {
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "theia_gpu_cull_anim_test";
+    fs::create_directories(dir);
+    {
+        std::ofstream obj(dir / "mover.obj");
+        obj << "v -0.4 -0.4 -0.4\nv 0.4 -0.4 -0.4\nv 0.4 0.4 -0.4\nv -0.4 0.4 -0.4\n"
+               "v -0.4 -0.4 0.4\nv 0.4 -0.4 0.4\nv 0.4 0.4 0.4\nv -0.4 0.4 0.4\n"
+               "vt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\n"
+               "vn 0 0 -1\nvn 0 0 1\nvn 0 -1 0\nvn 0 1 0\nvn -1 0 0\nvn 1 0 0\n"
+               "f 1/1/1 4/2/1 3/3/1\nf 1/1/1 3/3/1 2/4/1\n"
+               "f 5/1/2 6/2/2 7/3/2\nf 5/1/2 7/3/2 8/4/2\n"
+               "f 1/1/3 2/2/3 6/3/3\nf 1/1/3 6/3/3 5/4/3\n"
+               "f 4/1/4 8/2/4 7/3/4\nf 4/1/4 7/3/4 3/4/4\n"
+               "f 1/1/5 5/2/5 8/3/5\nf 1/1/5 8/3/5 4/4/5\n"
+               "f 2/1/6 3/2/6 7/3/6\nf 2/1/6 7/3/6 6/4/6\n";
+    }
+    // Twice the camera's distance: far outside the view from wherever the camera is.
+    const float farX = 2.0F * kCameraDistance;
+    {
+        std::ofstream scn(dir / "mover.scene.toml");
+        scn << "[animation_clock]\nfps = 30\n\n[camera]\ntranslate = [0.0, 0.0, " << kCameraDistance
+            << "]\nrotate_x = 0.0\nrotate_y = 0.0\n\n"
+               "[[mesh]]\nname = \"mover\"\npath = \"mover.obj\"\n\n"
+               "[[node]]\nid = \"mover\"\nmesh = \"mover\"\n\n"
+               "[[animation]]\ntarget = \"nodes/mover/translation\"\ninterpolation = \"linear\"\n"
+               "times = [0.0, 1.0, 2.0]\nvalues = ["
+            << farX << ", 0.0, 0.0, 0.0, 0.0, 0.0, " << farX << ", 0.0, 0.0]\n";
+    }
+    return dir;
 }
 
 void cullScene(theia::GpuCullPass& pass, const theia::Scene& scene, const harmonia::core::CommandPool& pool) {
@@ -168,9 +223,10 @@ TEST_F(RtFixture, GpuCull_FollowsAnInstanceMovedByAnimation) {
     const std::uint32_t mesh =
         scene.addMesh(deviceCtx(), commandPool(), std::move(box), harmonia::scene::MeshOpacity{}, "test.mover");
     ASSERT_NE(mesh, std::numeric_limits<std::uint32_t>::max());
-    // Built far outside the view of gridViewProj() (its half-width there is 226 m).
-    const std::uint32_t mover =
-        scene.addInstance(mesh, harmonia::scene::Transform{.translation = {400.0F, 0.0F, 0.0F}}, material);
+    // Outside the view of gridViewProj() (its half-width there is a little more than the
+    // camera's distance).
+    const std::uint32_t mover = scene.addInstance(
+        mesh, harmonia::scene::Transform{.translation = {2.0F * kCameraDistance, 0.0F, 0.0F}}, material);
     ASSERT_NE(mover, std::numeric_limits<std::uint32_t>::max());
     ASSERT_EQ(scene.build(deviceCtx(), commandPool()), VK_SUCCESS);
 
@@ -204,4 +260,69 @@ TEST_F(RtFixture, GpuCull_NeverWritesPastTheCompactList) {
     cullScene(pass, scene, commandPool());
     EXPECT_EQ(visibleCount(pass, deviceCtx(), commandPool()), theia::GpuCullPass::kInitialCapacity);
     expectEveryInstanceOnce(pass, theia::GpuCullPass::kInitialCapacity, deviceCtx(), commandPool());
+}
+
+// ForwardRenderer::setScene reserves before the renderer is initialized. The supported
+// order is a success, not an error: nothing is grown (there is no list yet), and the
+// pass keeps the request for initialize(). No device needed.
+TEST(TheiaGpuCullContract, ReserveBeforeInitializeSucceeds) {
+    theia::GpuCullPass pass;
+    ASSERT_FALSE(pass.isInitialized());
+    EXPECT_TRUE(pass.reserve(kInstanceCount)) << "the reserve of setScene, before initialize()";
+    EXPECT_EQ(pass.capacity(), 0U) << "there is no list to grow yet";
+    EXPECT_TRUE(pass.reserve(1U));
+}
+
+TEST_F(RtFixture, GpuCull_ReserveBeforeInitializeSizesTheListOnceInitialized) {
+    theia::Scene scene = makeGridScene(deviceCtx(), commandPool());
+    ASSERT_EQ(scene.instanceCount(), kInstanceCount);
+    ASSERT_EQ(scene.build(deviceCtx(), commandPool()), VK_SUCCESS);
+
+    theia::GpuCullPass pass;
+    ASSERT_TRUE(pass.reserve(scene.instanceCount()));
+    ASSERT_TRUE(pass.initialize(deviceCtx()));
+    // The list the scene asked for, whether or not the caller repeats its reserve.
+    EXPECT_EQ(pass.capacity(), std::max(theia::GpuCullPass::kInitialCapacity, kInstanceCount));
+    EXPECT_TRUE(pass.reserve(scene.instanceCount()));
+    EXPECT_EQ(pass.capacity(), std::max(theia::GpuCullPass::kInitialCapacity, kInstanceCount));
+
+    cullScene(pass, scene, commandPool());
+    EXPECT_EQ(visibleCount(pass, deviceCtx(), commandPool()), kInstanceCount);
+    expectEveryInstanceOnce(pass, kInstanceCount, deviceCtx(), commandPool());
+}
+
+// The bounds of an instance follow the animation of a loaded scene: the track of the
+// scene file stamps the transform (SceneBase::setAnimationTime), updateTlas syncs it
+// and the bounds with it. Computed once at build, they culled the mover wherever it
+// was built.
+TEST_F(RtFixture, GpuCull_FollowsAnInstanceMovedByTheAnimationOfALoadedScene) {
+    const std::filesystem::path dir = writeAnimatedMover();
+    theia::Scene scene;
+    const auto config =
+        harmonia::scene::SceneLoader::load(dir / "mover.scene.toml", dir, scene, deviceCtx(), commandPool());
+    ASSERT_TRUE(config.has_value());
+    ASSERT_TRUE(scene.hasAnimation());
+    ASSERT_EQ(scene.instanceCount(), 1U);
+    ASSERT_EQ(scene.build(deviceCtx(), commandPool()), VK_SUCCESS);
+
+    // Match the application's animation-clock lifecycle before the first rendered frame.
+    scene.setAnimationTime(0.0F);
+    ASSERT_EQ(scene.updateTlas(deviceCtx(), commandPool()), VK_SUCCESS);
+    theia::GpuCullPass pass;
+    ASSERT_TRUE(pass.initialize(deviceCtx()));
+    cullScene(pass, scene, commandPool());
+    EXPECT_EQ(visibleCount(pass, deviceCtx(), commandPool()), 0U) << "built outside the view";
+
+    scene.setAnimationTime(1.0F);
+    ASSERT_EQ(scene.updateTlas(deviceCtx(), commandPool()), VK_SUCCESS);
+    cullScene(pass, scene, commandPool());
+    EXPECT_EQ(visibleCount(pass, deviceCtx(), commandPool()), 1U) << "the track moved it into the view";
+    expectEveryInstanceOnce(pass, 1U, deviceCtx(), commandPool());
+
+    scene.setAnimationTime(2.0F);
+    ASSERT_EQ(scene.updateTlas(deviceCtx(), commandPool()), VK_SUCCESS);
+    cullScene(pass, scene, commandPool());
+    EXPECT_EQ(visibleCount(pass, deviceCtx(), commandPool()), 0U) << "and out of it again";
+
+    std::filesystem::remove_all(dir);
 }

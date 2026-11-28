@@ -15,11 +15,28 @@
 #include "harmonia/core/Image.hpp"
 #include "harmonia/core/VulkanHandle.hpp"
 #include "harmonia/pipeline/SmsPass.hpp"
+#include "harmonia/scene/SceneLoader.hpp"
 #include "theia/renderer/RendererConstants.hpp"
 
 namespace theia {
 
 class Scene;
+
+/// The distance haze of a scene (`[haze]` in the scene file, modelled by
+/// `Harmonia/shaders/haze.slang`): the medium between the camera and the
+/// surfaces it sees. The GI stage composites the radiance of every pixel through
+/// it; it is part of the estimator, and Hyperion applies the same module.
+struct SceneHaze {
+    float density = 0.0F; ///< extinction per metre at height zero; 0 = no haze
+    float height = 0.0F;  ///< metres above height zero at which the extinction has fallen to 1/e
+};
+
+/// The haze of a loaded scene, as the GI stage takes it: the two keys of its
+/// `[haze]` section. A scene without one has no haze (0); so has a scene with one
+/// key missing, which the shader treats like the default.
+[[nodiscard]] inline SceneHaze sceneHaze(const harmonia::scene::SceneLoader::SceneConfig& config) noexcept {
+    return SceneHaze{.density = config.hazeDensity.value_or(0.0F), .height = config.hazeHeight.value_or(0.0F)};
+}
 
 /// Ray-query global-illumination compute stage.
 ///
@@ -62,14 +79,14 @@ class GiPass {
         VkSampler envSampler = VK_NULL_HANDLE;
         const harmonia::core::Buffer* envMarginalCdf = nullptr;    ///< may be nullptr (no env importance)
         const harmonia::core::Buffer* envConditionalCdf = nullptr; ///< may be nullptr
+        const harmonia::core::Buffer* lensBuffer = nullptr; ///< thin-lens radius/focus; may be null in GI-only tests
         std::uint32_t envImportanceWidth = 0;
         std::uint32_t envImportanceHeight = 0;
         bool hasEnvMap = false;
         float envLuminanceScale = 1.0f;
         /// Distance haze of the scene ([haze]): extinction per metre at height zero
-        /// and the scale height in metres. 0 = none.
-        float hazeDensity = 0.0f;
-        float hazeHeight = 0.0f;
+        /// and the scale height in metres (sceneHaze). 0 = none.
+        SceneHaze haze{};
 
         sm::float4x4 view{1.0f}; ///< view matrix
         sm::float4x4 prevViewProj{
@@ -230,6 +247,12 @@ class GiPass {
     // + 28 scalars = 144 + 112 = 256). Stays within the existing 256-byte device budget.
     static_assert(sizeof(GiPushConstants) == 256);
 
+  public:
+    /// Bytes of the push-constant block record() pushes: the device selection requires
+    /// a limit that covers it (harmonia::vulkan_init::kRequiredPushConstantsSize).
+    static constexpr std::uint32_t kPushConstantsSize = sizeof(GiPushConstants);
+
+  private:
     [[nodiscard]] bool createDescriptors();
     [[nodiscard]] bool createPipelineLayout();
     [[nodiscard]] bool createComputePipeline(const char* spv,

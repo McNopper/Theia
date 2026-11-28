@@ -50,6 +50,7 @@ void ForwardRenderer::shutdown() {
     m_desc.mat.shutdown();
     m_desc.ibl.shutdown();
     m_desc.texture.shutdown();
+    m_lensBuffer = {};
 
     m_envSamplerInfo = {};
     m_envRawInfo = {};
@@ -167,6 +168,29 @@ void ForwardRenderer::recordFrame(VkCommandBuffer cmd) {
     prepareAttachments(cmd);
 
     updateSceneDescriptors(cmd);
+
+    struct LensGpu {
+        float radius;
+        float focusDistance;
+        std::uint32_t lightCount;
+        std::uint32_t analyticLightCount;
+    };
+    if (!m_lensBuffer.isValid()) {
+        auto buffer = harmonia::core::Buffer::create(*m_ctx,
+                                                     sizeof(LensGpu),
+                                                     VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
+                                                         VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                                                     VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+                                                     "theia.lens");
+        if (!buffer) {
+            harmonia::core::Logger::error("ForwardRenderer: failed to create the lens buffer");
+            return;
+        }
+        m_lensBuffer = std::move(*buffer);
+        m_desc.ibl.writeUniformBufferHandle(*m_ctx, 8U, m_lensBuffer);
+    }
+    const LensGpu lens{m_camera.lensRadius, m_camera.focusDist, m_scene->lightCount(), m_scene->analyticLightCount()};
+    m_lensBuffer.uploadData(&lens, sizeof(lens));
 
     // harmonia::renderer::Camera matrices + push constants (needed before rendering so the two Hi-Z passes and
     // the Hi-Z occlusion test share the same projection).

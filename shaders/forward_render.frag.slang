@@ -10,6 +10,13 @@ import bsdf_shared; // shadowTerminatorFactor (Chiang 2019)
 import math;   // fresnelDielectric()
 import rng;
 import env_sample;
+import surface;         // buildAnisotropyFrame — the frame of the anisotropy, as the traced paths build it
+import forward_tangent; // uvTangent: the tangent of the texture coordinates (shaders/forward_tangent.slang)
+import thin_lens;       // the per-pixel thin-lens primary ray shared with GI
+
+[[vk::binding(8, 2)]] cbuffer LensBuffer {
+    LensParams lensParams;
+};
 
 [[vk::push_constant]]
 cbuffer ForwardPC {
@@ -275,14 +282,21 @@ float3 evalLightWi(GpuLight light, float3 worldPos, out float3 wi) {
 /// 1/dist² hotspot; integrating over the extended source gives the smooth, even
 /// illumination of a real area light (matches Hyperion's emissive-mesh result).
 /// Visibility is evaluated per sample to preserve soft-shadow penumbra quality.
-/// Lo = ∫ f(wo,wi) · L · cos_i · cos_l / r² dA   (L = light.color·intensity, W/sr/m²)
+/// Lo = ∫ f(wo,wi) · L · cos_i · cos_l / r² dA   (L = light.color·intensity [cd/m²], the scene's photometric scale)
 float3 shadeRectLight(GpuLight light, GpuMaterial mat, float3 worldPos, float3 wo,
                       float3 N, float3 Ng, float3 T, float3 B, float3 shadowOrigin, float shadowBias) {
     const float3 Ln = normalize(light.direction); // emitter normal (toward scene)
 
-    // Build an orthonormal tangent frame on the emitter plane.
+    // Orthonormal tangent frame on the emitter plane: the canonical frame built
+    // from the normal, rolled about it by the descriptor's roll (radians; the
+    // light's in-plane orientation, 0 for a light that carries none). halfWidth
+    // spans Lt - the light's local X axis - and halfHeight the perpendicular Lb.
+    // Mirrors canonicalRectFrame / rectRoll in Harmonia's Light.cpp.
     const float3 up = abs(Ln.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
-    const float3 Lt = normalize(cross(up, Ln));
+    const float3 Lt0 = normalize(cross(up, Ln));
+    const float3 Lb0 = cross(Ln, Lt0);
+    const float roll = light.cosInner;
+    const float3 Lt = cos(roll) * Lt0 + sin(roll) * Lb0;
     const float3 Lb = cross(Ln, Lt);
 
     const int   NS = 11;
@@ -341,17 +355,24 @@ struct RayHitData {
     bool  hit;
     bool  frontFace;
     uint  materialIdx;
+    uint  instanceIdx;
     float3 worldPos;
     float3 normal;
+    float3 tangent;   ///< tangent of the texture coordinates, from the edges of the hit triangle
+    float2 uv;
 };
 
-RayHitData traceClosestHit(float3 originWs, float3 dirWs, float tMin, uint instanceMask) {
+RayHitData traceClosestHit(float3 originWs, float3 dirWs, float tMin, uint instanceMask,
+                           float4 pixelPos, bool resolvePrimaryOpacity) {
     RayHitData hit;
     hit.hit = false;
     hit.frontFace = true;
     hit.materialIdx = 0u;
+    hit.instanceIdx = 0u;
     hit.worldPos = 0.0.xxx;
     hit.normal = float3(0.0, 1.0, 0.0);
+    hit.tangent = float3(1.0, 0.0, 0.0);
+    hit.uv = float2(0.0, 0.0);
 
     const float3 rayDir = normalize(dirWs);
     RayDesc ray;
@@ -362,12 +383,28 @@ RayHitData traceClosestHit(float3 originWs, float3 dirWs, float tMin, uint insta
 
     RayQuery<RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH | RAY_FLAG_SKIP_PROCEDURAL_PRIMITIVES> q;
     q.TraceRayInline(t_tlas, RAY_FLAG_NONE, instanceMask, ray);
-    // Cut-out geometry is non-opaque; commit its candidates so the reflection ray
-    // sees the surface, then resolve the cutout on the committed hit below (the
-    // same order the GI closest-hit query uses).
+    // Cut-out geometry is non-opaque. A debug/ordinary closest hit commits the first
+    // candidate as before. A thin-lens primary ray must instead resolve each candidate's
+    // OpenPBR presence gate and continue behind a pass-through; otherwise an invisible
+    // outer shell replaces and discards the visible inner surface the rasterizer drew.
     while (q.Proceed()) {
         if (q.CandidateType() == CANDIDATE_NON_OPAQUE_TRIANGLE) {
-            q.CommitNonOpaqueTriangleHit();
+            bool present = true;
+            if (resolvePrimaryOpacity) {
+                const uint candidateInstance = q.CandidateInstanceID();
+                const uint candidateTriangle = q.CandidatePrimitiveIndex();
+                const float alpha = triangleOpacity(candidateInstance, candidateTriangle,
+                                                    q.CandidateTriangleBarycentrics());
+                present = alpha >= 1.0;
+                if (!present && alpha > 0.0) {
+                    const uint layerKey = hashCombine(0xD0F1u, hashCombine(rngHash(candidateInstance), candidateTriangle));
+                    RngState opacitySeed = composePixelSeed(pixelPos, layerKey);
+                    present = randFloat(opacitySeed) < alpha;
+                }
+            }
+            if (present) {
+                q.CommitNonOpaqueTriangleHit();
+            }
         }
     }
     if (q.CommittedStatus() != COMMITTED_TRIANGLE_HIT) {
@@ -403,13 +440,19 @@ RayHitData traceClosestHit(float3 originWs, float3 dirWs, float tMin, uint insta
     }
     hit.frontFace = frontFace;
     hit.normal = Ng;
+    // The tangent of the texture coordinates, from the edges of the hit triangle: the
+    // formula the GI pass and Hyperion apply to the same triangle
+    // (reconstructTriangleGeometry; the tangent depends on the positions and the UVs only).
+    hit.tangent = uvTangent(p1 - p0, p2 - p0, vertices[i1].uv - vertices[i0].uv, vertices[i2].uv - vertices[i0].uv);
     hit.materialIdx = inst.materialIndex;
+    hit.instanceIdx = instIdx;
+    hit.uv = vertices[i0].uv * b0 + vertices[i1].uv * b1 + vertices[i2].uv * b2;
     hit.hit = true;
     return hit;
 }
 
-RayHitData tracePrimaryOpaqueHit(float3 cameraPosWs, float3 targetWorldPos, float tMin) {
-    return traceClosestHit(cameraPosWs, targetWorldPos - cameraPosWs, tMin, kInstanceMaskAll);
+RayHitData tracePrimaryOpaqueHit(float3 originWs, float3 directionWs, float tMin) {
+    return traceClosestHit(originWs, directionWs, tMin, kInstanceMaskAll, 0.0.xxxx, false);
 }
 
 float3 shadeHitRadianceWithWo(RayHitData hit, float3 wo, float shadowBias) {
@@ -419,9 +462,11 @@ float3 shadeHitRadianceWithWo(RayHitData hit, float3 wo, float shadowBias) {
     // for Chiang terminator handling (the interpolated N is the shading normal).
     const float3 Ng = normalize(cross(ddx(hit.worldPos), ddy(hit.worldPos)));
     wo = normalize(wo);
-    const float3 up = abs(N.y) < 0.99 ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
-    const float3 T = normalize(cross(up, N));
-    const float3 B = normalize(cross(N, T));
+    // The frame of the anisotropy: the texture tangent in the plane of the normal, as
+    // the shared surface module builds it for every traced path.
+    float3 T;
+    float3 B;
+    buildAnisotropyFrame(N, hit.tangent, T, B);
     const float3 shadowOrigin = hit.worldPos + N * shadowBias;
 
     float3 directLo = 0.0.xxx;
@@ -430,7 +475,7 @@ float3 shadeHitRadianceWithWo(RayHitData hit, float3 wo, float shadowBias) {
     // avoid double-counting. Punctual lights (point/spot/directional) stay analytic.
     const bool skipRectLights = (giEnabled & 2u) != 0u;
     for (uint i = 0; i < lightCount; ++i) {
-        if (skipRectLights && asuint(lights[i].typeF) == kLightRect) {
+        if (skipRectLights && i >= lensParams.analyticLightCount && asuint(lights[i].typeF) == kLightRect) {
             continue;
         }
         directLo += shadeOneLight(lights[i], mat, hit.worldPos, wo, N, Ng, T, B, shadowOrigin, shadowBias);
@@ -447,9 +492,43 @@ float3 shadeHitRadiance(RayHitData hit, float3 viewPos, float shadowBias) {
     return shadeHitRadianceWithWo(hit, viewPos - hit.worldPos, shadowBias);
 }
 
+void applyPrimaryHit(RayHitData hit, inout FS_IN input, inout GpuMaterial mat) {
+    if (hit.hit) {
+        input.worldPos = hit.worldPos;
+        input.normal = hit.normal;
+        input.tangent = hit.tangent;
+        input.uv = hit.uv;
+        input.instanceIdx = hit.instanceIdx;
+        input.materialIdx = hit.materialIdx;
+        mat = materials[hit.materialIdx];
+    }
+}
+
 [shader("fragment")]
 FS_OUT main(FS_IN input, bool isFrontFace : SV_IsFrontFace) {
     GpuMaterial mat = materials[input.materialIdx];
+
+    // Pinhole raster visibility already resolves all opacity layers and needs no ray-hit
+    // replacement. A thin lens moves the camera ray, so reconstruct its visible surface,
+    // resolving each non-opaque candidate along the way. If every candidate passes through,
+    // discard only after the screen-space derivatives below have been taken.
+    const float3 pinDirection = normalize(input.worldPos - cameraPos.xyz);
+    RngState lensSeed = composePixelSeed(input.pos, 0xD0F0u);
+    const ThinLensPrimaryRay lensRay = makeThinLensPrimaryRay(
+        cameraPos.xyz, pinDirection, normalize(view[0].xyz), normalize(view[1].xyz),
+        lensParams.lensRadius, lensParams.focusDistance, sampleDisk(randFloat2(lensSeed)));
+    bool lensRayMiss = false;
+    bool primaryOpacityResolved = false;
+    if (lensParams.lensRadius > 0.0) {
+        const RayHitData lensHit = traceClosestHit(
+            lensRay.origin, lensRay.direction, kRayEpsilon, kInstanceMaskAll, input.pos, true);
+        if (lensHit.hit) {
+            applyPrimaryHit(lensHit, input, mat);
+            primaryOpacityResolved = true;
+        } else {
+            lensRayMiss = true;
+        }
+    }
 
     // 26b debug modes (primary-ray hit reconstruction), gated and off by default:
     // presentationParams.z >= 1: show ray-hit base color
@@ -458,7 +537,7 @@ FS_OUT main(FS_IN input, bool isFrontFace : SV_IsFrontFace) {
     // presentationParams.z >= 5: show transparent pass surfaceLo
     // presentationParams.z >= 6: show transparent pass behindLo
     if (presentationParams.z >= 3.0 && presentationParams.z < 4.0 && presentationParams.y >= 0.5) {
-        const RayHitData hit = tracePrimaryOpaqueHit(cameraPos.xyz, input.worldPos, kRayEpsilon);
+        const RayHitData hit = tracePrimaryOpaqueHit(lensRay.origin, lensRay.direction, kRayEpsilon);
         FS_OUT outDbg;
         outDbg.gbuffer = float4(0.5, 0.5, 0.5, 1.0);
         outDbg.giBuffer = 0.0.xxxx;
@@ -477,7 +556,7 @@ FS_OUT main(FS_IN input, bool isFrontFace : SV_IsFrontFace) {
     }
     if (presentationParams.z >= 1.0 && presentationParams.z < 4.0 && presentationParams.y < 0.5) {
         const float shadowBias = shadowParams.x;
-        const RayHitData hit = tracePrimaryOpaqueHit(cameraPos.xyz, input.worldPos, kRayEpsilon);
+        const RayHitData hit = tracePrimaryOpaqueHit(lensRay.origin, lensRay.direction, kRayEpsilon);
         FS_OUT outDbg;
         outDbg.gbuffer = float4(0.5, 0.5, 0.5, 1.0);
         outDbg.giBuffer = 0.0.xxxx;
@@ -492,14 +571,23 @@ FS_OUT main(FS_IN input, bool isFrontFace : SV_IsFrontFace) {
             return outDbg;
         }
 
-        outDbg.hdrColor = float4(exposure * shadeHitRadiance(hit, cameraPos.xyz, shadowBias), 1.0);
+        outDbg.hdrColor = float4(exposure * shadeHitRadiance(hit, lensRay.origin, shadowBias), 1.0);
         return outDbg;
     }
 
-    // Reconstruct orthonormal tangent frame.
+    // The tangent of the texture coordinates, from the screen-space derivatives of the
+    // fragment's world position and UV. Taken here, before the coverage test below: once
+    // a neighbour of the quad is discarded, the derivatives are undefined.
+    const float3 textureTangent = fragmentUvTangent(input.worldPos, input.uv);
+    if (lensRayMiss) {
+        discard;
+    }
+
+    // Normal-map frame: the interpolated vertex tangent, Gram-Schmidt
+    // re-orthogonalized against N. Fallback to a frame derived from N when the mesh
+    // provides no tangent (e.g. OBJ without UV). This frame perturbs the normal only;
+    // the frame of the anisotropy is built from the texture tangent further below.
     float3 N = normalize(input.normal);
-    // Gram-Schmidt re-orthogonalize T against N.
-    // Fallback to a frame derived from N when the mesh provides no tangent (e.g. OBJ without UV).
     float3 rawT = input.tangent - dot(input.tangent, N) * N;
     float3 T;
     if (dot(rawT, rawT) < 1e-8) {
@@ -526,17 +614,40 @@ FS_OUT main(FS_IN input, bool isFrontFace : SV_IsFrontFace) {
 
     if (baseColorTex != kNoTexture) {
         float4 bc = t_bindless[NonUniformResourceIndex(baseColorTex)].SampleLevel(input.uv, 0.0);
-        mat.baseColorWeight.xyz *= bc.xyz;
-        mat.opacityFlagsPad.x   *= bc.w; // modulate opacity by texture alpha
+        mat.baseColorWeight.xyz = bc.xyz;
     }
     if (ormTex != kNoTexture) {
         // glTF ORM convention: r = occlusion, g = roughness, b = metalness.
         float3 orm = t_bindless[NonUniformResourceIndex(ormTex)].SampleLevel(input.uv, 0.0).xyz;
-        mat.specularRoughAnisoIor.x = saturate(mat.specularRoughAnisoIor.x * orm.y);
-        mat.baseMetalnessDiffRough.x = saturate(mat.baseMetalnessDiffRough.x * orm.z);
+        mat.specularRoughAnisoIor.x = saturate(orm.y);
+        mat.baseMetalnessDiffRough.x = saturate(orm.z);
     }
     if (emissionTex != kNoTexture) {
         mat.emissionColorLum.xyz *= t_bindless[NonUniformResourceIndex(emissionTex)].SampleLevel(input.uv, 0.0).xyz;
+    }
+    if (mat.textureIndices3.x != kNoTexture) {
+        mat.coatColorWeight.w = saturate(t_bindless[NonUniformResourceIndex(mat.textureIndices3.x)].SampleLevel(input.uv, 0.0).r);
+    }
+    if (mat.textureIndices3.y != kNoTexture) {
+        mat.transmissionColorWeight.w = saturate(t_bindless[NonUniformResourceIndex(mat.textureIndices3.y)].SampleLevel(input.uv, 0.0).r);
+    }
+    if (mat.textureIndices3.z != kNoTexture) {
+        mat.subsurfaceColorWeight.xyz = t_bindless[NonUniformResourceIndex(mat.textureIndices3.z)].SampleLevel(input.uv, 0.0).rgb;
+    }
+    if (mat.textureIndices3.w != kNoTexture) {
+        mat.subsurfaceColorWeight.w = saturate(t_bindless[NonUniformResourceIndex(mat.textureIndices3.w)].SampleLevel(input.uv, 0.0).r);
+    }
+    if (mat.textureIndices4.x != kNoTexture) {
+        mat.transmissionColorWeight.xyz = t_bindless[NonUniformResourceIndex(mat.textureIndices4.x)].SampleLevel(input.uv, 0.0).rgb;
+    }
+    if (mat.textureIndices4.y != kNoTexture) {
+        mat.transmissionScatter.xyz = t_bindless[NonUniformResourceIndex(mat.textureIndices4.y)].SampleLevel(input.uv, 0.0).rgb;
+    }
+    if (mat.textureIndices4.z != kNoTexture) {
+        mat.emissionColorLum.w *= max(t_bindless[NonUniformResourceIndex(mat.textureIndices4.z)].SampleLevel(input.uv, 0.0).r, 0.0);
+    }
+    if (mat.textureIndices4.w != kNoTexture) {
+        mat.fuzzColorWeight.w = saturate(t_bindless[NonUniformResourceIndex(mat.textureIndices4.w)].SampleLevel(input.uv, 0.0).r);
     }
     if (normalTex != kNoTexture) {
         // Tangent-space normal map → world space using the TBN frame.
@@ -562,6 +673,14 @@ FS_OUT main(FS_IN input, bool isFrontFace : SV_IsFrontFace) {
         }
     }
 
+    // Frame of the anisotropy: the texture tangent in the plane of the final shading
+    // normal, built by the shared surface module exactly as the GI pass and Hyperion
+    // build it for the same surface (Harmonia/shaders/surface.slang). It used to come
+    // from the vertex tangent, which OBJ and box meshes do not carry, and then from the
+    // normal alone: an anisotropic highlight of the analytic lights ignored the texture
+    // coordinates and did not match the highlight the traced paths put on the surface.
+    buildAnisotropyFrame(N, textureTangent, T, B);
+
     // OpenPBR opacity, textured (map_opacity, slot [7]). Fold it into the material's
     // presence weight so the rest of this shader — and the mask test right below —
     // read one resolved α, exactly as the shared surface module does for the RT paths.
@@ -583,7 +702,7 @@ FS_OUT main(FS_IN input, bool isFrontFace : SV_IsFrontFace) {
     // and depth), so a stack of cut-out surfaces composites like the path tracer's
     // successive independent gates rather than vanishing together.
     const float presence = saturate(mat.opacityFlagsPad.x);
-    if (presence < 1.0) {
+    if (presence < 1.0 && !primaryOpacityResolved) {
         const uint layerKey =
             hashCombine(rngHash(input.instanceIdx), asuint(input.pos.z));
         RngState opacitySeed = composePixelSeed(input.pos, layerKey);
@@ -593,7 +712,7 @@ FS_OUT main(FS_IN input, bool isFrontFace : SV_IsFrontFace) {
     }
 
     // Outgoing direction: surface to camera.
-    const float3 wo = normalize(cameraPos.xyz - input.worldPos);
+    const float3 wo = normalize(lensRay.origin - input.worldPos);
 
     // Unified transparency: transparent fragments (presentationParams.y >= 0.5) are shaded by
     // the SAME path below as opaque fragments — direct analytic lighting + emission, with the
@@ -644,13 +763,13 @@ FS_OUT main(FS_IN input, bool isFrontFace : SV_IsFrontFace) {
             for (uint j = 0; j < tileCount; ++j) {
                 const uint i = tileLightIndices[tileId * kMaxLightsPerTile + j];
                 if (i >= lightCount) continue;
-                if (skipRectLightsT && asuint(lights[i].typeF) == kLightRect) continue;
+                if (skipRectLightsT && i >= lensParams.analyticLightCount && asuint(lights[i].typeF) == kLightRect) continue;
                 directLo += shadeOneLight(lights[i], mat, input.worldPos, wo, N, Ng, T, B, shadowOrigin, shadowBias);
             }
         } else {
             // Fallback: evaluate all lights (used when light culler hasn't run).
             for (uint i = 0; i < lightCount; ++i) {
-                if (skipRectLightsT && asuint(lights[i].typeF) == kLightRect) continue;
+                if (skipRectLightsT && i >= lensParams.analyticLightCount && asuint(lights[i].typeF) == kLightRect) continue;
                 directLo += shadeOneLight(lights[i], mat, input.worldPos, wo, N, Ng, T, B, shadowOrigin, shadowBias);
             }
         }

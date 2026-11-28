@@ -53,7 +53,17 @@ slang-math, Aether, Harmonia, Theia. Estimator work that touches both renderers 
 | Temporal reuse of the path reservoir without recursion bias | Optional, not started | The only accepted way to give the path reservoir temporal memory: an unbiased form such as GRIS pairwise MIS with canonical-sample accounting. It would also remove the recursion bias of the direct-light reservoir's temporal merge. A plain streamed temporal merge is ruled out (see the baselines) |
 | Basic normalization in the direct-light reservoir merges | Optional, not started | Levels 0 and 1 of `THEIA_BIAS_CORRECTION` compute the `OFF` formula of RTXDI and level 2 adds its visibility test. RTXDI's `BASIC` normalization (`piSum`) and the source-side BSDF and facing term of `RAY_TRACED` are not implemented |
 | Dual motion vectors | Recorded idea, not specified | A second set of motion vectors for the reprojection of the denoiser and TAA (ReSTIR PT Enhanced, section 6.4). A presentation-stage idea with no design yet |
-| Dense-scene animation scaling | Approved investigation | Share one evaluated Aether scene between camera and instances, then make transform/bounds uploads and TLAS input incremental. Measured on 109,694 draw instances: camera evaluation 72–98 ms, scene stamp 72–82 ms, transform sync plus TLAS interval 13–23 ms per instant; GI stays about 26 ms. The shared work and acceptance criteria are in `Harmonia/PLAN.md`, section 5.1 |
+| Dense-scene animation scaling | In progress | Aether reusable evaluation is committed; Theia and Hyperion now consume one scratch scene for camera and instances. Full renderer gates and GPU timing are pending. Previously measured on 109,694 draw instances: camera evaluation 72–98 ms, scene stamp 72–82 ms, transform sync plus TLAS interval 13–23 ms per instant; GI stays about 26 ms. The shared work and acceptance criteria are in `Harmonia/PLAN.md`, section 5.1 |
+| UV-tangent anisotropy in the raster direct-light path | Complete | Full gates, analytic-light parity and the final 60-image gallery pass |
+| Forward texture replacement and extra OpenPBR maps | Complete | All 16 slots are wired; full parity and the final gallery pass |
+| Automated haze regression coverage | Complete | CPU-double integral oracle, loader tests and every GI composite family pass; full suite 94/94 |
+| Texture and scene scalability | In progress | `kMaxBindlessTextures = 256` and about 1.1 GB of uncompressed textures at mip 0 limit dense scenes; the official OpenPBR scene has 3.156 billion source pixels. DDS/BC7 direct upload is being implemented in Harmonia. Add scalable descriptor handling and a scene-cost log with load time, triangles, instances and memory by buffer; test beyond 256 textures |
+| Thin-lens depth of field | Complete | Dedicated 256-sample DOF comparison: SSIM 0.827895, Rel-MSE 0.005727, histogram correlation 0.999931 |
+| Analytic-light NEE in GI and Hyperion | Implemented, focused GPU verification complete | Shared `evalAnalyticLightNEE` samples point, spot, directional and rectangular lights, including roll and world-space extents. Hyperion and both Theia GI entry points call it. The 256-sample `analytic_lights` EXR comparison passes with SSIM 0.844926, Rel-MSE 0.004624 and zero validation diagnostics |
+| OpenPBR display-transform mismatch | Fixed and verified | Final v8 full-resolution OpenPBR parity: SSIM 0.826779, Rel-MSE 0.080253 and zero diagnostics. Both AgX PNGs independently match their EXRs within one 8-bit level |
+| `GpuCullPass::reserve` before `initialize` | Complete | Supported order and capacity are covered by regression tests |
+| Regression-test robustness and missing branches | Complete | Includes TLAS, cull-capacity, glare, visibility-miss, self-emissive and loader-driven animated bounds coverage |
+| Validation and documentation gaps | Not started | Parameterize glare validation scenes instead of the single Cornell scene, remove the duplicate haze bullets in `AGENTS.md`, and correct the sequence-capture accumulation comment in `Application.cpp` |
 
 Decided and closed:
 
@@ -211,6 +221,11 @@ The release history, newest first.
 
 ### Unreleased
 
+- OpenPBR primary visibility now preserves stochastic opacity layers under both pinhole and thin-lens
+  rays; a fully transparent outer shell no longer discards the visible inner surface. Forward texture
+  replacement, all 16 map slots, UV-tangent anisotropy and textured HDR emission are verified. On the
+  final 1920×1080 v8 title scene, Theia against Hyperion at 256 samples has SSIM 0.826779, Rel-MSE
+  0.080253 and zero diagnostics. The dedicated DOF comparison passes with SSIM 0.827895.
 - Motion blur in sequence captures, from Harmonia's `--shutter` and `--time-samples`. A sequence
   capture accumulates all time samples of an output frame and no longer restarts the accumulation
   when the animation tick changes. On `motion_blur`, at 320×240, Theia against Hyperion with the

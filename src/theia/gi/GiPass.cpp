@@ -215,7 +215,7 @@ void GiPass::shutdown() {
 }
 
 bool GiPass::createDescriptors() {
-    const std::array<VkDescriptorSetLayoutBinding, 34> bindings{{
+    const std::array<VkDescriptorSetLayoutBinding, 36> bindings{{
         {0, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // TLAS
         {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // hdr (RW)
         {2, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},              // giBuffer
@@ -268,12 +268,14 @@ bool GiPass::createDescriptors() {
                                                                                           // selected-path chains (RW)
         {33, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // GI-PG S3 fitted
                                                                                           // guiding cells (RO)
+        {34, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // thin-lens parameters
+        {35, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}, // analytic lights
     }};
 
     // MOD1: no UPDATE_AFTER_BIND — incompatible with DESCRIPTOR_BUFFER layouts.
     constexpr VkDescriptorBindingFlags kTextureFlags = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
-    const std::array<VkDescriptorBindingFlags, 34> bindingFlags{
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, kTextureFlags, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    const std::array<VkDescriptorBindingFlags, 36> bindingFlags{
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, kTextureFlags, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     const VkDescriptorSetLayoutBindingFlagsCreateInfo bindingFlagsInfo{
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         .bindingCount = static_cast<std::uint32_t>(bindingFlags.size()),
@@ -392,6 +394,12 @@ void GiPass::updateDescriptors(const FrameParams& params) {
         w.writeStorageBufferHandle(*m_ctx, 10, scene->emissiveTriangleBuffer());
         w.writeStorageBufferHandle(*m_ctx, 11, marginalCdf);
         w.writeStorageBufferHandle(*m_ctx, 12, conditionalCdf);
+        if (params.lensBuffer != nullptr) {
+            w.writeUniformBufferHandle(*m_ctx, 34, *params.lensBuffer);
+        } else {
+            w.writeUniformBufferHandle(*m_ctx, 34, VK_NULL_HANDLE, 0U);
+        }
+        w.writeStorageBufferHandle(*m_ctx, 35, scene->lightBuffer());
         w.writeStorageBufferHandle(*m_ctx, 14, scene->emissiveCdfBuffer());
         w.writeSampledImage(*m_ctx, 15, params.gradientVarianceView, VK_IMAGE_LAYOUT_GENERAL);
         w.writeStorageBufferHandle(*m_ctx, 19, scene->instanceTransformBuffer());
@@ -596,7 +604,7 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
     // scene bindings of updateDescriptors() because the shared update policy replaces
     // it with a fresh acceleration structure on every full rebuild
     // (harmonia::scene_rt::updateTlas: on every update of a static scene and on every
-    // 128th update of an animated one). A slot that kept the structure bound at
+    // Scene::kTlasRebuildInterval-th update of an animated one). A slot that kept the structure bound at
     // scene-bind time would trace a frozen pose. Only this frame's slot is written:
     // the other slot may hold a frame that is still in flight, and receives the
     // current structure when its own frame is recorded.
@@ -675,8 +683,8 @@ void GiPass::record(VkCommandBuffer cmd, const FrameParams& params, bool skipPre
         .smsEnabled = m_smsFrameActive ? 1U : 0U,
         .materialLodEnabled = params.materialLodEnabled ? 1u : 0u,
         .radianceCacheEnabled = params.radianceCacheEnabled ? 1u : 0u,
-        .hazeDensity = params.hazeDensity,
-        .hazeHeight = params.hazeHeight,
+        .hazeDensity = params.haze.density,
+        .hazeHeight = params.haze.height,
     };
 
     const bool replayCompaction = (pc.restirPtPathEnabled != 0u) && m_replayCountBuf[0].isValid() &&

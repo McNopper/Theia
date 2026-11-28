@@ -91,6 +91,14 @@ class Scene : public harmonia::scene::SceneBase {
     /// reset the accumulation when it advanced an animated scene.
     [[nodiscard]] VkResult updateTlas(const harmonia::DeviceContext& ctx, const harmonia::core::CommandPool& pool);
 
+    /// Updates of an animated scene's TLAS between two full rebuilds. The shared
+    /// policy (harmonia::scene_rt::updateTlas) refits in place while the update
+    /// counter has not reached this interval and rebuilds on every multiple of
+    /// it; a static scene rebuilds on every update. A rebuild is a new structure,
+    /// so a consumer that keeps its TLAS binding per frame slot writes it again
+    /// for every frame (GiPass::record).
+    static constexpr std::uint32_t kTlasRebuildInterval = 128U;
+
     /// ANI3: refresh the raster/GI instance-transform GPU buffers after animation
     /// stamping. Invoked BY updateTlas() (before it consumes the dirty flag) - do not
     /// call it directly: two syncs between two stamps would shift PREV twice. The

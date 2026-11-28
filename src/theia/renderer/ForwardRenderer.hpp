@@ -69,6 +69,9 @@ class ForwardRenderer {
         }
     }
     void setCamera(const CameraParams& cam) { m_camera = cam; }
+
+    /// The thin-lens parameters shared with the GI descriptor binding.
+    [[nodiscard]] const harmonia::core::Buffer& lensBuffer() const noexcept { return m_lensBuffer; }
     /// Bind the raw environment panorama (set 2: linear sampler at binding 3, raw env at
     /// binding 4). The RT-GI compute stage supplies all indirect lighting, so the forward
     /// pass samples only the raw env for the sky background / transparent env path. When no
@@ -218,6 +221,7 @@ class ForwardRenderer {
 
     Config m_config{};
     CameraParams m_camera{};
+    harmonia::core::Buffer m_lensBuffer; // radius/focus distance, read by raster and GI
     const harmonia::DeviceContext* m_ctx = nullptr;
     const Scene* m_scene = nullptr;
 

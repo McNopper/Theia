@@ -376,6 +376,13 @@ accumulation; a sequence capture accumulates each output frame on its own. The c
 disabled while the camera is bound to a node. Skinned and morphed meshes are not culled until a
 per-frame bounds update exists (see [Known limitations](#known-limitations)).
 
+A camera with a positive `lens_radius` uses thin-lens depth of field. The forward pass and GI
+reconstruction compute the same per-pixel lens origin and direction through a shared lens buffer;
+the forward pass adopts the hit surface's material, UVs, normal and instance, and the GI pass and
+haze retrace the same primary ray. A radius of zero is the unchanged pinhole camera. Analytic
+lights are sampled in the shared path integrator on secondary bounces, while the forward pass owns
+their primary direct contribution.
+
 ### Material model
 
 Theia uses OpenPBR Surface v1.1.2 (Academy Software Foundation) through the shared BSDF in
@@ -497,7 +504,7 @@ value keeps the feature off.
 | `THEIA_SMS_DIAGNOSTICS=1` | unset | Allocate a 64-slot diagnostics buffer and log manifold-sampling counters after each frame |
 | `THEIA_DEBUG_RAY_HIT_MODE=<f>` | `0` | Debug view of the primary ray hit, drawn by the forward pass instead of its shading. `1`: base colour of the re-traced hit. `2`: its shaded radiance without normal maps, which is direct light and emission only, so a scene lit only by the environment renders black. `3`: on the transparent pass the material index as colour (0 red, 1 green, 2 blue, anything else yellow); on the opaque pass it behaves as `2`. Clamped to 0..6; values above 3 have no effect |
 | `THEIA_PASS_TIMING=1` | unset | Log the GPU time of the GI, motion-vector and TAA passes once per frame, for example `timing: gi 4.32 ms \| motion 0.10 ms \| taa 0.62 ms` |
-| `HARMONIA_FRAME_TIMING=1` (a switch of the shared library) | unset | With `--output`: wait for each accumulation frame and log its render time (`frame_timing_ms:<i>:<ms>`); Theia adds `camera_timing_ms:<ms>` for a node-bound camera's evaluation and `tick_timing_ms: stamp <ms> \| tlas <ms>` for stamping the instances, then synchronizing their transform/bounds buffers and updating the acceleration structure |
+| `HARMONIA_FRAME_TIMING=1` (a switch of the shared library) | unset | With `--output`: wait for each accumulation frame and log its render time (`frame_timing_ms:<i>:<ms>`); Theia adds `camera_timing_ms:<ms>` for extracting a node-bound camera's pose from the evaluated scene and `tick_timing_ms: stamp <ms> \| tlas <ms>` for evaluating and stamping the instances, then synchronizing their transform/bounds buffers and updating the acceleration structure |
 
 The toggles of the shared library that Theia runs with — the pipeline binary cache
 (`HARMONIA_PIPELINE_BINARY_CACHE`), frame timing and present-timing telemetry — are documented in
@@ -541,7 +548,7 @@ scene loader rejects a scene without one; a preset that only sets `vertical_fiel
 | Use | Scenes |
 |-----|--------|
 | Quick iteration (small Cornell boxes) | `cornell_classic`, `cornell_spheres`, `cornell_suzanne`, `dragon_teapot` |
-| Parity comparison (14 scenes) | the Cornell set, `dragon_teapot` and the `shaderball_*` and `openpbr_*` fixtures listed in `Harmonia/tools/validation_manifest.toml` |
+| Parity comparison (15 scenes) | the Cornell set, `dragon_teapot`, the `shaderball_*` and `openpbr_*` fixtures and `haze`, listed in `Harmonia/tools/validation_manifest.toml` |
 | Screenshot gallery (30 scenes) | the list in `tools/generate_gallery.ps1` |
 | Expensive | `ABeautifulGame`: avoid it for quick test renders; it is used only in gallery renders |
 
@@ -641,7 +648,7 @@ before pushing.
 ### Parity against Hyperion
 
 Parity compares a Hyperion EXR (the reference) with a Theia EXR (the candidate). Both are pre-tonemap
-linear EXRs at the same resolution and in the same working colour space, over the 14 scenes of
+linear EXRs at the same resolution and in the same working colour space, over the 15 scenes of
 `Harmonia/tools/validation_manifest.toml` at 320×240, with 256 samples per pixel from Hyperion and
 256 accumulated frames from Theia. The comparison passes only when all four thresholds hold: mean
 difference ≤ 120 (in 1/255 units), relative MSE ≤ 250, SSIM ≥ 0.6 and luminance-histogram

@@ -2,9 +2,9 @@
 // (shaders/gi.comp.slang, buildPrimarySurface) and trusts that hit over the one
 // the rasterizer recorded. The shared update policy (harmonia::scene_rt::updateTlas)
 // replaces the TLAS with a fresh acceleration structure on every full rebuild: on
-// every update of a static scene and on every 128th update of an animated one. A
-// frame slot whose descriptor still holds the replaced structure traces a frozen
-// pose. The real GiPass must follow the scene's current TLAS in both slots.
+// every update of a static scene and on every Scene::kTlasRebuildInterval-th update of an animated one. A
+// animated one. A frame slot whose descriptor still holds the replaced structure traces a frozen
+// frozen pose. The real GiPass must follow the scene's current TLAS in both slots.
 
 #include <volk/volk.h>
 
@@ -55,7 +55,7 @@ class GiTlasRebuildFixture : public RtFixture {
 
         if (animated()) {
             // The loader attaches the translation track, which makes the TLAS
-            // update-capable: the first 128 updates refit, the 129th rebuilds.
+            // update-capable: the first Scene::kTlasRebuildInterval updates refit, the one after rebuilds.
             ASSERT_TRUE(loadAnimatedMover());
         } else {
             mover = scene.addMesh(deviceCtx(),
@@ -452,8 +452,8 @@ TEST_F(GiTlasStaticRebuildFixture, GiPass_TracesTheTlasAfterARebuild) {
     EXPECT_EQ(returned.right, 0U);
 }
 
-// Animated scene: 128 updates refit the TLAS in place, the 129th rebuilds it.
-// A sequence capture reaches it in its 129th animated frame.
+// Animated scene: Scene::kTlasRebuildInterval updates refit the TLAS in place, the one after rebuilds it.
+// A sequence capture reaches it in the animated frame after them.
 TEST_F(GiTlasPeriodicRebuildFixture, GiPass_TracesTheTlasAfterThePeriodicRebuild) {
     const VkAccelerationStructureKHR before = scene.tlas();
     // The track stamps the start pose on the first update (x = -2).
@@ -465,16 +465,16 @@ TEST_F(GiTlasPeriodicRebuildFixture, GiPass_TracesTheTlasAfterThePeriodicRebuild
     EXPECT_EQ(built.center, 0U);
     EXPECT_EQ(built.right, 0U);
 
-    for (std::uint32_t update = 2; update <= 128U; ++update) {
+    for (std::uint32_t update = 2; update <= theia::Scene::kTlasRebuildInterval; ++update) {
         scene.setAnimationTime(0.0F);
         ASSERT_EQ(scene.updateTlas(deviceCtx(), commandPool()), VK_SUCCESS);
         ASSERT_EQ(scene.tlas(), before) << "update " << update << " refits in place";
     }
-    // Update 129 crosses the interval and also moves the mover: the replaced
+    // The update after the interval crosses it and also moves the mover: the replaced
     // structure holds the pose of the last refit, x = -2.
     scene.setAnimationTime(1.0F);
     ASSERT_EQ(scene.updateTlas(deviceCtx(), commandPool()), VK_SUCCESS);
-    ASSERT_NE(scene.tlas(), before) << "the 129th update rebuilds the TLAS";
+    ASSERT_NE(scene.tlas(), before) << "update " << theia::Scene::kTlasRebuildInterval + 1U << " rebuilds the TLAS";
 
     for (std::uint32_t frame = 0; frame < 2U; ++frame) {
         const Poses moved = render();

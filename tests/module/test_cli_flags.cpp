@@ -63,3 +63,78 @@ TEST(TheiaCliContract, FramesPerFlipIsIndependentOfOffscreenFrames) {
     EXPECT_EQ(config.offscreenFrames, 2U);
     EXPECT_EQ(config.framesPerFlip, 4U);
 }
+
+// Lens glare is a stage of the shared host: Theia's main() does not parse it, so both
+// flags reach the AppConfig through applyCommonArg, like every shared flag. A value the
+// parser refuses keeps the default and is consumed: the token after it is parsed.
+
+TEST(TheiaCliContract, GlareDefaultsToNoneAtReferenceWhite) {
+    const harmonia::app::AppConfig config{};
+    EXPECT_FLOAT_EQ(config.glare, 0.0F);
+    EXPECT_FLOAT_EQ(config.glareThreshold, 1.0F);
+}
+
+TEST(TheiaCliContract, BothGlareFlagsResolveIntoConfig) {
+    harmonia::app::AppConfig config{};
+    parseLikeMain(config, {"--glare", "0.2", "--glare-threshold", "6"});
+    EXPECT_FLOAT_EQ(config.glare, 0.2F);
+    EXPECT_FLOAT_EQ(config.glareThreshold, 6.0F);
+}
+
+TEST(TheiaCliContract, GlareFlagsAreIndependentOfEachOtherAndOfTheirOrder) {
+    harmonia::app::AppConfig thresholdOnly{};
+    parseLikeMain(thresholdOnly, {"--glare-threshold", "6"});
+    EXPECT_FLOAT_EQ(thresholdOnly.glare, 0.0F);
+    EXPECT_FLOAT_EQ(thresholdOnly.glareThreshold, 6.0F);
+
+    harmonia::app::AppConfig glareOnly{};
+    parseLikeMain(glareOnly, {"--glare", "0.35"});
+    EXPECT_FLOAT_EQ(glareOnly.glare, 0.35F);
+    EXPECT_FLOAT_EQ(glareOnly.glareThreshold, 1.0F);
+
+    harmonia::app::AppConfig thresholdFirst{};
+    parseLikeMain(thresholdFirst, {"--glare-threshold", "6", "--glare", "0.2"});
+    EXPECT_FLOAT_EQ(thresholdFirst.glare, 0.2F);
+    EXPECT_FLOAT_EQ(thresholdFirst.glareThreshold, 6.0F);
+}
+
+TEST(TheiaCliContract, GlareAcceptsZeroWhichIsNone) {
+    harmonia::app::AppConfig config{};
+    parseLikeMain(config, {"--glare", "0", "--glare-threshold", "2.5"});
+    EXPECT_FLOAT_EQ(config.glare, 0.0F);
+    EXPECT_FLOAT_EQ(config.glareThreshold, 2.5F) << "a zero glare is a value, not a rejected one";
+}
+
+TEST(TheiaCliContract, RefusedGlareKeepsNoneAndConsumesItsValue) {
+    // Below zero, not a number, a number with a tail, and the two non-finite ones.
+    for (const char* value : {"-0.5", "abc", "0.2x", "nan", "inf"}) {
+        SCOPED_TRACE(value);
+        harmonia::app::AppConfig config{};
+        parseLikeMain(config, {"--glare", value, "--offscreen-frames", "2"});
+        EXPECT_FLOAT_EQ(config.glare, 0.0F);
+        EXPECT_EQ(config.offscreenFrames, 2U) << "the refused value is consumed, the flag after it still parses";
+    }
+}
+
+TEST(TheiaCliContract, RefusedGlareThresholdKeepsReferenceWhiteAndConsumesItsValue) {
+    // Zero and below (the threshold must be above 0), not a number, and the non-finite ones.
+    for (const char* value : {"0", "-1", "abc", "1.5x", "nan", "inf"}) {
+        SCOPED_TRACE(value);
+        harmonia::app::AppConfig config{};
+        parseLikeMain(config, {"--glare-threshold", value, "--offscreen-frames", "2"});
+        EXPECT_FLOAT_EQ(config.glareThreshold, 1.0F);
+        EXPECT_EQ(config.offscreenFrames, 2U) << "the refused value is consumed, the flag after it still parses";
+    }
+}
+
+TEST(TheiaCliContract, GlareFlagWithoutAValueKeepsTheDefaults) {
+    // The last token of the command line: the parser reports the missing value and
+    // leaves the configuration alone.
+    harmonia::app::AppConfig glare{};
+    parseLikeMain(glare, {"--glare"});
+    EXPECT_FLOAT_EQ(glare.glare, 0.0F);
+
+    harmonia::app::AppConfig threshold{};
+    parseLikeMain(threshold, {"--glare-threshold"});
+    EXPECT_FLOAT_EQ(threshold.glareThreshold, 1.0F);
+}

@@ -401,7 +401,9 @@ set(COMPILE_SLANG_EXTRA_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/shaders/gi_sms.slan
     "${CMAKE_CURRENT_SOURCE_DIR}/shaders/sms_context.slang"
     "${CMAKE_CURRENT_SOURCE_DIR}/shaders/sms_shift.slang"
     "${CMAKE_CURRENT_SOURCE_DIR}/shaders/sms_reuse.slang"
-    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/sms_resampling.slang")
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/sms_resampling.slang"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/thin_lens.slang"
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders/forward_tangent.slang")
 compile_slang_shaders(theia_shaders "${THEIA_SHADER_OUTPUT_DIR}" ${THEIA_ENTRY_SHADERS})
 unset(COMPILE_SLANG_EXTRA_DEPENDS)
 unset(COMPILE_SLANG_EXTRA_INCLUDE_DIRS)

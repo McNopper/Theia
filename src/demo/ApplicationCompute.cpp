@@ -70,8 +70,8 @@ GiPass::FrameParams Application::buildGiFrameParams(const sm::float4x4& view,
     // (convergence litmus); THEIA_MATERIAL_LOD=0|1 forces the mode for A/B.
     gp.materialLodEnabled = m_forceMaterialLod >= 0 ? (m_forceMaterialLod != 0) : !m_pureEstimatorCapture;
     gp.tanHalfFovY = std::tan(sm::radians(m_camera.vfovDeg) * 0.5f);
-    gp.hazeDensity = m_hazeDensity;
-    gp.hazeHeight = m_hazeHeight;
+    gp.haze = m_haze;
+    gp.lensBuffer = &m_renderer->lensBuffer();
     // GI-NRC (world-space radiance cache): two-tier like the clamps/LOD — interactive
     // ON, estimator-pure capture OFF; THEIA_RADIANCE_CACHE=0|1 FORCES the mode for A/B
     // (capture bypass, mirroring THEIA_MATERIAL_LOD). The animated-scene gate is

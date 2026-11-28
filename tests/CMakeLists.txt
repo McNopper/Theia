@@ -21,6 +21,10 @@ set(THEIA_MODULE_TEST_SOURCES
     module/test_sms_gi_frame.cpp
     module/test_sms_resampling.cpp
     module/test_sms_shift.cpp
+    module/test_forward_tangent.cpp
+    module/test_haze.cpp
+    module/test_gi_haze.cpp
+    module/test_push_constants.cpp
 )
 
 add_executable(theia_module_tests ${THEIA_MODULE_TEST_SOURCES})
@@ -28,9 +32,20 @@ add_dependencies(theia_module_tests theia_shaders)
 set(COMPILE_SLANG_SHADER_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
 set(COMPILE_SLANG_EXTRA_INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/shaders" "${HARMONIA_SHADER_SOURCE_DIR}")
 set(COMPILE_SLANG_EXTRA_DEPENDS "${PROJECT_SOURCE_DIR}/shaders/sms_resampling.slang"
-    "${PROJECT_SOURCE_DIR}/shaders/sms_shift.slang")
+    "${PROJECT_SOURCE_DIR}/shaders/sms_shift.slang"
+    # The shader contracts compare the shipped modules with Harmonia's: a change to
+    # either side recompiles the tests.
+    "${PROJECT_SOURCE_DIR}/shaders/forward_tangent.slang"
+    "${HARMONIA_SHADER_SOURCE_DIR}/surface.slang"
+    "${HARMONIA_SHADER_SOURCE_DIR}/haze.slang"
+    "${HARMONIA_SHADER_SOURCE_DIR}/math.slang"
+    "${HARMONIA_SHADER_SOURCE_DIR}/bsdf.slang"
+    "${HARMONIA_SHADER_SOURCE_DIR}/bsdf_shared.slang"
+    "${HARMONIA_SHADER_SOURCE_DIR}/common.slang"
+    "${HARMONIA_SHADER_SOURCE_DIR}/gpu_types.slang"
+    "${HARMONIA_SHADER_SOURCE_DIR}/rng.slang")
 compile_slang_shaders(theia_sms_test_shaders "${CMAKE_CURRENT_BINARY_DIR}/shaders" sms_scene_test.slang
-    sms_resampling_test.slang sms_shift_test.slang)
+    sms_resampling_test.slang sms_shift_test.slang forward_tangent_test.slang haze_test.slang)
 unset(COMPILE_SLANG_EXTRA_DEPENDS)
 unset(COMPILE_SLANG_SHADER_ROOT)
 unset(COMPILE_SLANG_EXTRA_INCLUDE_DIRS)
