@@ -2,8 +2,12 @@
 
 Pre-alpha development snapshot and GitHub backup. Consumes Harmonia v1.0.0-pre-alpha and applies
 the shared medium-exit radiance transport in the GI adapter. Verification: **94/94** tests pass.
-The README gallery is regenerated for this snapshot. Detailed OpenPBR Shader Playground validation
-continues after the prerelease.
+The README gallery is regenerated: 30/30 renders complete and all 30 tracked/staged/diff triplets
+are reviewed. Selected native title official-pixel SSIM is **0.684007**, and scene-linear title
+parity with Hyperion passes. An optional agent-initiated 2880×1620 top-down experiment was not a
+release acceptance case: device-local memory reached 121% of budget, frame completion failed, and
+no partial image was exported. Detailed OpenPBR Shader Playground validation continues after the
+prerelease.
 
 ---
 
